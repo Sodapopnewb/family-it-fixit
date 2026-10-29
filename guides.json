@@ -1,0 +1,294 @@
+{
+  "guides": [
+    {
+      "id": "print",
+      "title": "Print a PDF or a web page",
+      "steps": [
+        "Open the PDF or the web page you want on paper.",
+        "Press the Ctrl key and the P key together. A Print window opens.",
+        "Look at the Printer box. Make sure it shows your usual printer. Click the box to pick another one.",
+        "To print only some pages, click Pages and type the page numbers, like 1-2.",
+        "Click the blue Print button.",
+        "Nothing came out? Close this guide and click 'Fix my printer' on the main screen."
+      ],
+      "keywords": [
+        "printer",
+        "printing",
+        "paper",
+        "copy",
+        "copies",
+        "pdf",
+        "web page",
+        "webpage",
+        "page",
+        "hard copy",
+        "print out",
+        "printout",
+        "document",
+        "printed"
+      ]
+    },
+    {
+      "id": "scan",
+      "title": "Scan a document",
+      "steps": [
+        "Put the paper face down on the glass of your scanner, or face up in the feeder on top. Close the lid.",
+        "Click the Start button, type Scan, and open the app called Scan or Windows Scan. (Or use the scan button on your printer.)",
+        "Pick your scanner from the Scanner box.",
+        "Under File type choose PDF for papers, or JPG for photos.",
+        "Click Preview to check that the page looks right. Click Scan when it does.",
+        "When it finishes, click View. The scanned file is saved in your Documents folder, in a folder called Scanned Documents.",
+        "Tip: to email it, see the guide 'Attach a photo to an email'. It works the same way for PDFs."
+      ],
+      "keywords": [
+        "scanner",
+        "scanning",
+        "copy paper",
+        "copy",
+        "copier",
+        "digitize",
+        "paper to pdf",
+        "scan to computer",
+        "document",
+        "pdf",
+        "photocopy",
+        "photocopier",
+        "photocopying",
+        "scanned"
+      ]
+    },
+    {
+      "id": "attach-photo",
+      "title": "Attach a photo to an email",
+      "steps": [
+        "Start a new email, or open the email you are replying to.",
+        "Look for a paper clip picture at the top of the email window. Click it. If you see the word Attach, click that.",
+        "Choose 'Browse this computer' or 'Attach file' if it asks.",
+        "Click Pictures on the left side, or the folder where your photo is saved.",
+        "Click the photo once to pick it. To pick more than one, hold the Ctrl key and click each one.",
+        "Click Open. The photo name appears in your email.",
+        "Check that the photo name is showing, then click Send."
+      ],
+      "keywords": [
+        "picture",
+        "pictures",
+        "photo",
+        "photos",
+        "image",
+        "images",
+        "pic",
+        "pics",
+        "jpg",
+        "attachment",
+        "attach",
+        "paper clip",
+        "send a picture",
+        "email",
+        "mail",
+        "add a photo",
+        "file"
+      ]
+    },
+    {
+      "id": "screenshot",
+      "title": "Take a screenshot and send it to Trey",
+      "steps": [
+        "Get the problem on your screen, so Trey can see what you see.",
+        "Press the Windows key, the Shift key and the S key all together. The screen turns gray and a small bar appears at the top.",
+        "Click and hold the mouse button, drag a box over the part you want to show, then let go.",
+        "The picture is now saved in the computer's memory. A small message shows in the bottom right corner.",
+        "Start a new email to Trey. Type Trey's email address in the To box.",
+        "Click in the big white message area, then press the Ctrl key and the V key together. The picture appears.",
+        "Add a few words about what is wrong, then click Send."
+      ],
+      "keywords": [
+        "screen shot",
+        "screen capture",
+        "snip",
+        "snipping",
+        "picture of my screen",
+        "capture",
+        "show trey",
+        "send trey",
+        "what i see",
+        "error message",
+        "problem",
+        "print screen",
+        "image of screen"
+      ]
+    },
+    {
+      "id": "wifi",
+      "title": "Connect to Wi-Fi",
+      "steps": [
+        "Look at the bottom right corner of the screen, near the clock. Click the little globe or Wi-Fi picture.",
+        "A list of Wi-Fi names opens. Click the name of your home Wi-Fi.",
+        "Make sure 'Connect automatically' is ticked, then click Connect.",
+        "Type the Wi-Fi password. It is usually on a sticker on the back or bottom of your internet box (router).",
+        "Click Next. In a few seconds it should say Connected.",
+        "Still not working? Close this guide and click 'Fix my internet' on the main screen."
+      ],
+      "keywords": [
+        "wi-fi",
+        "wireless",
+        "internet",
+        "network",
+        "connect",
+        "connection",
+        "router",
+        "password",
+        "online",
+        "no internet",
+        "not connecting",
+        "offline"
+      ]
+    },
+    {
+      "id": "video-call",
+      "title": "Join a Zoom or video call",
+      "steps": [
+        "Open the email or message with the meeting invite.",
+        "Click the blue link that says Join, or the long link that starts with https. Your web browser opens.",
+        "If it asks 'Open Zoom Meetings?' click Open. If it asks to download Zoom, click Download and open the file.",
+        "Type your name if it asks, then click Join.",
+        "If it asks about the computer audio, click 'Join with Computer Audio'.",
+        "Make sure the microphone and camera pictures at the bottom left have no red line through them. Click them to turn them on or off.",
+        "To leave, click the red Leave button at the bottom right.",
+        "No sound or picture? Close this guide and click 'Fix sound/mic/camera' on the main screen."
+      ],
+      "keywords": [
+        "zoom",
+        "video",
+        "call",
+        "meeting",
+        "teams",
+        "facetime",
+        "skype",
+        "google meet",
+        "meet",
+        "webcam",
+        "camera",
+        "conference",
+        "invite",
+        "join"
+      ]
+    },
+    {
+      "id": "save-photo",
+      "title": "Save a photo from an email",
+      "steps": [
+        "Open the email that has the photo in it.",
+        "Right-click on the photo (press the right mouse button). A small menu opens.",
+        "Click 'Save as' or 'Save picture as'. If you do not see that, look for 'Download' under the photo.",
+        "Click Pictures on the left side so you will know where it is later.",
+        "Click Save.",
+        "To find it later, open File Explorer (the yellow folder at the bottom of the screen) and click Pictures."
+      ],
+      "keywords": [
+        "picture",
+        "pictures",
+        "photo",
+        "photos",
+        "image",
+        "images",
+        "pic",
+        "download",
+        "save",
+        "keep",
+        "email attachment",
+        "save picture",
+        "jpg",
+        "copy a photo"
+      ]
+    },
+    {
+      "id": "bigger-text",
+      "title": "Make text bigger in my browser or email",
+      "steps": [
+        "In your browser or email, press and hold the Ctrl key.",
+        "While holding it, press the plus key (+) a few times. Each press makes everything a little bigger.",
+        "Or hold Ctrl and roll the wheel on your mouse forward.",
+        "To make it smaller again, hold Ctrl and press the minus key (-).",
+        "To put it back to normal, hold Ctrl and press the zero key (0).",
+        "To make the whole computer bigger, use the 'Big text' switch on the left side of this window."
+      ],
+      "keywords": [
+        "zoom",
+        "larger",
+        "big",
+        "bigger",
+        "enlarge",
+        "magnify",
+        "font",
+        "size",
+        "small text",
+        "cannot read",
+        "hard to read",
+        "text size",
+        "larger print",
+        "readable",
+        "make it bigger"
+      ]
+    },
+    {
+      "id": "find-download",
+      "title": "Find something I downloaded",
+      "steps": [
+        "Open File Explorer. It is the yellow folder picture at the bottom of the screen.",
+        "Click Downloads on the left side.",
+        "The newest files are at the top. Look at the dates on the right.",
+        "Double-click a file to open it.",
+        "Tip: you can also click 'My files' on the left side of this window and type part of the name.",
+        "Do not open a download you do not remember. If it came from a pop-up or an email you do not trust, click the red scary pop-up button instead."
+      ],
+      "keywords": [
+        "downloads",
+        "downloaded",
+        "download",
+        "file",
+        "files",
+        "lost",
+        "cannot find",
+        "where did it go",
+        "saved",
+        "missing file",
+        "folder",
+        "installer",
+        "pdf"
+      ]
+    },
+    {
+      "id": "spot-scam",
+      "title": "Spot a scam email or text",
+      "steps": [
+        "A real company will not scare you or rush you. Be careful if a message says 'act now', 'your account is locked', 'you won', or 'you owe money'.",
+        "Never call a phone number that is in an email, text or pop-up. Look the number up yourself on a real bill or card.",
+        "Look at who sent it. Scam emails often come from strange addresses, with spelling mistakes or a name that does not match.",
+        "Do not click links or open attachments you did not expect. Gift cards, wire transfers and remote-control programs are always a scam if someone asks for them.",
+        "Do not give out passwords, bank details or codes that come in a text message. Real companies never ask you for these.",
+        "Not sure? Do not reply. Click 'Send Trey a report' or phone Trey and ask him first.",
+        "If you already clicked something, turn off the Wi-Fi and use the red scary pop-up button."
+      ],
+      "keywords": [
+        "scam",
+        "scams",
+        "phishing",
+        "fake",
+        "suspicious",
+        "spam",
+        "fraud",
+        "email scam",
+        "text scam",
+        "is this real",
+        "safe",
+        "junk",
+        "virus",
+        "pop up",
+        "popup",
+        "gift card",
+        "phone call",
+        "security"
+      ]
+    }
+  ]
+}
