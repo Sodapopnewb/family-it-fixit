@@ -106,12 +106,21 @@ function Get-InstallPowerShell {
     if ($env:SystemRoot) { $p = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'; if (Test-Path -LiteralPath $p) { return $p } }
     return 'powershell.exe'
 }
-# Runs a command-line action of the installed tool (for example GuardianOn) and waits. Returns the exit code.
+# Runs a command-line action of the installed tool (for example GuardianOn) and waits for THAT program only. Returns the exit code.
+# Never use Start-Process -Wait here: it also waits for every program the action starts, and GuardianOn starts the
+# pop-up watcher, which keeps running for good - so the installer would wait forever (a real PC did exactly that).
+# -Yes: nobody can answer a question here, so the program must never ask one.
 function Invoke-InstalledAction {
-    param([string]$Dir, [string]$Action)
+    param([string]$Dir, [string]$Action, [int]$TimeoutSeconds = 120)
     $exe = Get-InstallPowerShell
-    $args2 = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', (Join-Path $Dir 'FamilyFixIt.ps1'), '-Action', $Action)
-    $p = Start-Process -FilePath $exe -ArgumentList $args2 -WindowStyle Hidden -Wait -PassThru
+    $args2 = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', (Join-Path $Dir 'FamilyFixIt.ps1'), '-Action', $Action, '-Yes')
+    $p = Start-Process -FilePath $exe -ArgumentList $args2 -WindowStyle Hidden -PassThru
+    try { $null = $p.Handle } catch { }   # keep the handle so the exit code can be read afterwards
+    if (-not $p.WaitForExit($TimeoutSeconds * 1000)) {
+        Write-InstallLog ('{0} did not finish in {1} seconds; stopped it' -f $Action, $TimeoutSeconds) 'WARN'
+        try { $p.Kill() } catch { }
+        return 1
+    }
     return [int]$p.ExitCode
 }
 function Start-InstalledTool {

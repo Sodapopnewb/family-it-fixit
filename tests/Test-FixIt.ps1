@@ -133,6 +133,8 @@ function Stop-FixItAppsByName { param([string[]]$ProcessNames) Rec "force end $(
 function Test-FixItPortOpen { param([string]$Address, [int[]]$Ports) Rec "port $Address"; return [bool]$script:OpenPorts[$Address] }
 function Select-FixItPrinter { param([string[]]$Names, [string]$Current = '') Rec "printer pick-list $($Names -join '|')"; if ($script:PickPrinter -eq '<none>') { return '' }; if ($script:PickPrinter) { return $script:PickPrinter }; return [string]$Names[0] }
 function Show-FixItCountdown { param([int]$Seconds, [string]$Title = '', [string]$Message = '') Rec "countdown $Seconds"; if ($script:Heal) { $script:Conn.Router = $true; $script:Conn.Net = $true; $script:Conn.Dns = $true; $script:Conn.Web = $true } }
+$script:ConsoleOk = $true
+function Test-FixItConsoleInteractive { return [bool]$script:ConsoleOk }
 function Read-FixItPlanChoice { param($Plan) $script:PlanSeen += , $Plan; return [bool]$script:PlanAnswer }
 $script:BProfiles = @(); $script:BSettings = $null; $script:BExts = @()
 function Get-FixItBrowserProfiles { return @($script:BProfiles) }
@@ -1426,14 +1428,14 @@ $outPin = & (Get-Command pwsh).Source -NoProfile -File (Join-Path $root 'FamilyF
 Assert ($LASTEXITCODE -eq 0 -and $outPin -match 'Pin to taskbar') 'command line: -Action Pin prints the steps'
 
 Section 'Version'
-Assert ($script:FixItVersion -eq '2.3.0') 'the program is version 2.3.0'
+Assert ($script:FixItVersion -eq '2.3.1') 'the program is version 2.3.1'
 
 Section 'Publish + update'
 $pub = Join-Path $root 'tools/Publish-FixIt.ps1'
 $dist = Join-Path $tmp 'dist1'
 & $pub -Owner 'octo-test' -OutDir $dist -WarningAction SilentlyContinue | Out-Null
 $man = Get-Content (Join-Path $dist 'manifest.json') -Raw | ConvertFrom-Json
-Assert ($man.version -eq '2.3.0' -and @($man.files).Count -eq 4) 'manifest has version and 4 runtime files'
+Assert ($man.version -eq '2.3.1' -and @($man.files).Count -eq 4) 'manifest has version and 4 runtime files'
 Assert (@($man.apps).Count -eq 4 -and $man.apps[0].id -eq 'Google.Chrome') 'manifest carries the approved app list'
 $badApps = Join-Path $tmp 'badapps'; Copy-Item -LiteralPath $root -Destination $badApps -Recurse
 Set-Content (Join-Path $badApps 'apps.json') '[{"id":"calc; evil","name":"x"}]'
@@ -1459,7 +1461,7 @@ Assert (-not (Select-String -Path (Join-Path $dist '*') -Pattern '(?i)treyb|@gma
 # a newer version 1.0.1 to update to
 $newSrc = Join-Path $tmp 'newsrc'; Copy-Item -LiteralPath $root -Destination $newSrc -Recurse
 $ps = Join-Path $newSrc 'FamilyFixIt.ps1'
-[IO.File]::WriteAllText($ps, ([IO.File]::ReadAllText($ps).Replace("FixItVersion = '2.3.0'", "FixItVersion = '2.3.1'")))
+[IO.File]::WriteAllText($ps, ([IO.File]::ReadAllText($ps).Replace("FixItVersion = '2.3.1'", "FixItVersion = '2.3.2'")))
 $dist2 = Join-Path $tmp 'dist2'
 & (Join-Path $newSrc 'tools/Publish-FixIt.ps1') -SourceDir $newSrc -Owner 'octo-test' -OutDir $dist2 | Out-Null
 $base = 'https://raw.githubusercontent.com/octo-test/family-it-fixit/main/'
@@ -1470,7 +1472,7 @@ $script:ManifestUrl = $base + 'manifest.json'
 Reset-All; Set-Web $dist2; $script:InstallDir = New-Install
 $res = Invoke-FixItUpdate
 Assert ($res.Ok -and $res.Title -eq 'Updated') 'newer version installs after asking'
-Assert ([IO.File]::ReadAllText((Join-Path $script:InstallDir 'FamilyFixIt.ps1')) -match "FixItVersion = '2.3.1'") 'installed script is the new one'
+Assert ([IO.File]::ReadAllText((Join-Path $script:InstallDir 'FamilyFixIt.ps1')) -match "FixItVersion = '2.3.2'") 'installed script is the new one'
 Assert (Test-Path (Join-Path $script:InstallDir 'previous/FamilyFixIt.ps1')) 'old version kept in previous/'
 Assert (@($script:Asked).Count -eq 1) 'asked before updating'
 
@@ -1799,6 +1801,147 @@ $probeOk = $true; try { Add-Type -TypeDefinition $script:GuardianProbeCs -ErrorA
 Assert $probeOk 'the window-probe C# code compiles'
 Assert ($script:GuardianProbeCs -notmatch '\?\.' -and $script:GuardianUiCs -notmatch '\$"') 'C# kept to the old C# 5 style that Windows PowerShell 5.1 accepts'
 
+Section 'Background actions never ask a question (a real PC hung at "4 of 5" because of this)'
+# Hostile setup: the console looks fully usable, and ANY typed question is counted and fails. Only the Background flag may stop a question.
+$script:Prompts = 0
+$stubFns = @{}
+foreach ($n in @('Confirm-FixIt', 'Read-FixItPlanChoice', 'Select-FixItPrinter')) {
+    $stubFns[$n] = (Get-Item ('function:' + $n)).ScriptBlock
+    $realAst = $fnAsts | Where-Object { $_.Name -eq $n } | Select-Object -First 1
+    Invoke-Expression $realAst.Extent.Text
+}
+function Read-Host { param($Prompt) $script:Prompts++; throw ('PROMPTED: ' + $Prompt) }
+$script:ConsoleOk = $true; $script:GuiActive = $false
+$runKey = $script:GuardianRunKey
+$script:SelfPath = Join-Path $root 'FamilyFixIt.ps1'
+# every action the installer runs
+$instText = [IO.File]::ReadAllText((Join-Path $root 'Install-FixIt.ps1'))
+$instActions = @([regex]::Matches($instText, "'(GuardianOn|GuardianOff|CheckInOn|CheckInOff|Guardian|HealthCheck|Update|Install)'") | ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique)
+Assert ($instActions -contains 'GuardianOn' -and $instActions -contains 'CheckInOn' -and $instActions -contains 'GuardianOff') 'found the actions the installer runs (GuardianOn, GuardianOff, CheckInOn)'
+foreach ($a in $instActions) { Assert ($script:BackgroundActions -contains $a) "installer action $a is a background action" }
+# the scheduled task and the sign-in entry
+Assert ((Get-FixItCheckInXml -ScriptPath 'C:\x\FamilyFixIt.ps1') -match '-Action (\w+)' -and $script:BackgroundActions -contains $Matches[1]) 'the weekly scheduled task runs a background action'
+Assert ((Get-FixItGuardianCommand) -match '-Action (\w+)' -and $script:BackgroundActions -contains $Matches[1]) 'the sign-in watcher entry runs a background action'
+# every administrator part
+$partNames = @([regex]::Matches($src, "Invoke-AdminPart -Part '(\w+)'") | ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique)
+Assert ($partNames.Count -ge 10) 'found the administrator parts'
+foreach ($a in $partNames) { Assert ($script:BackgroundActions -contains $a) "administrator part $a is a background action" }
+# the user-facing fixes are NOT background (they keep their Proceed / Go Back window)
+foreach ($k in @('Printer', 'Acrobat', 'AcrobatRepair', 'Outlook', 'Network', 'Slow', 'Sound', 'Browser', 'WinUpdate', 'OneDrive', 'Scam', 'Screen', 'Report')) { Assert ($script:BackgroundActions -notcontains $k) "$k is not a background action" }
+$validSet = (($src -split "`r?`n")[14..19]) -join ' '
+foreach ($a in $script:BackgroundActions) { Assert ($validSet -match "'$a'") "background action $a is a real -Action value" }
+# nothing a background action runs can reach a question (checked in the code, not just by running it)
+$cgFns = @{}; foreach ($f in $fnAsts) { $cgFns[$f.Name] = $f }
+function Get-CallReach { param([string]$Start) $seen = @{}; $q = New-Object System.Collections.Queue; $q.Enqueue($Start); while ($q.Count -gt 0) { $n = $q.Dequeue(); if ($seen.ContainsKey($n)) { continue }; $seen[$n] = 1; if ($cgFns.ContainsKey($n)) { foreach ($c in $cgFns[$n].Body.FindAll({ param($x) $x -is [System.Management.Automation.Language.CommandAst] }, $true)) { $nm = $c.GetCommandName(); if ($nm) { $q.Enqueue($nm) } } } }; return @($seen.Keys) }
+$askers = @('Read-Host', 'Confirm-FixIt', 'Confirm-FixItStep', 'Confirm-FixItPlan', 'Select-FixItPrinter', 'Read-FixItPlanChoice')
+foreach ($fn in @('Invoke-GuardianRun', 'Invoke-HealthCheck', 'Invoke-PrinterAdmin', 'Invoke-AcrobatAdmin', 'Invoke-AcrobatRepairAdmin', 'Invoke-NetworkAdmin', 'Invoke-SlowAdmin', 'Invoke-SoundAdmin', 'Invoke-OutlookAdmin', 'Invoke-DefenderScanAdmin', 'Invoke-WinUpdateAdmin', 'Invoke-WinUpdateDeepAdmin', 'Invoke-UndoAdmin')) {
+    $hit = @(Get-CallReach $fn | Where-Object { $askers -contains $_ })
+    Assert ($hit.Count -eq 0) ("$fn can never reach a question" + $(if ($hit.Count) { ': ' + ($hit -join ',') } else { '' }))
+}
+# the dispatcher sets the flag from the action, and passes -Yes through
+Assert ((FnText 'Start-FamilyFixIt') -match '\$script:Background = \(\$script:BackgroundActions -contains \$Action\)' -and (FnText 'Start-FamilyFixIt') -match '\$script:AssumeYes = \[bool\]\$Yes') 'Start-FamilyFixIt sets Background from the action and AssumeYes from -Yes'
+# run each installer/scheduled action for real through the dispatcher (the same path the hidden window takes)
+$origAction = $Action
+foreach ($act in @('GuardianOn', 'GuardianOn', 'GuardianOff', 'GuardianOff', 'CheckInOn', 'CheckInOn', 'CheckInOff', 'CheckInOff')) {
+    Reset-All; $script:Prompts = 0; $script:State = @{}; $script:GRunning = $false
+    Add-RegPretend $runKey @{}
+    if ($act -eq 'GuardianOff') { [void](Invoke-GuardianToggle -Mode 'On') }
+    if ($act -eq 'CheckInOff') { [void](Invoke-CheckInToggle -Mode 'On') }
+    $script:Calls.Clear()
+    $script:Action = $act
+    $out = @(Start-FamilyFixIt 6>&1)
+    $code = $out[-1]
+    Assert ($script:Prompts -eq 0 -and $script:Asked.Count -eq 0) "-Action $act never asks anything"
+    Assert ($code -eq 0) "-Action $act finishes with exit code 0"
+    Assert ($script:Background) "-Action $act runs as background"
+}
+Reset-All; Add-RegPretend $runKey @{}; $script:Action = 'GuardianOn'; $null = Start-FamilyFixIt 6>&1
+Assert ((Test-FixItGuardianInstalled) -and (CallsLike 'guardian start') -eq 1) 'GuardianOn through the dispatcher turns the watcher on and starts it'
+Reset-All; $script:Action = 'CheckInOn'; $null = Start-FamilyFixIt 6>&1
+Assert ($script:Tasks.ContainsKey('Family Fix-It Weekly Check')) 'CheckInOn through the dispatcher installs the weekly task'
+# the real "Toggle" questions stay quiet in the background (even if a caller asked for Toggle)
+$script:Background = $true; $script:Prompts = 0
+Reset-All; Add-RegPretend $runKey @{}; [void](Invoke-GuardianToggle -Mode 'On')
+$r = Invoke-GuardianToggle -Mode 'Toggle'
+Assert ($script:Prompts -eq 0 -and $r.Title -eq 'Still on') 'background: a turn-off question is answered "no" without typing'
+Reset-All; $r = Invoke-CheckInToggle -Mode 'Toggle'
+Assert ($script:Prompts -eq 0 -and $r.Title -eq 'Not turned on') 'background: a turn-on question is answered "no" without typing'
+$cf = Confirm-FixIt -Question 'x'
+Assert ($script:Prompts -eq 0 -and -not $cf) 'background: Confirm-FixIt answers no and never calls Read-Host'
+Assert ((Select-FixItPrinter -Names @('A', 'B')) -eq '' -and $script:Prompts -eq 0) 'background: the printer pick list never asks'
+$script:Background = $false
+# nobody can type (piped input or no user session): the question is skipped, not waited for
+foreach ($mode in @('piped console')) {
+    $script:ConsoleOk = $false; $script:Prompts = 0; $script:PlanSeen = @()
+    Assert ((Confirm-FixItPlan -Which 'Printer') -eq $false -and $script:Prompts -eq 0) 'no usable console: the Proceed question is skipped and counts as Go Back (nothing is done)'
+    Assert ((Confirm-FixIt -Question 'Did that fix it?') -eq $false -and $script:Prompts -eq 0) 'no usable console: a yes/no question answers no without waiting'
+    $script:Calls.Clear(); $script:Action = 'Printer'; $script:Yes = $false
+    $out = @(Start-FamilyFixIt 6>&1)
+    Assert ($script:Prompts -eq 0 -and $script:Calls.Count -eq 0 -and (($out | Out-String) -match 'add -Yes')) '-Action Printer with no usable console and no -Yes: no question, nothing changed, says how to continue'
+    $fu = Invoke-FixItFollowUp -Which 'Printer' -Result (New-FixItResult $true 'Done' 'x')
+    Assert ($null -eq $fu -and $script:Posts.Count -eq 0) 'no usable console: "Did that fix it?" is not treated as a No (no report is sent)'
+}
+# -Yes skips only the Proceed window; it never answers other questions for the person
+$script:ConsoleOk = $false; $script:AssumeYes = $true; $script:Prompts = 0
+Assert ((Confirm-FixItPlan -Which 'Printer') -eq $true -and $script:Prompts -eq 0) '-Yes: the Proceed window is skipped (counts as Proceed)'
+Assert ((Confirm-FixIt -Question 'Force close Outlook?') -eq $false) '-Yes does not answer other questions with yes'
+$script:AssumeYes = $false
+# a console someone can type at still gets the question
+$script:ConsoleOk = $true; $script:Prompts = 0; $script:PlanSeen = @(); $script:HostAnswer = 'P'
+function Read-Host { param($Prompt) $script:Prompts++; return $script:HostAnswer }
+Assert ((Confirm-FixItPlan -Which 'Printer') -eq $true -and $script:Prompts -eq 1) 'a usable console: the person is asked, and P proceeds'
+$script:HostAnswer = 'G'
+Assert ((Confirm-FixItPlan -Which 'Printer') -eq $false -and $script:Prompts -eq 2) 'a usable console: G goes back'
+# a real child program with its input piped (no one can type): it must not wait
+$childLog = Join-Path $tmp 'noprompt.log'
+$sw1 = [Diagnostics.Stopwatch]::StartNew()
+$outNp = ('' | & (Get-Command pwsh).Source -NoProfile -File (Join-Path $root 'FamilyFixIt.ps1') -Action Printer -LogPath $childLog 2>&1 | Out-String)
+$sw1.Stop()
+Assert ($LASTEXITCODE -eq 0 -and $sw1.Elapsed.TotalSeconds -lt 30 -and $outNp -match 'add -Yes') 'a real run of -Action Printer with piped input returns at once and changes nothing'
+Remove-Item function:Read-Host
+foreach ($n in $stubFns.Keys) { Set-Item -Path ('function:' + $n) -Value $stubFns[$n] }
+$script:Action = $origAction; $script:ConsoleOk = $true; $script:Yes = $false; $script:Background = $false
+
+Section 'Installer: never waits for the programs an action starts'
+$instAst = [Management.Automation.Language.Parser]::ParseInput($instText, [ref]$null, [ref]$null)
+$iaText = @($instAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Invoke-InstalledAction' }, $true))[0].Extent.Text
+$spLines = @($iaText -split "`n" | Where-Object { $_ -match 'Start-Process' })
+Assert ($spLines.Count -eq 1 -and ($spLines -join '') -notmatch '-Wait' -and ($spLines -join '') -match '-PassThru') 'the installer starts the action without Start-Process -Wait (which also waits for the watcher it starts)'
+Assert ($iaText -match "'-Yes'" -and $iaText -match 'WaitForExit\(' -and $iaText -match 'Kill\(\)') 'the installer passes -Yes, waits for that one program only, and stops it if it takes too long'
+Assert (@([regex]::Matches($instText, '(?m)^[^#\r\n]*Start-Process[^\r\n]*-Wait')).Count -eq 0) 'no Start-Process -Wait anywhere in the installer'
+# run the real function against small stand-in programs (pwsh instead of powershell.exe)
+# (the -WindowStyle switches exist only on Windows, so they are dropped for this run on Linux; everything else is the real code.)
+$iaRun = ($iaText -replace 'function Invoke-InstalledAction', 'function Invoke-InstalledActionReal') -replace '-WindowStyle Hidden -PassThru', '-PassThru' -replace "'-WindowStyle', 'Hidden', ", ''
+Assert ($iaRun -ne $iaText -and $iaRun -match 'WaitForExit') 'prepared the real installer function for the stand-in run'
+$stubStartProcess = (Get-Item function:Start-Process).ScriptBlock; Remove-Item function:Start-Process   # the real Start-Process for this part
+Invoke-Expression $iaRun
+function Get-InstallPowerShell { return (Get-Command pwsh).Source }
+function Write-InstallLog { param([string]$Text, [string]$Level = 'INFO') $script:InstLogged += $Text }
+$script:InstLogged = @()
+$fakeDir = Join-Path $tmp 'fake-install'; New-Item -ItemType Directory $fakeDir | Out-Null
+$argFile = Join-Path $tmp 'fake-args.txt'
+$sleepPs = (Get-Command pwsh).Source
+Set-Content -LiteralPath (Join-Path $fakeDir 'FamilyFixIt.ps1') -Value @"
+param([string]`$Action, [switch]`$Yes)
+Set-Content -LiteralPath '$($argFile.Replace("'", "''"))' -Value ('{0}|{1}' -f `$Action, [bool]`$Yes)
+Start-Process -FilePath '$($sleepPs.Replace("'", "''"))' -ArgumentList @('-NoProfile', '-Command', 'Start-Sleep -Seconds 25') | Out-Null
+exit 7
+"@
+$sw2 = [Diagnostics.Stopwatch]::StartNew()
+$code = Invoke-InstalledActionReal -Dir $fakeDir -Action 'GuardianOn'
+$sw2.Stop()
+Assert ($code -eq 7) 'the real installer function returns the program''s own exit code'
+Assert ($sw2.Elapsed.TotalSeconds -lt 20) 'it returns as soon as the action ends, even though the action left a long-running program behind (the watcher)'
+Assert ((Get-Content -LiteralPath $argFile -Raw).Trim() -eq 'GuardianOn|True') 'the action was run with its name and -Yes'
+Set-Content -LiteralPath (Join-Path $fakeDir 'FamilyFixIt.ps1') -Value "param([string]`$Action, [switch]`$Yes)`nStart-Sleep -Seconds 60"
+$sw3 = [Diagnostics.Stopwatch]::StartNew()
+$code = Invoke-InstalledActionReal -Dir $fakeDir -Action 'CheckInOn' -TimeoutSeconds 3
+$sw3.Stop()
+Assert ($code -eq 1 -and $sw3.Elapsed.TotalSeconds -lt 30 -and ($script:InstLogged -join ' ') -match 'did not finish in 3 seconds') 'an action that never ends is stopped after the time limit and counts as a failure (the installer carries on)'
+Remove-Item function:Get-InstallPowerShell, function:Write-InstallLog
+Set-Item -Path function:Start-Process -Value $stubStartProcess
+Get-Process -Name pwsh -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -match 'Start-Sleep -Seconds 25' } | ForEach-Object { try { $_.Kill() } catch { } }
+
 Section 'Installer'
 $instPs1 = Join-Path $root 'Install-FixIt.ps1'
 $instCmd = Join-Path $root 'Install-FamilyFixIt.cmd'
@@ -1807,7 +1950,7 @@ $relDir = Join-Path $tmp 'release1'
 $distI = Join-Path $tmp 'dist-i1'
 $newSrcI = Join-Path $tmp 'newsrc-i'; Copy-Item -LiteralPath $root -Destination $newSrcI -Recurse
 $psI = Join-Path $newSrcI 'FamilyFixIt.ps1'
-[IO.File]::WriteAllText($psI, ([IO.File]::ReadAllText($psI).Replace("FixItVersion = '2.3.0'", "FixItVersion = '2.3.1'")))
+[IO.File]::WriteAllText($psI, ([IO.File]::ReadAllText($psI).Replace("FixItVersion = '2.3.1'", "FixItVersion = '2.3.2'")))
 $distI2 = Join-Path $tmp 'dist-i2'
 & (Join-Path $newSrcI 'tools/Publish-FixIt.ps1') -SourceDir $newSrcI -Owner 'octo-test' -OutDir $distI2 -ReleaseDir (Join-Path $tmp 'release2') -WarningAction SilentlyContinue | Out-Null
 
@@ -1862,7 +2005,7 @@ Assert ($rd -match 'releases/latest/download/Install-FamilyFixIt\.zip' -and $rd 
 
     Reset-Inst; Serve $distI
     $r = Install-FamilyFixIt -Base $base -Dir $dir
-    Assert ($r.Ok -and $r.Title -eq 'Installed' -and $r.Version -eq '2.3.0' -and $r.Changed) 'fresh install works'
+    Assert ($r.Ok -and $r.Title -eq 'Installed' -and $r.Version -eq '2.3.1' -and $r.Changed) 'fresh install works'
     $same = $true; foreach ($f in @('FamilyFixIt.ps1', 'Start-FixIt.cmd', 'README.md')) { if ((Get-FileSha256 (Join-Path $dir $f)) -ne (Get-FileSha256 (Join-Path $distI $f))) { $same = $false } }
     Assert $same 'the three files are installed and match the published fingerprints'
     Assert (-not (Test-Path (Join-Path $dir '.staging')) -and -not (Test-Path (Join-Path $dir 'previous'))) 'no leftover staging folder; nothing to keep from a previous version'
@@ -1887,10 +2030,10 @@ Assert ($rd -match 'releases/latest/download/Install-FamilyFixIt\.zip' -and $rd 
 
     Clear-I; Serve $distI2; $script:I.Lnk.Remove($dl)
     $r = Install-FamilyFixIt -Base $base -Dir $dir
-    Assert ($r.Ok -and $r.Version -eq '2.3.1' -and (Get-InstalledVersion $dir) -eq '2.3.1') 'a newer version in the list updates the install'
+    Assert ($r.Ok -and $r.Version -eq '2.3.2' -and (Get-InstalledVersion $dir) -eq '2.3.2') 'a newer version in the list updates the install'
     Assert (($script:I.Actions -join ',') -eq 'GuardianOff,GuardianOn,CheckInOn') 'update restarts the watcher so it runs the new program'
     Assert ($script:I.LnkWrites -eq 1 -and $script:I.Lnk.ContainsKey($dl)) 'a missing shortcut is put back'
-    Assert ((Get-InstalledVersion (Join-Path $dir 'previous')) -eq '2.3.0') 'the old program is kept in previous/'
+    Assert ((Get-InstalledVersion (Join-Path $dir 'previous')) -eq '2.3.1') 'the old program is kept in previous/'
 
     # a download that does not match the fingerprint
     Reset-Inst; Serve $distI; $script:I.Tamper['/FamilyFixIt.ps1'] = $true
@@ -1900,7 +2043,7 @@ Assert ($rd -match 'releases/latest/download/Install-FamilyFixIt\.zip' -and $rd 
     Assert ((Get-Content $script:InstallLog -Raw) -match 'CHECKSUM MISMATCH') 'tampered download: logged'
     Reset-Inst; Serve $distI; $null = Install-FamilyFixIt -Base $base -Dir $dir; Clear-I; Serve $distI2; $script:I.Tamper['/FamilyFixIt.ps1'] = $true
     $r = Install-FamilyFixIt -Base $base -Dir $dir
-    Assert (-not $r.Ok -and (Get-InstalledVersion $dir) -eq '2.3.0') 'tampered update: the working old copy is left exactly as it was'
+    Assert (-not $r.Ok -and (Get-InstalledVersion $dir) -eq '2.3.1') 'tampered update: the working old copy is left exactly as it was'
 
     # network problems
     Reset-Inst; Serve $distI; $script:I.WebFail = $true

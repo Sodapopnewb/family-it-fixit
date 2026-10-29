@@ -25,6 +25,7 @@ param(
     [string]$App,
     [string]$OutputDir,
     [switch]$NoUpdateCheck,
+    [switch]$Yes,
     [switch]$LibraryOnly
 )
 
@@ -34,7 +35,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 # Settings
 # ---------------------------------------------------------------------------
-$script:FixItVersion = '2.3.0'
+$script:FixItVersion = '2.3.1'
 $script:DefaultManifestUrl = 'https://raw.githubusercontent.com/Sodapopnewb/family-it-fixit/main/manifest.json'
 $script:OwnerPlaceholder = ('<' + 'OWNER>')   # the guards compare with this; Publish never rewrites it
 # Where reports are sent (a small Cloudflare Worker that Trey runs). The app header is NOT a secret.
@@ -53,6 +54,11 @@ if (-not $winDir) { $winDir = 'C:\Windows' }
 $script:SpoolFolder = $winDir.TrimEnd('\') + '\System32\spool\PRINTERS'
 $script:EchoLog = $false
 $script:GuiActive = $false
+# Background work (the installer, the sign-in watcher, the weekly check-in, the administrator parts) has nobody at the keyboard.
+# It must never ask a question: a hidden window that waits for typing waits forever.
+$script:BackgroundActions = @('Guardian', 'GuardianOn', 'GuardianOff', 'CheckInOn', 'CheckInOff', 'HealthCheck', 'PrinterAdmin', 'AcrobatAdmin', 'AcrobatRepairAdmin', 'NetworkAdmin', 'SlowAdmin', 'SoundAdmin', 'OutlookAdmin', 'DefenderScanAdmin', 'WinUpdateAdmin', 'WinUpdateDeepAdmin', 'UndoAdmin')
+$script:Background = $false
+$script:AssumeYes = [bool]$Yes
 $script:AddinName = 'PDFMaker.OfficeAddin'
 $script:OfficeVersions = @('16.0', '15.0', '14.0')
 $script:LogFile = $null
@@ -300,6 +306,7 @@ function Set-FixItPrinterAsDefault {
 function Select-FixItPrinter {
     param([string[]]$Names, [string]$Current = '')
     if ($script:GuiActive) { return [string](Show-FixItPrinterPickDialog -Names $Names -Current $Current) }
+    if (-not (Test-FixItCanAsk)) { Write-FixItLog 'Nobody is there to pick a printer' 'WARN'; return '' }
     $i = 1
     foreach ($n in $Names) { Write-Host ('  {0}. {1}' -f $i, $n); $i++ }
     $a = Read-Host 'Type the number of your printer (or press Enter to go back)'
@@ -1053,6 +1060,23 @@ function Start-FixItElevated {
     return [int]$proc.ExitCode
 }
 
+# Is there a person who can answer a typed question? Adapter (replaced in the tests). Not when the program has no user session
+# or its input is piped in. (A hidden console cannot be detected reliably - Windows Terminal's console window is always "hidden" -
+# so hidden background runs are marked by the action name instead: see $script:BackgroundActions.)
+function Test-FixItConsoleInteractive {
+    try {
+        if (-not [Environment]::UserInteractive) { return $false }
+        if ([Console]::IsInputRedirected) { return $false }
+    } catch { return $false }
+    return $true
+}
+# True when a question may be asked: the window is open, or a person can type at the console. Background actions never ask.
+function Test-FixItCanAsk {
+    if ($script:GuiActive) { return $true }
+    if ($script:Background) { return $false }
+    return [bool](Test-FixItConsoleInteractive)
+}
+
 # Questions for the person. The window and the command line each supply their own.
 function Confirm-FixIt {
     param([string]$Question, [string]$Title = 'Family Fix-It', [string]$Kind = '', [string]$Detail = '')
@@ -1061,6 +1085,7 @@ function Confirm-FixIt {
         $r = [System.Windows.Forms.MessageBox]::Show($Question, $Title, 'YesNo', 'Question')
         return ($r -eq 'Yes')
     }
+    if (-not (Test-FixItCanAsk)) { Write-FixItLog ('Nobody is there to answer, so the answer is no: {0}' -f $Question) 'WARN'; return $false }
     if ($Kind -eq 'Fixed') { $Question = $Question + ' ' + $Detail + " If it's still broken, I'll send Trey a report automatically." }
     $a = Read-Host ('{0} (Y/N)' -f $Question)
     return ($a -match '^(y|yes)$')
@@ -3092,6 +3117,11 @@ function Format-FixItPlanText {
 function Read-FixItPlanChoice {
     param($Plan)
     if ($script:GuiActive) { return [bool](Show-FixItPlanDialog -Plan $Plan) }
+    if (-not (Test-FixItCanAsk)) {
+        Write-FixItLog 'Nobody is there to press Proceed, so nothing was done. (Run with -Yes to skip the question.)' 'WARN'
+        Write-Host 'I could not ask you to press Proceed, so nothing was done. To run this without the question, add -Yes.'
+        return $false
+    }
     Write-Host ''
     foreach ($l in (Format-FixItPlanText -Plan $Plan)) { Write-Host $l }
     Write-Host ''
@@ -3103,9 +3133,14 @@ function Confirm-FixItPlan {
     param([string]$Which)
     $plan = Get-FixItPlan -Which $Which
     if ($null -eq $plan) { return $true }
+    if ($script:Background) { return $true }   # background work is never asked
     if ($script:DryRun) {
         Write-FixItLog ('Would show the "what I will do" window for: {0}' -f $plan.Title) 'DRYRUN'
         foreach ($l in (Format-FixItPlanText -Plan $plan)) { if ($l) { Write-FixItLog ('  {0}' -f $l) 'DRYRUN' } }
+        return $true
+    }
+    if ($script:AssumeYes -and -not $script:GuiActive) {
+        Write-FixItLog ('Plan window "{0}" -> Proceed (-Yes was given)' -f $plan.Title)
         return $true
     }
     $go = [bool](Read-FixItPlanChoice -Plan $plan)
@@ -3136,6 +3171,7 @@ function Invoke-FixItFollowUp {
     if (Test-FixItDeclined $Result) { return $null }
     if (Test-FixItSkipFollowUp $Result) { return $null }
     if ($script:DryRun) { Write-FixItLog 'Would ask: Did that fix it?' 'DRYRUN'; return $null }
+    if (-not (Test-FixItCanAsk)) { Write-FixItLog 'Nobody is there to answer "Did that fix it?", so no report was sent' 'WARN'; return $null }
     $yes = Confirm-FixIt -Question 'Did that fix it?' -Title $t.Title -Kind 'Fixed' -Detail ("I just ran {0}. Try it now, then let me know." -f $t.Title)
     Write-FixItLog ('Did that fix it? ({0}) -> {1}' -f $t.Title, $(if ($yes) { 'yes' } else { 'NO' })) $(if ($yes) { 'INFO' } else { 'WARN' })
     if ($yes) { return $null }
@@ -5856,8 +5892,10 @@ function Write-AdminResult {
 function Start-FamilyFixIt {
     Initialize-FixItLog
     $script:GuiActive = $false
+    $script:Background = ($script:BackgroundActions -contains $Action)
+    $script:AssumeYes = [bool]$Yes
     $script:EchoLog = ($Action -ne 'Gui' -and $Action -ne 'Guardian' -and $Action -notlike '*Admin')
-    Write-FixItLog ('--- Family Fix-It {0} started: action={1} dryRun={2} user={3} admin={4}' -f $script:FixItVersion, $Action, $script:DryRun, $env:USERNAME, $(try { Test-FixItAdmin } catch { 'unknown' }))
+    Write-FixItLog ('--- Family Fix-It {0} started: action={1} dryRun={2} background={5} yes={6} user={3} admin={4}' -f $script:FixItVersion, $Action, $script:DryRun, $env:USERNAME, $(try { Test-FixItAdmin } catch { 'unknown' }), $script:Background, $script:AssumeYes)
     $exit = 0
     if ($Action -like '*Admin' -and $Action -ne 'UndoAdmin') { Start-FixItUndoRecord -Fix $Action -Title $Action }
     try {
