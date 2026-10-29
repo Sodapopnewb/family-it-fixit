@@ -35,7 +35,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 # Settings
 # ---------------------------------------------------------------------------
-$script:FixItVersion = '2.3.1'
+$script:FixItVersion = '2.3.2'
 $script:DefaultManifestUrl = 'https://raw.githubusercontent.com/Sodapopnewb/family-it-fixit/main/manifest.json'
 $script:OwnerPlaceholder = ('<' + 'OWNER>')   # the guards compare with this; Publish never rewrites it
 # Where reports are sent (a small Cloudflare Worker that Trey runs). The app header is NOT a secret.
@@ -46,6 +46,10 @@ $script:ScreenShareUrl = 'https://join.zoho.com/'
 # Microsoft's public service status (used by Is it just me?).
 $script:StatusFeedUrl = 'https://status.cloud.microsoft/api/feed/mac'
 $script:AllowedUpdateFiles = @('FamilyFixIt.ps1', 'Start-FixIt.cmd', 'README.md', 'guides.json')
+# Pictures listed under "assets" in manifest.json. They are NOT in "files" because older versions refuse any unknown file there (they could not update).
+$script:AllowedAssetFiles = @('FamilyFixIt.ico')
+$script:IconFileName = 'FamilyFixIt.ico'
+$script:ShortcutFileName = 'Family Fix-It.lnk'
 $script:SelfPath = $PSCommandPath
 $script:InstallDir = $PSScriptRoot
 $script:DryRun = [bool]$WhatIf
@@ -423,6 +427,109 @@ function Save-WebFile {
     param([string]$Url, [string]$Dest)
     try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
     Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 30 -OutFile $Dest
+}
+
+# ---------------------------------------------------------------------------
+# The program icon (monitor with a heart and a bandage) - file, shortcuts, window
+# ---------------------------------------------------------------------------
+function Get-FixItIconPath { return (Join-Path $script:InstallDir $script:IconFileName) }
+
+# True when the file is a real .ico (starts 00 00 01 00, has at least one picture, and is a sensible size).
+function Test-FixItIconFile {
+    param([string]$Path)
+    try {
+        if (-not (Test-Path -LiteralPath $Path)) { return $false }
+        $len = (Get-Item -LiteralPath $Path).Length
+        if ($len -lt 22 -or $len -gt 1MB) { return $false }
+        $b = [IO.File]::ReadAllBytes($Path)
+        return ($b[0] -eq 0 -and $b[1] -eq 0 -and $b[2] -eq 1 -and $b[3] -eq 0 -and ($b[4] + 256 * $b[5]) -ge 1)
+    } catch { return $false }
+}
+
+# Windows adapters for the shortcuts (the tests replace these).
+function Get-FixItShortcutPaths {
+    $list = @()
+    foreach ($w in @('Desktop', 'Programs')) {
+        try { $fo = [Environment]::GetFolderPath($w); if ($fo) { $list += (Join-Path $fo $script:ShortcutFileName) } } catch { }
+    }
+    return $list
+}
+function Read-FixItShortcut {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return $null }
+    try {
+        $l = (New-Object -ComObject WScript.Shell).CreateShortcut($Path)
+        return [pscustomobject]@{ Arguments = [string]$l.Arguments; Icon = [string]$l.IconLocation }
+    } catch { return $null }
+}
+function Write-FixItShortcutIcon {
+    param([string]$Path, [string]$Icon)
+    $l = (New-Object -ComObject WScript.Shell).CreateShortcut($Path)
+    $l.IconLocation = $Icon
+    $l.Save()
+}
+function Test-FixItSameIcon {
+    param([string]$A, [string]$B)
+    $x = ($A -replace ',\s*-?\d+\s*$', '').Trim().Trim('"'); $y = ($B -replace ',\s*-?\d+\s*$', '').Trim().Trim('"')
+    return ([string]::Compare($x, $y, $true) -eq 0)
+}
+# Points the Family Fix-It shortcuts (Desktop and Start menu) at the program icon. Only touches OUR shortcuts
+# (right name, and they start FamilyFixIt.ps1), only when the icon differs, and never creates or removes one. Safe to repeat.
+function Update-FixItShortcutIcons {
+    $ico = Get-FixItIconPath
+    if (-not (Test-FixItIconFile -Path $ico)) { return 0 }
+    $want = $ico + ',0'
+    $changed = 0
+    foreach ($lnk in @(Get-FixItShortcutPaths)) {
+        try {
+            $cur = Read-FixItShortcut -Path $lnk
+            if ($null -eq $cur) { continue }
+            if ($cur.Arguments -notmatch 'FamilyFixIt\.ps1') { continue }
+            if (Test-FixItSameIcon $cur.Icon $want) { continue }
+            if ($script:DryRun) { Write-FixItLog ('Would do: set the icon of {0}' -f $lnk) 'DRYRUN'; continue }
+            Write-FixItShortcutIcon -Path $lnk -Icon $want
+            Write-FixItLog ('Shortcut icon updated: {0}' -f $lnk)
+            $changed++
+        } catch { Write-FixItLog ('Could not update the icon of {0}: {1}' -f $lnk, $_.Exception.Message) 'WARN' }
+    }
+    return $changed
+}
+# Window and taskbar icon for a form. Windows picks the best size (16, 24, 32 ...) out of the .ico by itself.
+$script:UiAppIcon = $null
+function Get-FixItAppIcon {
+    if ($null -ne $script:UiAppIcon) { return $script:UiAppIcon }
+    try {
+        $p = Get-FixItIconPath
+        if (Test-FixItIconFile -Path $p) { $script:UiAppIcon = New-Object System.Drawing.Icon($p) }
+    } catch { Write-FixItLog ('The program icon could not be loaded: {0}' -f $_.Exception.Message) 'WARN' }
+    return $script:UiAppIcon
+}
+function Set-FixItFormIcon {
+    param($Form)
+    try { $ic = Get-FixItAppIcon; if ($null -ne $ic) { $Form.Icon = $ic } } catch { }
+}
+# If the icon file is missing (for example after an update from a version that did not know about it), fetch it
+# from the update list, check its fingerprint, then point the shortcuts at it. Quiet; never asks anything.
+function Repair-FixItIcon {
+    if ($script:DryRun) { return $false }
+    $ico = Get-FixItIconPath
+    if (Test-FixItIconFile -Path $ico) { [void](Update-FixItShortcutIcons); return $false }
+    $m = Get-RemoteManifest -Url $script:ManifestUrl
+    if ($m.State -ne 'Ok') { return $false }
+    $a = @($m.Assets | Where-Object { [string]$_.path -eq $script:IconFileName }) | Select-Object -First 1
+    if ($null -eq $a) { return $false }
+    $tmp = $ico + '.download'
+    try {
+        Save-WebFile -Url ($m.BaseUrl + $script:IconFileName) -Dest $tmp
+        if ((Get-FileSha256 -Path $tmp) -ne ([string]$a.sha256).ToLowerInvariant() -or -not (Test-FixItIconFile -Path $tmp)) { throw 'icon failed its safety check' }
+        Move-Item -LiteralPath $tmp -Destination $ico -Force
+        Write-FixItLog 'Program icon downloaded'
+        [void](Update-FixItShortcutIcons)
+        return $true
+    } catch {
+        Write-FixItLog ('Could not get the program icon: {0}' -f $_.Exception.Message) 'WARN'
+        return $false
+    } finally { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
 }
 
 # ---------------------------------------------------------------------------
@@ -1878,7 +1985,18 @@ function Get-RemoteManifest {
         Write-FixItLog ('Update list is not valid: {0}' -f $_.Exception.Message) 'WARN'
         return [pscustomobject]@{ State = 'Bad'; Why = 'The update list could not be understood.' }
     }
-    return [pscustomobject]@{ State = 'Ok'; Version = $ver; Files = $files; BaseUrl = $Url.Substring(0, $Url.LastIndexOf('/') + 1) }
+    # optional pictures ("assets"): anything not allowed or odd-looking is simply ignored
+    $assets = @()
+    try {
+        if ($m.PSObject.Properties.Name -contains 'assets') {
+            foreach ($a in @($m.assets)) {
+                $ap = [string]$a.path; $ah = [string]$a.sha256
+                $asz = 0; try { $asz = [int64]$a.size } catch { }
+                if ($script:AllowedAssetFiles -contains $ap -and $ah -match '^[0-9a-fA-F]{64}$' -and $asz -gt 0 -and $asz -le 1MB) { $assets += $a }
+            }
+        }
+    } catch { Write-FixItLog ('Update list pictures ignored: {0}' -f $_.Exception.Message) 'WARN'; $assets = @() }
+    return [pscustomobject]@{ State = 'Ok'; Version = $ver; Files = $files; Assets = $assets; BaseUrl = $Url.Substring(0, $Url.LastIndexOf('/') + 1) }
 }
 
 function Get-UpdateStatus {
@@ -1894,12 +2012,15 @@ function Install-FixItUpdate {
     $stage = Join-Path ([IO.Path]::GetTempPath()) ('fixit-update-' + [guid]::NewGuid().ToString('N'))
     try {
         New-Item -ItemType Directory -Path $stage -Force | Out-Null
-        foreach ($f in $Manifest.Files) {
+        $everything = @($Manifest.Files)
+        if ($Manifest.PSObject.Properties.Name -contains 'Assets') { $everything += @($Manifest.Assets) }
+        foreach ($f in $everything) {
             $dest = Join-Path $stage ([string]$f.path)
             Write-FixItLog ('Downloading {0}' -f $f.path)
             Save-WebFile -Url ($Manifest.BaseUrl + [string]$f.path) -Dest $dest
             $hash = Get-FileSha256 -Path $dest
             if ($hash -ne ([string]$f.sha256).ToLowerInvariant()) { throw ('Checksum mismatch for ' + $f.path) }
+            if ([string]$f.path -like '*.ico' -and -not (Test-FixItIconFile -Path $dest)) { throw ('Not a valid icon: ' + $f.path) }
         }
         $main = Join-Path $stage 'FamilyFixIt.ps1'
         if (Test-Path -LiteralPath $main) {
@@ -1913,7 +2034,7 @@ function Install-FixItUpdate {
         New-Item -ItemType Directory -Path $backup -Force | Out-Null
         $done = @()
         try {
-            foreach ($f in $Manifest.Files) {
+            foreach ($f in $everything) {
                 $target = Join-Path $script:InstallDir ([string]$f.path)
                 if (Test-Path -LiteralPath $target) { Copy-Item -LiteralPath $target -Destination (Join-Path $backup ([string]$f.path)) -Force }
                 Copy-Item -LiteralPath (Join-Path $stage ([string]$f.path)) -Destination $target -Force
@@ -1926,6 +2047,8 @@ function Install-FixItUpdate {
             }
             throw
         }
+        # the shortcuts follow the icon (never a reason to fail the update)
+        try { [void](Update-FixItShortcutIcons) } catch { Write-FixItLog ('Shortcut icon refresh: {0}' -f $_.Exception.Message) 'WARN' }
     } finally {
         Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
     }
@@ -4767,6 +4890,7 @@ function Show-FixItScamForm {
     param($Result)
     $S = $script:UiScale
     $f = New-Object System.Windows.Forms.Form
+    Set-FixItFormIcon $f
     $f.Text = 'Family Fix-It'
     $f.StartPosition = 'CenterScreen'
     $f.FormBorderStyle = 'FixedDialog'
@@ -5069,6 +5193,7 @@ function Show-FixItWindowOnce {
         SideSmall = New-Object System.Drawing.Font('Segoe UI', [single](10.5 * $S), [System.Drawing.FontStyle]::Regular, $px)
     }
     $form = New-Object System.Windows.Forms.Form
+    Set-FixItFormIcon $form
     $script:Form = $form
     $form.Text = 'Family Fix-It'
     if ($script:DryRun) { $form.Text = 'Family Fix-It (practice mode - nothing will be changed)' }
@@ -5207,6 +5332,9 @@ function Show-FixItWindowOnce {
             } catch { Write-FixItLog ('Health pill failed: {0}' -f $_.Exception.Message) 'WARN' }
         })
         $tm.Start()
+        if (-not $NoUpdateCheck -and -not $script:DryRun) {
+            try { if (Repair-FixItIcon) { Set-FixItFormIcon $s } } catch { Write-FixItLog ('Icon check failed: {0}' -f $_.Exception.Message) 'WARN' }
+        }
         if ([bool]$s.Tag -and -not $NoUpdateCheck -and -not $script:DryRun) {
             try { Show-FixItResult (Invoke-FixItUpdate -Quiet) } catch { Write-FixItLog ('Update check failed: {0}' -f $_.Exception.Message) 'WARN' }
         }
@@ -5253,6 +5381,7 @@ function Show-FixItFixedDialog {
     $hc = [bool]$script:UiHighContrast
     $px = [System.Drawing.GraphicsUnit]::Pixel
     $f = New-Object System.Windows.Forms.Form
+    Set-FixItFormIcon $f
     $f.Text = 'Family Fix-It'
     $f.StartPosition = 'CenterParent'
     $f.FormBorderStyle = 'FixedDialog'
@@ -5306,6 +5435,7 @@ function Show-FixItPlanDialog {
     $okBg = '#E8F5EC'; $okLine = '#107C41'; $okText = '#0B5A2E'
     if ($hc) { $cText = '#FFFFFF'; $cMuted = '#FFFFFF'; $cNum = '#FFFF00'; $warnBg = '#000000'; $warnLine = '#FFFF00'; $warnText = '#FFFF00'; $okBg = '#000000'; $okLine = '#FFFFFF'; $okText = '#FFFFFF' }
     $f = New-Object System.Windows.Forms.Form
+    Set-FixItFormIcon $f
     $f.Text = 'Family Fix-It - ' + [string]$Plan.Title
     $f.StartPosition = 'CenterParent'; $f.FormBorderStyle = 'FixedDialog'; $f.MaximizeBox = $false; $f.MinimizeBox = $false; $f.ShowInTaskbar = $false
     $f.BackColor = (Get-FixItColor $script:UiBack)
@@ -5404,6 +5534,7 @@ function Show-FixItPrinterPickDialog {
     $script:PickedPrinter = ''
     $wa = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
     $f = New-Object System.Windows.Forms.Form
+    Set-FixItFormIcon $f
     $f.Text = 'Family Fix-It - Which printer?'
     $f.StartPosition = 'CenterParent'; $f.FormBorderStyle = 'FixedDialog'; $f.MaximizeBox = $false; $f.MinimizeBox = $false; $f.ShowInTaskbar = $false
     $f.BackColor = (Get-FixItColor $script:UiBack)
@@ -5455,6 +5586,7 @@ function Show-FixItCountdownDialog {
     $px = [System.Drawing.GraphicsUnit]::Pixel
     $cText = '#1A1A1A'; $cMuted = '#555555'; $cBig = '#0F6CBD'; if ($hc) { $cText = '#FFFFFF'; $cMuted = '#FFFFFF'; $cBig = '#FFFF00' }
     $f = New-Object System.Windows.Forms.Form
+    Set-FixItFormIcon $f
     $f.Text = 'Family Fix-It'
     $f.StartPosition = 'CenterParent'; $f.FormBorderStyle = 'FixedDialog'; $f.MaximizeBox = $false; $f.MinimizeBox = $false; $f.ControlBox = $false; $f.ShowInTaskbar = $false
     $f.BackColor = (Get-FixItColor $script:UiBack)
@@ -5546,6 +5678,7 @@ function Show-FixItFilesDialog {
     $px = [System.Drawing.GraphicsUnit]::Pixel
     $cText = '#1A1A1A'; $cMuted = '#555555'; if ($hc) { $cText = '#FFFFFF'; $cMuted = '#FFFFFF' }
     $f = New-Object System.Windows.Forms.Form
+    Set-FixItFormIcon $f
     $f.Text = 'Family Fix-It - My files'
     $f.StartPosition = 'CenterParent'; $f.FormBorderStyle = 'FixedDialog'; $f.MaximizeBox = $false; $f.MinimizeBox = $false; $f.ShowInTaskbar = $false
     $f.BackColor = (Get-FixItColor $script:UiBack)
@@ -5589,6 +5722,7 @@ function Show-FixItAppsDialog {
     try { $apps = @(Get-FixItApprovedApps) } catch { Write-FixItLog ('App list failed: {0}' -f $_.Exception.Message) 'ERROR' }
     $script:Form.Cursor = [System.Windows.Forms.Cursors]::Default
     $f = New-Object System.Windows.Forms.Form
+    Set-FixItFormIcon $f
     $f.Text = 'Family Fix-It - Install an app'
     $f.StartPosition = 'CenterParent'; $f.FormBorderStyle = 'FixedDialog'; $f.MaximizeBox = $false; $f.MinimizeBox = $false; $f.ShowInTaskbar = $false
     $f.BackColor = (Get-FixItColor $script:UiBack)
@@ -5624,6 +5758,7 @@ function Show-FixItPcInfoForm {
     $cText = '#1A1A1A'; $cMuted = '#555555'; $cCode = '#0F6CBD'
     if ($hc) { $cText = '#FFFFFF'; $cMuted = '#FFFFFF'; $cCode = '#FFFF00' }
     $f = New-Object System.Windows.Forms.Form
+    Set-FixItFormIcon $f
     $f.Text = 'Family Fix-It - My PC info'
     $f.StartPosition = 'CenterParent'; $f.FormBorderStyle = 'FixedDialog'; $f.MaximizeBox = $false; $f.MinimizeBox = $false; $f.ShowInTaskbar = $false
     $f.BackColor = (Get-FixItColor $script:UiBack)
@@ -5704,6 +5839,7 @@ function Show-FixItGuidesDialog {
     try { $script:GuidesAll = @(Get-FixItGuides) } catch { Write-FixItLog ('Guides failed: {0}' -f $_.Exception.Message) 'ERROR'; $script:GuidesAll = @(Get-FixItBuiltInGuides) }
     $script:Form.Cursor = [System.Windows.Forms.Cursors]::Default
     $f = New-Object System.Windows.Forms.Form
+    Set-FixItFormIcon $f
     $f.Text = 'Family Fix-It - Help me with...'
     $f.StartPosition = 'CenterParent'; $f.FormBorderStyle = 'FixedDialog'; $f.MaximizeBox = $false; $f.MinimizeBox = $false; $f.ShowInTaskbar = $false
     $f.BackColor = (Get-FixItColor $script:UiBack)
@@ -5753,6 +5889,7 @@ function Show-FixItGuideSteps {
     $px = [System.Drawing.GraphicsUnit]::Pixel
     $cText = '#1A1A1A'; $cNum = '#0F6CBD'; if ($hc) { $cText = '#FFFFFF'; $cNum = '#FFFF00' }
     $f = New-Object System.Windows.Forms.Form
+    Set-FixItFormIcon $f
     $f.Text = 'Family Fix-It - ' + [string]$Guide.Title
     $f.StartPosition = 'CenterParent'; $f.FormBorderStyle = 'FixedDialog'; $f.MaximizeBox = $false; $f.MinimizeBox = $false; $f.ShowInTaskbar = $false
     $f.BackColor = (Get-FixItColor $script:UiBack)

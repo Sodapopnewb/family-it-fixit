@@ -5,7 +5,7 @@ What it does, in plain words:
   1. Downloads the list of files (manifest.json) and the files from Trey's GitHub page.
   2. Checks every file against its SHA-256 fingerprint. If anything does not match, nothing is installed.
   3. Puts the files in  %LOCALAPPDATA%\FamilyFixIt  (your own user folder).
-  4. Makes a "Family Fix-It" shortcut on the Desktop and in the Start menu.
+  4. Makes a "Family Fix-It" shortcut (with its own icon) on the Desktop and in the Start menu.
   5. Turns on the scary-pop-up watcher (Guardian) and the weekly check-in.
   6. Opens Family Fix-It.
 Running it again is safe: it repairs missing or changed files, or updates to the newest version.
@@ -27,12 +27,13 @@ $ErrorActionPreference = 'Stop'
 
 $script:InstallerVersion = '1.0.0'
 $script:InstallerPlaceholder = ('<' + 'OWNER>')   # the guard below compares with this; Publish never rewrites it
-$script:InstallerFiles = @('FamilyFixIt.ps1', 'Start-FixIt.cmd', 'README.md', 'guides.json')   # the only files this installer will ever write
-$script:InstallerRequired = @('FamilyFixIt.ps1', 'Start-FixIt.cmd')
+$script:InstallerFiles = @('FamilyFixIt.ps1', 'Start-FixIt.cmd', 'README.md', 'guides.json', 'FamilyFixIt.ico')   # the only files this installer will ever write
+$script:InstallerRequired = @('FamilyFixIt.ps1', 'Start-FixIt.cmd')   # the icon is not required: a download list without it still installs
 $script:InstallDry = [bool]$WhatIf
 $script:InstallLog = ''
 $script:ShortcutName = 'Family Fix-It'
-$script:ShortcutIcon = 'shell32.dll,22'
+$script:ShortcutIcon = 'shell32.dll,22'   # only used if the program icon file is missing
+$script:IconFileName = 'FamilyFixIt.ico'
 
 # ----- small helpers ------------------------------------------------------
 function Write-InstallLog {
@@ -87,7 +88,7 @@ function Get-InstallShortcut {
     try {
         $sh = New-Object -ComObject WScript.Shell
         $l = $sh.CreateShortcut($Path)
-        return [pscustomobject]@{ Target = [string]$l.TargetPath; Arguments = [string]$l.Arguments }
+        return [pscustomobject]@{ Target = [string]$l.TargetPath; Arguments = [string]$l.Arguments; Icon = [string]$l.IconLocation }
     } catch { return $null }
 }
 function New-InstallShortcut {
@@ -138,7 +139,10 @@ function Read-InstallManifest {
     if ($null -eq $m -or [string]$m.name -ne 'family-it-fixit') { throw 'The download list on GitHub is not the Family Fix-It list.' }
     if ([string]$m.version -notmatch '^\d+\.\d+\.\d+$') { throw 'The download list has no proper version number.' }
     $entries = @()
-    foreach ($f in @($m.files)) {
+    $listed = @($m.files)
+    # the program icon is listed under "assets" (older program versions refuse unknown names in "files")
+    if ($m.PSObject.Properties.Name -contains 'assets') { $listed += @($m.assets) }
+    foreach ($f in $listed) {
         $path = [string]$f.path; $hash = [string]$f.sha256
         if ($script:InstallerFiles -notcontains $path) { continue }   # anything unexpected is ignored, never installed
         if ($hash -notmatch '^[0-9a-fA-F]{64}$') { throw ('The download list has a bad fingerprint for ' + $path + '.') }
@@ -147,6 +151,8 @@ function Read-InstallManifest {
         $entries += [pscustomobject]@{ Path = $path; Sha256 = $hash.ToLowerInvariant(); Size = $size }
     }
     foreach ($r in $script:InstallerRequired) { if (-not (@($entries | Where-Object { $_.Path -eq $r }).Count)) { throw ('The download list is missing ' + $r + '.') } }
+    $seen = @{}
+    foreach ($e in $entries) { if ($seen.ContainsKey($e.Path)) { throw ('The download list names ' + $e.Path + ' twice.') }; $seen[$e.Path] = $true }
     return [pscustomobject]@{ Version = [string]$m.version; Files = $entries }
 }
 function Get-InstalledVersion {
@@ -202,9 +208,28 @@ function Install-FixItFiles {
     return $changed
 }
 
+function Test-InstallSameIcon {
+    param([string]$A, [string]$B)
+    $x = ($A -replace ',\s*-?\d+\s*$', '').Trim().Trim('"'); $y = ($B -replace ',\s*-?\d+\s*$', '').Trim().Trim('"')
+    return ([string]::Compare($x, $y, $true) -eq 0)
+}
+# The icon file is only used when it is really there (and starts like an .ico); otherwise the old built-in icon.
+function Get-InstallIconLocation {
+    param([string]$Dir)
+    $p = Join-Path $Dir $script:IconFileName
+    try {
+        if (Test-Path -LiteralPath $p) {
+            $b = [IO.File]::ReadAllBytes($p)
+            if ($b.Length -ge 22 -and $b[0] -eq 0 -and $b[1] -eq 0 -and $b[2] -eq 1 -and $b[3] -eq 0) { return ($p + ',0') }
+        }
+    } catch { }
+    return $script:ShortcutIcon
+}
+
 function Set-InstallShortcuts {
     param([string]$Dir)
     $ps = Get-InstallPowerShell
+    $icon = Get-InstallIconLocation -Dir $Dir
     $args2 = '-NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hidden -File "' + (Join-Path $Dir 'FamilyFixIt.ps1') + '"'
     $made = 0
     foreach ($w in @('Desktop', 'Programs')) {
@@ -212,10 +237,10 @@ function Set-InstallShortcuts {
         if (-not $folder) { Write-InstallLog ('No ' + $w + ' folder found') 'WARN'; continue }
         $lnk = Join-Path $folder ($script:ShortcutName + '.lnk')
         $cur = Get-InstallShortcut $lnk
-        if ($null -ne $cur -and $cur.Target -eq $ps -and $cur.Arguments -eq $args2) { Write-InstallLog ('Shortcut already correct: ' + $lnk); $made++; continue }
+        if ($null -ne $cur -and $cur.Target -eq $ps -and $cur.Arguments -eq $args2 -and (Test-InstallSameIcon $cur.Icon $icon)) { Write-InstallLog ('Shortcut already correct: ' + $lnk); $made++; continue }
         try {
             if (-not (Test-Path -LiteralPath $folder)) { New-Item -ItemType Directory -Path $folder -Force | Out-Null }
-            New-InstallShortcut -Path $lnk -Target $ps -Arguments $args2 -WorkDir $Dir -Icon $script:ShortcutIcon -Description 'Family Fix-It: fixes common computer problems'
+            New-InstallShortcut -Path $lnk -Target $ps -Arguments $args2 -WorkDir $Dir -Icon $icon -Description 'Family Fix-It: fixes common computer problems'
             Write-InstallLog ('Shortcut written: ' + $lnk)
             $made++
         } catch { Write-InstallLog ('Could not make shortcut {0}: {1}' -f $lnk, $_.Exception.Message) 'WARN' }

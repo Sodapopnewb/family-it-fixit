@@ -1428,15 +1428,18 @@ $outPin = & (Get-Command pwsh).Source -NoProfile -File (Join-Path $root 'FamilyF
 Assert ($LASTEXITCODE -eq 0 -and $outPin -match 'Pin to taskbar') 'command line: -Action Pin prints the steps'
 
 Section 'Version'
-Assert ($script:FixItVersion -eq '2.3.1') 'the program is version 2.3.1'
+Assert ($script:FixItVersion -eq '2.3.2') 'the program is version 2.3.2'
 
 Section 'Publish + update'
 $pub = Join-Path $root 'tools/Publish-FixIt.ps1'
 $dist = Join-Path $tmp 'dist1'
 & $pub -Owner 'octo-test' -OutDir $dist -WarningAction SilentlyContinue | Out-Null
 $man = Get-Content (Join-Path $dist 'manifest.json') -Raw | ConvertFrom-Json
-Assert ($man.version -eq '2.3.1' -and @($man.files).Count -eq 4) 'manifest has version and 4 runtime files'
+Assert ($man.version -eq '2.3.2' -and @($man.files).Count -eq 4) 'manifest has version and 4 runtime files'
 Assert (@($man.apps).Count -eq 4 -and $man.apps[0].id -eq 'Google.Chrome') 'manifest carries the approved app list'
+Assert (@($man.assets).Count -eq 1 -and $man.assets[0].path -eq 'FamilyFixIt.ico' -and $man.assets[0].sha256 -match '^[0-9a-f]{64}$' -and [int]$man.assets[0].size -gt 1000) 'manifest lists the program icon under assets, with its SHA-256 and size'
+Assert (@($man.files | Where-Object { $_.path -like '*.ico' }).Count -eq 0) 'the icon is NOT in "files" (versions up to 2.3.1 refuse unknown names there, which would break their update)'
+Assert ((Get-FileSha256 (Join-Path $dist 'FamilyFixIt.ico')) -eq $man.assets[0].sha256 -and (Get-FileSha256 (Join-Path $dist 'FamilyFixIt.ico')) -eq (Get-FileSha256 (Join-Path $root 'FamilyFixIt.ico'))) 'published icon is byte-for-byte the source icon and matches the manifest'
 $badApps = Join-Path $tmp 'badapps'; Copy-Item -LiteralPath $root -Destination $badApps -Recurse
 Set-Content (Join-Path $badApps 'apps.json') '[{"id":"calc; evil","name":"x"}]'
 $threw = $false; try { & $pub -SourceDir $badApps -OutDir (Join-Path $tmp 'badout') -WarningAction SilentlyContinue | Out-Null } catch { $threw = $true }
@@ -1461,18 +1464,18 @@ Assert (-not (Select-String -Path (Join-Path $dist '*') -Pattern '(?i)treyb|@gma
 # a newer version 1.0.1 to update to
 $newSrc = Join-Path $tmp 'newsrc'; Copy-Item -LiteralPath $root -Destination $newSrc -Recurse
 $ps = Join-Path $newSrc 'FamilyFixIt.ps1'
-[IO.File]::WriteAllText($ps, ([IO.File]::ReadAllText($ps).Replace("FixItVersion = '2.3.1'", "FixItVersion = '2.3.2'")))
+[IO.File]::WriteAllText($ps, ([IO.File]::ReadAllText($ps).Replace("FixItVersion = '2.3.2'", "FixItVersion = '2.3.3'")))
 $dist2 = Join-Path $tmp 'dist2'
 & (Join-Path $newSrc 'tools/Publish-FixIt.ps1') -SourceDir $newSrc -Owner 'octo-test' -OutDir $dist2 | Out-Null
 $base = 'https://raw.githubusercontent.com/octo-test/family-it-fixit/main/'
-function Set-Web { param($Dir) $script:WebMap = @{}; $script:WebMap[$base + 'manifest.json'] = (Join-Path $Dir 'manifest.json'); foreach ($f in $script:AllowedUpdateFiles) { $script:WebMap[$base + $f] = (Join-Path $Dir $f) } }
+function Set-Web { param($Dir) $script:WebMap = @{}; $script:WebMap[$base + 'manifest.json'] = (Join-Path $Dir 'manifest.json'); foreach ($f in ($script:AllowedUpdateFiles + $script:AllowedAssetFiles)) { $script:WebMap[$base + $f] = (Join-Path $Dir $f) } }
 function New-Install { $i = Join-Path $tmp ('inst-' + [guid]::NewGuid().ToString('N')); New-Item -ItemType Directory $i | Out-Null; foreach ($f in $script:AllowedUpdateFiles) { Copy-Item (Join-Path $dist $f) $i }; return $i }
 $script:ManifestUrl = $base + 'manifest.json'
 
 Reset-All; Set-Web $dist2; $script:InstallDir = New-Install
 $res = Invoke-FixItUpdate
 Assert ($res.Ok -and $res.Title -eq 'Updated') 'newer version installs after asking'
-Assert ([IO.File]::ReadAllText((Join-Path $script:InstallDir 'FamilyFixIt.ps1')) -match "FixItVersion = '2.3.2'") 'installed script is the new one'
+Assert ([IO.File]::ReadAllText((Join-Path $script:InstallDir 'FamilyFixIt.ps1')) -match "FixItVersion = '2.3.3'") 'installed script is the new one'
 Assert (Test-Path (Join-Path $script:InstallDir 'previous/FamilyFixIt.ps1')) 'old version kept in previous/'
 Assert (@($script:Asked).Count -eq 1) 'asked before updating'
 
@@ -1950,7 +1953,7 @@ $relDir = Join-Path $tmp 'release1'
 $distI = Join-Path $tmp 'dist-i1'
 $newSrcI = Join-Path $tmp 'newsrc-i'; Copy-Item -LiteralPath $root -Destination $newSrcI -Recurse
 $psI = Join-Path $newSrcI 'FamilyFixIt.ps1'
-[IO.File]::WriteAllText($psI, ([IO.File]::ReadAllText($psI).Replace("FixItVersion = '2.3.1'", "FixItVersion = '2.3.2'")))
+[IO.File]::WriteAllText($psI, ([IO.File]::ReadAllText($psI).Replace("FixItVersion = '2.3.2'", "FixItVersion = '2.3.3'")))
 $distI2 = Join-Path $tmp 'dist-i2'
 & (Join-Path $newSrcI 'tools/Publish-FixIt.ps1') -SourceDir $newSrcI -Owner 'octo-test' -OutDir $distI2 -ReleaseDir (Join-Path $tmp 'release2') -WarningAction SilentlyContinue | Out-Null
 
@@ -1996,7 +1999,7 @@ Assert ($rd -match 'releases/latest/download/Install-FamilyFixIt\.zip' -and $rd 
     function Invoke-InstalledAction { param([string]$Dir, [string]$Action) [void]$script:I.Actions.Add($Action); if ($script:I.Code.ContainsKey($Action)) { return [int]$script:I.Code[$Action] }; return 0 }
     function Start-InstalledTool { param([string]$Dir) $script:I.Launched++ }
     $base = 'https://raw.githubusercontent.com/octo-test/family-it-fixit/main'
-    function Serve { param([string]$D) $script:I.Web = @{}; $script:I.Web[$base + '/manifest.json'] = (Join-Path $D 'manifest.json'); foreach ($f in @('FamilyFixIt.ps1', 'Start-FixIt.cmd', 'README.md', 'guides.json')) { $script:I.Web[$base + '/' + $f] = (Join-Path $D $f) } }
+    function Serve { param([string]$D) $script:I.Web = @{}; $script:I.Web[$base + '/manifest.json'] = (Join-Path $D 'manifest.json'); foreach ($f in @('FamilyFixIt.ps1', 'Start-FixIt.cmd', 'README.md', 'guides.json', 'FamilyFixIt.ico')) { $script:I.Web[$base + '/' + $f] = (Join-Path $D $f) } }
     function Clear-I { $script:I.Saves.Clear(); $script:I.Actions.Clear(); $script:I.Launched = 0; $script:I.LnkWrites = 0; $script:I.Texts = 0; $script:I.Code = @{}; $script:I.Tamper = @{}; $script:I.WebFail = $false; $script:I.Win = $true; $script:I.Elev = $false; $script:InstallDry = $false }
     function Reset-Inst { if (Test-Path $iroot) { Remove-Item $iroot -Recurse -Force }; Get-ChildItem $desk, $prog -File | Remove-Item -Force; $script:I.Lnk = @{}; Clear-I }
     $dir = Join-Path $iroot 'FamilyFixIt'
@@ -2005,7 +2008,7 @@ Assert ($rd -match 'releases/latest/download/Install-FamilyFixIt\.zip' -and $rd 
 
     Reset-Inst; Serve $distI
     $r = Install-FamilyFixIt -Base $base -Dir $dir
-    Assert ($r.Ok -and $r.Title -eq 'Installed' -and $r.Version -eq '2.3.1' -and $r.Changed) 'fresh install works'
+    Assert ($r.Ok -and $r.Title -eq 'Installed' -and $r.Version -eq '2.3.2' -and $r.Changed) 'fresh install works'
     $same = $true; foreach ($f in @('FamilyFixIt.ps1', 'Start-FixIt.cmd', 'README.md')) { if ((Get-FileSha256 (Join-Path $dir $f)) -ne (Get-FileSha256 (Join-Path $distI $f))) { $same = $false } }
     Assert $same 'the three files are installed and match the published fingerprints'
     Assert (-not (Test-Path (Join-Path $dir '.staging')) -and -not (Test-Path (Join-Path $dir 'previous'))) 'no leftover staging folder; nothing to keep from a previous version'
@@ -2016,11 +2019,33 @@ Assert ($rd -match 'releases/latest/download/Install-FamilyFixIt\.zip' -and $rd 
     Assert ($script:I.Launched -eq 1) 'launches the tool once'
     Assert ($r.Message -match 'Ctrl \+ Shift \+ F' -and $r.Message -match 'All done') 'friendly finish message mentions the panic key'
     Assert ((Get-Content $script:InstallLog -Raw) -match 'Installed FamilyFixIt\.ps1') 'install is logged'
+    $icoPath = Join-Path $dir 'FamilyFixIt.ico'
+    Assert ((Test-Path $icoPath) -and (Get-FileSha256 $icoPath) -eq (Get-FileSha256 (Join-Path $distI 'FamilyFixIt.ico'))) 'the program icon is installed and matches its published SHA-256'
+    Assert ($script:I.Lnk[$dl].Icon -eq ($icoPath + ',0') -and $script:I.Lnk[$sm].Icon -eq ($icoPath + ',0')) 'Desktop and Start menu shortcuts use the program icon (not the old built-in one)'
 
     Clear-I; $before = (Get-FileSha256 (Join-Path $dir 'FamilyFixIt.ps1'))
     $r = Install-FamilyFixIt -Base $base -Dir $dir
     Assert ($r.Ok -and -not $r.Changed -and $script:I.Saves.Count -eq 0) 're-run with nothing wrong: nothing downloaded, nothing changed'
     Assert ($script:I.LnkWrites -eq 0 -and ($script:I.Actions -join ',') -eq 'GuardianOn,CheckInOn') 're-run: shortcuts left alone; the switches are checked / turned on again'
+
+    # existing shortcuts that still carry the old built-in icon are refreshed (and only those); the same icon in another letter case is already right
+    Clear-I; $script:I.Lnk[$dl].Icon = 'shell32.dll,22'; $script:I.Lnk[$sm].Icon = ($icoPath.ToUpperInvariant() + ',0')
+    $r = Install-FamilyFixIt -Base $base -Dir $dir
+    Assert ($r.Ok -and $script:I.Saves.Count -eq 0 -and $script:I.LnkWrites -eq 1 -and $script:I.Lnk[$dl].Icon -eq ($icoPath + ',0')) 'old shortcut icon is replaced on re-run; a shortcut that already has it is not rewritten'
+    Clear-I; $r = Install-FamilyFixIt -Base $base -Dir $dir
+    Assert ($script:I.LnkWrites -eq 0) 'icon refresh is idempotent: a third run writes no shortcut'
+    # a damaged or missing icon file is repaired like any other file
+    Clear-I; Set-Content $icoPath 'not an icon'
+    $r = Install-FamilyFixIt -Base $base -Dir $dir
+    Assert ($r.Ok -and @($script:I.Saves | Where-Object { $_ -like '*FamilyFixIt.ico' }).Count -eq 1 -and (Get-FileSha256 $icoPath) -eq (Get-FileSha256 (Join-Path $distI 'FamilyFixIt.ico'))) 'a damaged icon file is re-downloaded'
+    Clear-I; Remove-Item $icoPath
+    $r = Install-FamilyFixIt -Base $base -Dir $dir
+    Assert ($r.Ok -and (Test-Path $icoPath)) 'a missing icon file is put back'
+    # without a usable icon file the shortcut falls back to the old built-in icon instead of a blank one
+    Assert ((Get-InstallIconLocation -Dir (Join-Path $iroot 'nowhere')) -eq 'shell32.dll,22') 'no icon file: the old built-in icon is used'
+    $junkDir = Join-Path $tmp 'junk-ico'; New-Item -ItemType Directory $junkDir -Force | Out-Null; Set-Content (Join-Path $junkDir 'FamilyFixIt.ico') ('x' * 100)
+    Assert ((Get-InstallIconLocation -Dir $junkDir) -eq 'shell32.dll,22') 'a file that is not an icon is never used for the shortcut'
+    Assert ((Get-InstallIconLocation -Dir $dir) -eq ($icoPath + ',0')) 'a real icon file is used (picture 0)'
 
     Clear-I; Set-Content (Join-Path $dir 'Start-FixIt.cmd') 'broken'; Remove-Item (Join-Path $dir 'README.md')
     $r = Install-FamilyFixIt -Base $base -Dir $dir
@@ -2030,10 +2055,10 @@ Assert ($rd -match 'releases/latest/download/Install-FamilyFixIt\.zip' -and $rd 
 
     Clear-I; Serve $distI2; $script:I.Lnk.Remove($dl)
     $r = Install-FamilyFixIt -Base $base -Dir $dir
-    Assert ($r.Ok -and $r.Version -eq '2.3.2' -and (Get-InstalledVersion $dir) -eq '2.3.2') 'a newer version in the list updates the install'
+    Assert ($r.Ok -and $r.Version -eq '2.3.3' -and (Get-InstalledVersion $dir) -eq '2.3.3') 'a newer version in the list updates the install'
     Assert (($script:I.Actions -join ',') -eq 'GuardianOff,GuardianOn,CheckInOn') 'update restarts the watcher so it runs the new program'
     Assert ($script:I.LnkWrites -eq 1 -and $script:I.Lnk.ContainsKey($dl)) 'a missing shortcut is put back'
-    Assert ((Get-InstalledVersion (Join-Path $dir 'previous')) -eq '2.3.1') 'the old program is kept in previous/'
+    Assert ((Get-InstalledVersion (Join-Path $dir 'previous')) -eq '2.3.2') 'the old program is kept in previous/'
 
     # a download that does not match the fingerprint
     Reset-Inst; Serve $distI; $script:I.Tamper['/FamilyFixIt.ps1'] = $true
@@ -2043,7 +2068,7 @@ Assert ($rd -match 'releases/latest/download/Install-FamilyFixIt\.zip' -and $rd 
     Assert ((Get-Content $script:InstallLog -Raw) -match 'CHECKSUM MISMATCH') 'tampered download: logged'
     Reset-Inst; Serve $distI; $null = Install-FamilyFixIt -Base $base -Dir $dir; Clear-I; Serve $distI2; $script:I.Tamper['/FamilyFixIt.ps1'] = $true
     $r = Install-FamilyFixIt -Base $base -Dir $dir
-    Assert (-not $r.Ok -and (Get-InstalledVersion $dir) -eq '2.3.1') 'tampered update: the working old copy is left exactly as it was'
+    Assert (-not $r.Ok -and (Get-InstalledVersion $dir) -eq '2.3.2') 'tampered update: the working old copy is left exactly as it was'
 
     # network problems
     Reset-Inst; Serve $distI; $script:I.WebFail = $true
@@ -2068,11 +2093,27 @@ Assert ($rd -match 'releases/latest/download/Install-FamilyFixIt\.zip' -and $rd 
     Test-BadList { param($m) $m.files[0].sha256 = 'abc' } 'bad fingerprint'
     Test-BadList { param($m) $m.files = @($m.files | Where-Object { $_.path -ne 'Start-FixIt.cmd' }) } 'required file missing'
     Test-BadList { param($m) $m.files[0].size = 999999999 } 'absurd size'
+    Test-BadList { param($m) $m.assets[0].sha256 = 'abc' } 'bad icon fingerprint'
+    Test-BadList { param($m) $m.assets[0].size = 999999999 } 'absurd icon size'
+    # a list without the icon (an older list) still installs, with the old built-in icon
+    Reset-Inst; $m = Get-Content (Join-Path $distI 'manifest.json') -Raw | ConvertFrom-Json; $m.PSObject.Properties.Remove('assets')
+    $f = Join-Path $tmp 'noassets-manifest.json'; ($m | ConvertTo-Json -Depth 5) | Set-Content $f; Serve $distI; $script:I.Web[$base + '/manifest.json'] = $f
+    $r = Install-FamilyFixIt -Base $base -Dir $dir
+    Assert ($r.Ok -and -not (Test-Path (Join-Path $dir 'FamilyFixIt.ico')) -and $script:I.Lnk[$dl].Icon -eq 'shell32.dll,22') 'a download list without the icon still installs (old built-in icon)'
+    # a tampered icon download is refused and nothing is installed
+    Reset-Inst; Serve $distI; $script:I.Tamper['/FamilyFixIt.ico'] = $true
+    $r = Install-FamilyFixIt -Base $base -Dir $dir
+    Assert (-not $r.Ok -and $r.Message -match 'safety check' -and -not (Test-Path (Join-Path $dir 'FamilyFixIt.ps1')) -and $script:I.Lnk.Count -eq 0) 'a tampered icon download: refused, nothing installed, no shortcut'
     Reset-Inst; $m = Get-Content (Join-Path $distI 'manifest.json') -Raw | ConvertFrom-Json
     $m.files = @($m.files) + [pscustomobject]@{ path = '..\evil.ps1'; sha256 = ('a' * 64); size = 10 } + [pscustomobject]@{ path = 'sub/other.txt'; sha256 = ('b' * 64); size = 10 }
     $f = Join-Path $tmp 'evil-manifest.json'; ($m | ConvertTo-Json -Depth 5) | Set-Content $f; Serve $distI; $script:I.Web[$base + '/manifest.json'] = $f
     $r = Install-FamilyFixIt -Base $base -Dir $dir
-    Assert ($r.Ok -and @($script:I.Saves | Where-Object { $_ -match 'evil|sub/' }).Count -eq 0 -and -not (Test-Path (Join-Path $iroot 'evil.ps1'))) 'a path outside the allowed three files is ignored, never downloaded'
+    Assert ($r.Ok -and @($script:I.Saves | Where-Object { $_ -match 'evil|sub/' }).Count -eq 0 -and -not (Test-Path (Join-Path $iroot 'evil.ps1'))) 'a path outside the allowed files is ignored, never downloaded'
+    Reset-Inst; $m = Get-Content (Join-Path $distI 'manifest.json') -Raw | ConvertFrom-Json
+    $m.assets = @($m.assets) + [pscustomobject]@{ path = '..\evil.ico'; sha256 = ('a' * 64); size = 10 } + [pscustomobject]@{ path = 'evil.exe'; sha256 = ('b' * 64); size = 10 }
+    $f = Join-Path $tmp 'evil-assets-manifest.json'; ($m | ConvertTo-Json -Depth 5) | Set-Content $f; Serve $distI; $script:I.Web[$base + '/manifest.json'] = $f
+    $r = Install-FamilyFixIt -Base $base -Dir $dir
+    Assert ($r.Ok -and @($script:I.Saves | Where-Object { $_ -match 'evil' }).Count -eq 0) 'a bad name under assets is ignored, never downloaded'
 
     # other refusals
     Reset-Inst; Serve $distI
@@ -2391,6 +2432,134 @@ $tF2 = Join-Path $tmp 'guard-program2.ps1'
 (Get-Content $tF -Raw).Replace((Join-Path $dist 'FamilyFixIt.ps1'), (Join-Path $root 'FamilyFixIt.ps1')).Replace('REAL=', 'SRC=') | Set-Content -Path $tF2 -Encoding ASCII
 $o = & $pw2 -NoProfile -File $tF2 2>&1 | Out-String
 Assert ($o -match 'SRC=NotSetUp') 'the unpublished source copy keeps updates off until it is published with an owner'
+
+Section 'Program icon (file, update, shortcuts, window)'
+$icoSrc = Join-Path $root 'FamilyFixIt.ico'
+$ib = [IO.File]::ReadAllBytes($icoSrc)
+Assert ($ib[0] -eq 0 -and $ib[1] -eq 0 -and $ib[2] -eq 1 -and $ib[3] -eq 0 -and $ib[4] -eq 6) 'the .ico is a real icon file with 6 pictures'
+$icoSizes = @(); for ($k = 0; $k -lt 6; $k++) { $w = $ib[6 + 16 * $k]; if ($w -eq 0) { $w = 256 }; $icoSizes += $w }
+Assert (($icoSizes -join ',') -eq '16,24,32,48,64,256') 'the .ico holds 16, 24, 32, 48, 64 and 256 pixel pictures'
+$off256 = [BitConverter]::ToUInt32($ib, 6 + 16 * 5 + 12)
+Assert ($ib[$off256] -eq 0x89 -and $ib[$off256 + 1] -eq 0x50 -and $ib[$off256 + 2] -eq 0x4E -and $ib[$off256 + 3] -eq 0x47) 'the 256 picture is stored as PNG (Windows Vista and later)'
+Assert (Test-FixItIconFile -Path $icoSrc) 'Test-FixItIconFile accepts the real icon'
+$junk = Join-Path $tmp 'junk.ico'; Set-Content $junk ('hello' * 20)
+Assert (-not (Test-FixItIconFile -Path $junk) -and -not (Test-FixItIconFile -Path (Join-Path $tmp 'nope.ico'))) 'Test-FixItIconFile rejects a text file and a missing file'
+Set-Content -Path (Join-Path $tmp 'empty.ico') -Value ''
+Assert (-not (Test-FixItIconFile -Path (Join-Path $tmp 'empty.ico'))) 'Test-FixItIconFile rejects an empty file'
+Assert ($script:AllowedAssetFiles -contains 'FamilyFixIt.ico' -and $script:AllowedUpdateFiles -notcontains 'FamilyFixIt.ico') 'the icon is an allowed asset, not an allowed "files" entry'
+
+# an older program (2.3.1 and before) must still accept the new list: nothing unknown under "files"
+$oldAllowed = @('FamilyFixIt.ps1', 'Start-FixIt.cmd', 'README.md', 'guides.json')
+Assert (@($man.files | Where-Object { $oldAllowed -notcontains [string]$_.path }).Count -eq 0) 'every "files" entry is one that version 2.3.1 already accepts, so its update still works'
+
+# shortcuts (pretend Windows)
+$script:Lnks = @{}; $script:LnkWrites = New-Object System.Collections.ArrayList
+$lnkDesk = Join-Path $tmp 'p-desk/Family Fix-It.lnk'; $lnkStart = Join-Path $tmp 'p-start/Family Fix-It.lnk'
+function Get-FixItShortcutPaths { return @($lnkDesk, $lnkStart) }
+function Read-FixItShortcut { param([string]$Path) if ($script:Lnks.ContainsKey($Path)) { return $script:Lnks[$Path] } return $null }
+function Write-FixItShortcutIcon { param([string]$Path, [string]$Icon) [void]$script:LnkWrites.Add($Path); $script:Lnks[$Path].Icon = $Icon }
+function Reset-Lnks { $script:Lnks = @{}; $script:LnkWrites.Clear(); $script:Lnks[$lnkDesk] = [pscustomobject]@{ Arguments = '-NoProfile -File "C:\x\FamilyFixIt.ps1"'; Icon = 'C:\Windows\System32\shell32.dll,22' }; $script:Lnks[$lnkStart] = [pscustomobject]@{ Arguments = '-NoProfile -File "C:\x\FamilyFixIt.ps1"'; Icon = 'C:\Windows\System32\shell32.dll,22' } }
+$pdir = Join-Path $tmp 'icon-install'; New-Item -ItemType Directory $pdir | Out-Null
+Reset-All; $script:InstallDir = $pdir; Reset-Lnks
+Assert ((Update-FixItShortcutIcons) -eq 0 -and $script:LnkWrites.Count -eq 0) 'no icon file yet: shortcuts are left alone'
+Copy-Item $icoSrc (Join-Path $pdir 'FamilyFixIt.ico')
+$want = (Join-Path $pdir 'FamilyFixIt.ico') + ',0'
+Assert ((Update-FixItShortcutIcons) -eq 2 -and $script:Lnks[$lnkDesk].Icon -eq $want -and $script:Lnks[$lnkStart].Icon -eq $want) 'Desktop and Start menu shortcuts are pointed at the icon file'
+Assert ((Update-FixItShortcutIcons) -eq 0 -and $script:LnkWrites.Count -eq 2) 'doing it again changes nothing (idempotent)'
+Reset-Lnks; $script:Lnks[$lnkDesk].Icon = $want.ToUpperInvariant()
+Assert ((Update-FixItShortcutIcons) -eq 1 -and $script:LnkWrites.Count -eq 1 -and $script:LnkWrites[0] -eq $lnkStart) 'a shortcut that already has the icon (any letter case) is not touched'
+Reset-Lnks; $script:Lnks[$lnkDesk].Arguments = '-File "C:\other\Something.ps1"'
+Assert ((Update-FixItShortcutIcons) -eq 1 -and $script:Lnks[$lnkDesk].Icon -like '*shell32*') 'a shortcut with the same name that does not start Family Fix-It is never touched'
+Reset-Lnks; $script:Lnks.Remove($lnkStart)
+Assert ((Update-FixItShortcutIcons) -eq 1 -and -not $script:Lnks.ContainsKey($lnkStart)) 'a missing shortcut is not created by the updater'
+Reset-Lnks; $script:DryRun = $true
+Assert ((Update-FixItShortcutIcons) -eq 0 -and $script:LnkWrites.Count -eq 0) 'practice run (-WhatIf): shortcuts are not changed'
+$script:DryRun = $false
+function Write-FixItShortcutIcon { param([string]$Path, [string]$Icon) throw 'pretend: locked' }
+Reset-Lnks
+Assert ((Update-FixItShortcutIcons) -eq 0) 'a shortcut that cannot be written is skipped without crashing'
+function Write-FixItShortcutIcon { param([string]$Path, [string]$Icon) [void]$script:LnkWrites.Add($Path); $script:Lnks[$Path].Icon = $Icon }
+
+# update from a version that has no icon yet: the icon arrives with the update and the shortcuts follow
+$distI3 = Join-Path $tmp 'dist-icon3'
+& (Join-Path $newSrc 'tools/Publish-FixIt.ps1') -SourceDir $newSrc -Owner 'octo-test' -OutDir $distI3 | Out-Null
+Reset-All; Set-Web $distI3; $script:ManifestUrl = $base + 'manifest.json'; $script:InstallDir = New-Install; Reset-Lnks
+Assert (-not (Test-Path (Join-Path $script:InstallDir 'FamilyFixIt.ico'))) 'test setup: the old install has no icon'
+$res = Invoke-FixItUpdate
+$newIco = Join-Path $script:InstallDir 'FamilyFixIt.ico'
+Assert ($res.Ok -and $res.Title -eq 'Updated' -and (Test-Path $newIco) -and (Get-FileSha256 $newIco) -eq (Get-FileSha256 $icoSrc)) 'update downloads the icon, checks its SHA-256 and installs it'
+Assert ($script:Lnks[$lnkDesk].Icon -eq ($newIco + ',0') -and $script:Lnks[$lnkStart].Icon -eq ($newIco + ',0')) 'update refreshes the existing Desktop and Start menu shortcuts'
+Assert ((CallsLike 'download*FamilyFixIt.ico') -eq 1) 'the icon is downloaded once'
+# tampered icon: the whole update is refused and nothing changes
+$distTamper = Join-Path $tmp 'dist-icon-tamper'; Copy-Item $distI3 $distTamper -Recurse
+Add-Content (Join-Path $distTamper 'FamilyFixIt.ico') 'evil'
+Reset-All; Set-Web $distTamper; $script:InstallDir = New-Install; Reset-Lnks
+$verBefore = Get-FileSha256 (Join-Path $script:InstallDir 'FamilyFixIt.ps1')
+$res = Invoke-FixItUpdate
+Assert (-not $res.Ok -and $res.Title -eq 'Update did not work' -and -not (Test-Path (Join-Path $script:InstallDir 'FamilyFixIt.ico')) -and (Get-FileSha256 (Join-Path $script:InstallDir 'FamilyFixIt.ps1')) -eq $verBefore -and $script:LnkWrites.Count -eq 0) 'a tampered icon refuses the update; nothing is changed'
+# valid fingerprint but not an icon: refused
+$distNotIco = Join-Path $tmp 'dist-icon-notico'; Copy-Item $distI3 $distNotIco -Recurse
+Set-Content (Join-Path $distNotIco 'FamilyFixIt.ico') ('not an icon ' * 10)
+$m5 = Get-Content (Join-Path $distNotIco 'manifest.json') -Raw | ConvertFrom-Json
+$m5.assets[0].sha256 = Get-FileSha256 (Join-Path $distNotIco 'FamilyFixIt.ico'); $m5.assets[0].size = (Get-Item (Join-Path $distNotIco 'FamilyFixIt.ico')).Length
+($m5 | ConvertTo-Json -Depth 6) | Set-Content (Join-Path $distNotIco 'manifest.json')
+Reset-All; Set-Web $distNotIco; $script:InstallDir = New-Install; Reset-Lnks
+$res = Invoke-FixItUpdate
+Assert (-not $res.Ok -and -not (Test-Path (Join-Path $script:InstallDir 'FamilyFixIt.ico'))) 'a file that has the right fingerprint but is not an icon is refused'
+# hostile or odd "assets" never break the update list
+$mj = Get-Content (Join-Path $distI3 'manifest.json') -Raw | ConvertFrom-Json
+$mj.assets = @($mj.assets) + [pscustomobject]@{ path = '..\evil.ico'; sha256 = ('a' * 64); size = 10 } + [pscustomobject]@{ path = 'FamilyFixIt.ico'; sha256 = 'zzz'; size = 10 } + [pscustomobject]@{ path = 'run.exe'; sha256 = ('c' * 64); size = 10 }
+$mjf = Join-Path $tmp 'assets-hostile.json'; ($mj | ConvertTo-Json -Depth 6) | Set-Content $mjf
+$script:WebMap = @{ ($base + 'manifest.json') = $mjf }; Reset-All
+$rm = Get-RemoteManifest -Url ($base + 'manifest.json')
+Assert ($rm.State -eq 'Ok' -and @($rm.Assets).Count -eq 1 -and $rm.Assets[0].path -eq 'FamilyFixIt.ico' -and $rm.Assets[0].sha256 -match '^[0-9a-f]{64}$') 'odd assets are ignored; the good one is kept; the list is still accepted'
+$mj.PSObject.Properties.Remove('assets'); ($mj | ConvertTo-Json -Depth 6) | Set-Content $mjf
+$rm = Get-RemoteManifest -Url ($base + 'manifest.json')
+Assert ($rm.State -eq 'Ok' -and @($rm.Assets).Count -eq 0) 'a list with no assets at all is fine'
+
+# an install that came through an older program's update (no icon yet): the new program fetches it by itself
+Reset-All; Set-Web $distI3; $script:ManifestUrl = $base + 'manifest.json'
+$script:InstallDir = New-Install; Reset-Lnks
+Copy-Item (Join-Path $distI3 'FamilyFixIt.ps1') $script:InstallDir -Force
+$script:FixItVersion = '2.3.3'   # pretend we are the newest program, so only the icon is missing
+$fixed = Repair-FixItIcon
+$ico2 = Join-Path $script:InstallDir 'FamilyFixIt.ico'
+Assert ($fixed -and (Test-Path $ico2) -and (Get-FileSha256 $ico2) -eq (Get-FileSha256 $icoSrc) -and $script:Lnks[$lnkDesk].Icon -eq ($ico2 + ',0')) 'missing icon: fetched from the update list, verified, shortcuts pointed at it'
+Assert (-not (Test-Path ($ico2 + '.download'))) 'no leftover download file'
+$script:Calls.Clear(); $script:LnkWrites.Clear()
+Assert ((Repair-FixItIcon) -eq $false -and (CallsLike 'web*') -eq 0 -and (CallsLike 'download*') -eq 0 -and $script:LnkWrites.Count -eq 0) 'icon already there: no network, nothing changed'
+Remove-Item $ico2; $script:WebFail = $true
+Assert ((Repair-FixItIcon) -eq $false -and -not (Test-Path $ico2)) 'offline: quietly does nothing'
+$script:WebFail = $false; Set-Web $distTamper
+Assert ((Repair-FixItIcon) -eq $false -and -not (Test-Path $ico2) -and -not (Test-Path ($ico2 + '.download'))) 'wrong fingerprint: nothing is kept'
+$script:DryRun = $true; Set-Web $distI3
+Assert ((Repair-FixItIcon) -eq $false -and -not (Test-Path $ico2)) 'practice run: nothing downloaded'
+$script:DryRun = $false
+$script:ManifestUrl = 'https://raw.githubusercontent.com/<' + 'OWNER>/family-it-fixit/main/manifest.json'
+Assert ((Repair-FixItIcon) -eq $false) 'update address not set up: does nothing'
+$script:FixItVersion = '2.3.2'
+
+# window / taskbar icon
+Assert (@([regex]::Matches($src, 'New-Object System\.Windows\.Forms\.Form')).Count -eq @([regex]::Matches($src, '(?m)^\s*(\$\w+) = New-Object System\.Windows\.Forms\.Form\r?\n\s*Set-FixItFormIcon \1')).Count) 'every window (main, confirm, pickers, guides ...) gets the program icon right after it is created'
+$script:UiAppIcon = $null; $script:InstallDir = Join-Path $tmp 'no-such-dir'
+Assert ($null -eq (Get-FixItAppIcon)) 'no icon file: the window keeps the default icon (no crash)'
+$fake = [pscustomobject]@{ Icon = 'default' }; Set-FixItFormIcon $fake
+Assert ($fake.Icon -eq 'default') 'no icon file: the form is left alone'
+$script:UiAppIcon = 'sentinel-icon'; Set-FixItFormIcon $fake
+Assert ($fake.Icon -eq 'sentinel-icon') 'with an icon: the form gets it (Windows uses it for the title bar and the taskbar)'
+$script:UiAppIcon = $null
+Assert (($src -match 'Repair-FixItIcon' ) -and ($src -match 'Set-FixItFormIcon \$s')) 'the window checks for the icon when it opens and applies it'
+
+# the publish step also refuses a file named .ico that is not an icon
+$badIco = Join-Path $tmp 'badico'; Copy-Item -LiteralPath $root -Destination $badIco -Recurse
+Set-Content (Join-Path $badIco 'FamilyFixIt.ico') ('x' * 100)
+$threw = $false; try { & $pub -SourceDir $badIco -OutDir (Join-Path $tmp 'badico-out') -WarningAction SilentlyContinue | Out-Null } catch { $threw = $true }
+Assert ($threw -and -not (Test-Path (Join-Path $tmp 'badico-out'))) 'publish refuses an icon file that is not a real icon'
+$noIco = Join-Path $tmp 'noico'; Copy-Item -LiteralPath $root -Destination $noIco -Recurse; Remove-Item (Join-Path $noIco 'FamilyFixIt.ico')
+$threw = $false; try { & $pub -SourceDir $noIco -OutDir (Join-Path $tmp 'noico-out') -WarningAction SilentlyContinue | Out-Null } catch { $threw = $true }
+Assert $threw 'publish stops when the icon file is missing'
+$pi2 = [IO.File]::ReadAllText((Join-Path $dist 'Install-FixIt.ps1'))
+Assert ($pi2 -match "FamilyFixIt\.ico" -and $pi2 -match 'Get-InstallIconLocation') 'the published installer knows the icon'
 
 Section 'Logging'
 $log = Get-Content $logFile -Raw

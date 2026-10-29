@@ -1,7 +1,7 @@
 <#
 Publish-FixIt.ps1  -  for Trey only (not used by the family).
 Builds a folder that is ready to commit to the public GitHub repo:
-  - copies the tool files
+  - copies the tool files (and the program icon FamilyFixIt.ico, listed under "assets" in manifest.json with its SHA-256)
   - fills in your GitHub name on the address lines (and in the README) that say <OWNER> (use -Owner); the checks inside the scripts never contain that literal text
   - writes manifest.json (version + SHA-256 of each file the family's copy downloads, plus the approved
     app list from apps.json for the 'Install an app' button, and the help guides from guides.json for 'Help me with...')
@@ -25,6 +25,7 @@ if (-not $OutDir) { $OutDir = Join-Path $SourceDir 'dist' }
 if (-not $ReleaseDir) { $ReleaseDir = Join-Path (Split-Path -Parent $OutDir) 'release' }
 
 $runtimeFiles = @('FamilyFixIt.ps1', 'Start-FixIt.cmd', 'README.md', 'guides.json')   # what the family's copy downloads
+$assetFiles = @('FamilyFixIt.ico')   # pictures: listed under "assets" in manifest.json (not "files"; older versions refuse unknown names in "files")
 $installerFiles = @('Install-FixIt.ps1', 'Install-FamilyFixIt.cmd')   # the bootstrap installer (also zipped for the release)
 $extraFiles = @('.gitattributes', '.gitignore', 'apps.json', 'tools/Publish-FixIt.ps1', 'tests/Test-FixIt.ps1') + $installerFiles
 
@@ -35,7 +36,7 @@ $version = $m.Groups[1].Value
 
 if (Test-Path -LiteralPath $OutDir) { Remove-Item -LiteralPath $OutDir -Recurse -Force }
 New-Item -ItemType Directory -Path $OutDir | Out-Null
-foreach ($f in ($runtimeFiles + $extraFiles)) {
+foreach ($f in ($runtimeFiles + $assetFiles + $extraFiles)) {
     $src = Join-Path $SourceDir $f
     if (-not (Test-Path -LiteralPath $src)) { throw ('Missing file: ' + $f) }
     $dest = Join-Path $OutDir $f
@@ -77,6 +78,11 @@ $patterns = @(
 $secretOnly = $patterns[1..5]
 foreach ($f in (Get-ChildItem -LiteralPath $OutDir -Recurse -File -Force)) {
     if ($f.Name -eq 'Publish-FixIt.ps1') { continue }   # this file holds the patterns themselves
+    if ($f.Extension -eq '.ico') {   # a picture: check that it really is an icon instead of scanning it as text
+        $ib = [IO.File]::ReadAllBytes($f.FullName)
+        if ($ib.Length -lt 22 -or $ib.Length -gt 1MB -or $ib[0] -ne 0 -or $ib[1] -ne 0 -or $ib[2] -ne 1 -or $ib[3] -ne 0) { $bad += ($f.Name + ': is not a valid .ico file') }
+        continue
+    }
     $t = [IO.File]::ReadAllText($f.FullName)
     $scan = $patterns; if ($f.Name -eq 'Test-FixIt.ps1') { $scan = $secretOnly }
     foreach ($p in $scan) {
@@ -95,6 +101,13 @@ foreach ($f in $runtimeFiles) {
     $sha = [Security.Cryptography.SHA256]::Create()
     $hash = ([BitConverter]::ToString($sha.ComputeHash([IO.File]::ReadAllBytes($p))) -replace '-', '').ToLowerInvariant()
     $entries += [ordered]@{ path = $f; sha256 = $hash; size = (Get-Item -LiteralPath $p).Length }
+}
+$assetEntries = @()
+foreach ($f in $assetFiles) {
+    $p = Join-Path $OutDir $f
+    $sha = [Security.Cryptography.SHA256]::Create()
+    $hash = ([BitConverter]::ToString($sha.ComputeHash([IO.File]::ReadAllBytes($p))) -replace '-', '').ToLowerInvariant()
+    $assetEntries += [ordered]@{ path = $f; sha256 = $hash; size = (Get-Item -LiteralPath $p).Length }
 }
 # Approved apps for 'Install an app': exact winget ids, checked here and again by the tool before it installs anything.
 $appsRaw = [IO.File]::ReadAllText((Join-Path $SourceDir 'apps.json')) | ConvertFrom-Json
@@ -123,7 +136,7 @@ foreach ($g in @($guidesRaw.guides)) {
     $guides += [ordered]@{ id = $gid; title = $gt; keywords = $gk; steps = $gs }
 }
 if ($guides.Count -lt 1 -or $guides.Count -gt 20) { throw 'guides.json must hold between 1 and 20 guides.' }
-$manifest = [ordered]@{ name = 'family-it-fixit'; version = $version; files = $entries; apps = $apps; guides = $guides }
+$manifest = [ordered]@{ name = 'family-it-fixit'; version = $version; files = $entries; assets = $assetEntries; apps = $apps; guides = $guides }
 [IO.File]::WriteAllText((Join-Path $OutDir 'manifest.json'), ($manifest | ConvertTo-Json -Depth 6), (New-Object Text.UTF8Encoding($false)))
 
 # The release zip: just the double-click wrapper and the installer script (the installer downloads and checks the rest).
