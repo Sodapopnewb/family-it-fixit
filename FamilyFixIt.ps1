@@ -34,8 +34,9 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 # Settings
 # ---------------------------------------------------------------------------
-$script:FixItVersion = '2.2.0'
+$script:FixItVersion = '2.2.1'
 $script:DefaultManifestUrl = 'https://raw.githubusercontent.com/Sodapopnewb/family-it-fixit/main/manifest.json'
+$script:OwnerPlaceholder = ('<' + 'OWNER>')   # the guards compare with this; Publish never rewrites it
 # Where reports are sent (a small Cloudflare Worker that Trey runs). The app header is NOT a secret.
 $script:DefaultReportUrl = 'https://fixit-report.hg-fixit.workers.dev/report'
 $script:AppHeader = 'family-it-fixit'
@@ -1650,7 +1651,7 @@ function Get-FileSha256 {
 
 function Get-RemoteManifest {
     param([string]$Url)
-    if ($Url -match 'Sodapopnewb') { return [pscustomobject]@{ State = 'NotSetUp' } }
+    if ($Url.Contains($script:OwnerPlaceholder)) { return [pscustomobject]@{ State = 'NotSetUp' } }
     if ($Url -notmatch '^https://') { return [pscustomobject]@{ State = 'Bad'; Why = 'The update address is not a secure (https) address.' } }
     try { $text = Get-WebText -Url $Url } catch {
         Write-FixItLog ('Could not reach the update site: {0}' -f $_.Exception.Message) 'WARN'
@@ -3038,7 +3039,7 @@ function Test-FixItAppEntry {
 function Get-FixItApprovedApps {
     $apps = @()
     $json = $null
-    if ($script:ManifestUrl -and $script:ManifestUrl -match '^https://' -and $script:ManifestUrl -notmatch 'Sodapopnewb') {
+    if ($script:ManifestUrl -and $script:ManifestUrl -match '^https://' -and -not $script:ManifestUrl.Contains($script:OwnerPlaceholder)) {
         try { $json = (Get-WebText -Url $script:ManifestUrl) | ConvertFrom-Json } catch { Write-FixItLog ('Could not read the approved app list online, using the built-in list: {0}' -f $_.Exception.Message) 'WARN' }
     }
     if ($json -and (Test-FixItHas $json 'apps')) {
@@ -3958,7 +3959,7 @@ function Get-FixItBuiltInGuides {
 
 # Online list (so Trey can fix a guide without anyone updating the program), then the local guides.json, then a tiny built-in list.
 function Get-FixItGuides {
-    if ($script:ManifestUrl -and $script:ManifestUrl -match '^https://' -and $script:ManifestUrl -notmatch 'Sodapopnewb') {
+    if ($script:ManifestUrl -and $script:ManifestUrl -match '^https://' -and -not $script:ManifestUrl.Contains($script:OwnerPlaceholder)) {
         try {
             $m = (Get-WebText -Url $script:ManifestUrl) | ConvertFrom-Json
             if (Test-FixItHas $m 'guides') {

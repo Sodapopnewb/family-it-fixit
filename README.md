@@ -47,7 +47,7 @@ Files: `FamilyFixIt.ps1` (everything), `Start-FixIt.cmd` (launcher), `guides.jso
 
 ### Install on a family PC (bootstrap installer)
 `Install-FixIt.ps1` (plus the double-click wrapper `Install-FamilyFixIt.cmd`) sets a family PC up from nothing. No administrator rights.
-1. Downloads `manifest.json` and the program files (`FamilyFixIt.ps1`, `Start-FixIt.cmd`, `README.md` and the optional `guides.json`) from `https://raw.githubusercontent.com/<OWNER>/family-it-fixit/main` (only those names are ever accepted).
+1. Downloads `manifest.json` and the program files (`FamilyFixIt.ps1`, `Start-FixIt.cmd`, `README.md` and the optional `guides.json`) from `https://raw.githubusercontent.com/Sodapopnewb/family-it-fixit/main` (only those names are ever accepted).
 2. Checks each file's SHA-256 and size against the manifest. If anything is wrong **nothing is installed** (and an existing working copy is left untouched).
 3. Installs to `%LOCALAPPDATA%\FamilyFixIt` (old copies go to `previous\`).
 4. Makes the shortcut **Family Fix-It** on the Desktop and in the Start menu (it starts the tool with no black window).
@@ -58,9 +58,9 @@ Files: `FamilyFixIt.ps1` (everything), `Start-FixIt.cmd` (launcher), `guides.jso
 
 **Two ways to give it to someone**
 - **Download link (best for family):** a GitHub Release with one asset named exactly `Install-FamilyFixIt.zip` (made by the publish script in `release/`). The address that always gives the newest one:
-  `https://github.com/<OWNER>/family-it-fixit/releases/latest/download/Install-FamilyFixIt.zip`
+  `https://github.com/Sodapopnewb/family-it-fixit/releases/latest/download/Install-FamilyFixIt.zip`
 - **One line in PowerShell:** open PowerShell (not as administrator) and paste:
-  `irm https://raw.githubusercontent.com/<OWNER>/family-it-fixit/main/Install-FixIt.ps1 | iex`
+  `irm https://raw.githubusercontent.com/Sodapopnewb/family-it-fixit/main/Install-FixIt.ps1 | iex`
   This never saves the installer as a file, so Windows does not put its "downloaded from the internet" mark on it and there is no SmartScreen prompt.
 
 **SmartScreen and the "downloaded from the internet" mark (Mark of the Web)**
@@ -135,7 +135,7 @@ The family member can turn it on from the side bar. It creates a per-user schedu
 The list lives in the update manifest (`apps` in `manifest.json`), so you can change it remotely by editing that file on GitHub (or edit `apps.json` and publish again). Each entry is `{ "id": "<exact winget id>", "name": "<button text>" }`. The tool ignores any entry whose id or name looks wrong, installs with `winget install --id <id> --exact --source winget`, skips apps already installed, and falls back to the built-in default list if it cannot read the manifest.
 
 ### Updates (GitHub)
-- The tool checks `manifest.json` in a public GitHub repo when the window opens (only if online) and *asks* before updating. Default address: `https://raw.githubusercontent.com/<OWNER>/family-it-fixit/main/manifest.json`. While it says `<OWNER>`, updates are off (and the app list is the built-in one).
+- The tool checks `manifest.json` in a public GitHub repo when the window opens (only if online) and *asks* before updating. Default address: `https://raw.githubusercontent.com/Sodapopnewb/family-it-fixit/main/manifest.json`. While it says `Sodapopnewb`, updates are off (and the app list is the built-in one).
 - To publish: `pwsh ./tools/Publish-FixIt.ps1 -Owner <your-github-name>`. It writes `dist/`, ready to commit to the repo root, with checksums and the app list, and `release/Install-FamilyFixIt.zip` for the GitHub Release. It refuses to continue if it finds an email address, a token, a password or a user folder path in the files.
 - Bump `$script:FixItVersion` in `FamilyFixIt.ps1` before each publish.
 - Checksums catch damaged downloads, not a hacked repo: use 2-factor on the GitHub account.

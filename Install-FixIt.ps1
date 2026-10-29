@@ -26,6 +26,7 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
 $script:InstallerVersion = '1.0.0'
+$script:InstallerPlaceholder = ('<' + 'OWNER>')   # the guard below compares with this; Publish never rewrites it
 $script:InstallerFiles = @('FamilyFixIt.ps1', 'Start-FixIt.cmd', 'README.md', 'guides.json')   # the only files this installer will ever write
 $script:InstallerRequired = @('FamilyFixIt.ps1', 'Start-FixIt.cmd')
 $script:InstallDry = [bool]$WhatIf
@@ -216,7 +217,7 @@ function Set-InstallShortcuts {
 function Install-FamilyFixIt {
     param([string]$Base, [string]$Dir, [bool]$Launch = $true)
     if (-not (Test-InstallWindows)) { return (New-InstallResult $false 'Windows only' 'Family Fix-It only works on Windows.') }
-    if ($Base -match 'Sodapopnewb') { return (New-InstallResult $false 'Not set up yet' 'This installer has not been given its GitHub address yet. Please tell Trey.') }
+    if ($Base.Contains($script:InstallerPlaceholder)) { return (New-InstallResult $false 'Not set up yet' 'This installer has not been given its GitHub address yet. Please tell Trey.') }
     if ($Base -notmatch '^https://') { return (New-InstallResult $false 'Not allowed' 'The download address must start with https://') }
     if (-not $Dir) { $Dir = Get-InstallDefaultDir }
 

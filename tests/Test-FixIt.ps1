@@ -1048,7 +1048,7 @@ $pub = Join-Path $root 'tools/Publish-FixIt.ps1'
 $dist = Join-Path $tmp 'dist1'
 & $pub -Owner 'octo-test' -OutDir $dist -WarningAction SilentlyContinue | Out-Null
 $man = Get-Content (Join-Path $dist 'manifest.json') -Raw | ConvertFrom-Json
-Assert ($man.version -eq '2.2.0' -and @($man.files).Count -eq 4) 'manifest has version and 4 runtime files'
+Assert ($man.version -eq '2.2.1' -and @($man.files).Count -eq 4) 'manifest has version and 4 runtime files'
 Assert (@($man.apps).Count -eq 4 -and $man.apps[0].id -eq 'Google.Chrome') 'manifest carries the approved app list'
 $badApps = Join-Path $tmp 'badapps'; Copy-Item -LiteralPath $root -Destination $badApps -Recurse
 Set-Content (Join-Path $badApps 'apps.json') '[{"id":"calc; evil","name":"x"}]'
@@ -1074,7 +1074,7 @@ Assert (-not (Select-String -Path (Join-Path $dist '*') -Pattern '(?i)treyb|@gma
 # a newer version 1.0.1 to update to
 $newSrc = Join-Path $tmp 'newsrc'; Copy-Item -LiteralPath $root -Destination $newSrc -Recurse
 $ps = Join-Path $newSrc 'FamilyFixIt.ps1'
-[IO.File]::WriteAllText($ps, ([IO.File]::ReadAllText($ps).Replace("FixItVersion = '2.2.0'", "FixItVersion = '2.2.1'")))
+[IO.File]::WriteAllText($ps, ([IO.File]::ReadAllText($ps).Replace("FixItVersion = '2.2.1'", "FixItVersion = '2.2.2'")))
 $dist2 = Join-Path $tmp 'dist2'
 & (Join-Path $newSrc 'tools/Publish-FixIt.ps1') -SourceDir $newSrc -Owner 'octo-test' -OutDir $dist2 | Out-Null
 $base = 'https://raw.githubusercontent.com/octo-test/family-it-fixit/main/'
@@ -1085,7 +1085,7 @@ $script:ManifestUrl = $base + 'manifest.json'
 Reset-All; Set-Web $dist2; $script:InstallDir = New-Install
 $res = Invoke-FixItUpdate
 Assert ($res.Ok -and $res.Title -eq 'Updated') 'newer version installs after asking'
-Assert ([IO.File]::ReadAllText((Join-Path $script:InstallDir 'FamilyFixIt.ps1')) -match "FixItVersion = '2.2.1'") 'installed script is the new one'
+Assert ([IO.File]::ReadAllText((Join-Path $script:InstallDir 'FamilyFixIt.ps1')) -match "FixItVersion = '2.2.2'") 'installed script is the new one'
 Assert (Test-Path (Join-Path $script:InstallDir 'previous/FamilyFixIt.ps1')) 'old version kept in previous/'
 Assert (@($script:Asked).Count -eq 1) 'asked before updating'
 
@@ -1422,7 +1422,7 @@ $relDir = Join-Path $tmp 'release1'
 $distI = Join-Path $tmp 'dist-i1'
 $newSrcI = Join-Path $tmp 'newsrc-i'; Copy-Item -LiteralPath $root -Destination $newSrcI -Recurse
 $psI = Join-Path $newSrcI 'FamilyFixIt.ps1'
-[IO.File]::WriteAllText($psI, ([IO.File]::ReadAllText($psI).Replace("FixItVersion = '2.2.0'", "FixItVersion = '2.2.1'")))
+[IO.File]::WriteAllText($psI, ([IO.File]::ReadAllText($psI).Replace("FixItVersion = '2.2.1'", "FixItVersion = '2.2.2'")))
 $distI2 = Join-Path $tmp 'dist-i2'
 & (Join-Path $newSrcI 'tools/Publish-FixIt.ps1') -SourceDir $newSrcI -Owner 'octo-test' -OutDir $distI2 -ReleaseDir (Join-Path $tmp 'release2') -WarningAction SilentlyContinue | Out-Null
 
@@ -1446,7 +1446,7 @@ Assert ($it -match 'Set-StrictMode -Version 2\.0' -and $it -match 'Tls12') 'inst
 $ct = [IO.File]::ReadAllText($instCmd)
 Assert ($ct -match '-ExecutionPolicy Bypass' -and $ct -match 'goto web' -and $ct -notmatch '(?m)^\s*\(' -and $ct -notmatch '(?im)runas') 'wrapper: no bracket blocks (safe in folders like "Mom (Work)"), no admin'
 $rd = [IO.File]::ReadAllText((Join-Path $root 'README.md'))
-Assert ($rd -match 'releases/latest/download/Install-FamilyFixIt\.zip' -and $rd -match 'irm https://raw\.githubusercontent\.com/<OWNER>/family-it-fixit/main/Install-FixIt\.ps1 \| iex' -and $rd -match 'More info' -and $rd -match 'Run anyway') 'README: latest-download link, the one-line install, and the SmartScreen steps'
+Assert ($rd -match 'releases/latest/download/Install-FamilyFixIt\.zip' -and $rd -match 'irm https://raw\.githubusercontent\.com/(<OWNER>|[A-Za-z0-9-]+)/family-it-fixit/main/Install-FixIt\.ps1 \| iex' -and $rd -match 'More info' -and $rd -match 'Run anyway') 'README: latest-download link, the one-line install, and the SmartScreen steps'
 
 # run the installer functions with pretend Windows and network
 & {
@@ -1477,7 +1477,7 @@ Assert ($rd -match 'releases/latest/download/Install-FamilyFixIt\.zip' -and $rd 
 
     Reset-Inst; Serve $distI
     $r = Install-FamilyFixIt -Base $base -Dir $dir
-    Assert ($r.Ok -and $r.Title -eq 'Installed' -and $r.Version -eq '2.2.0' -and $r.Changed) 'fresh install works'
+    Assert ($r.Ok -and $r.Title -eq 'Installed' -and $r.Version -eq '2.2.1' -and $r.Changed) 'fresh install works'
     $same = $true; foreach ($f in @('FamilyFixIt.ps1', 'Start-FixIt.cmd', 'README.md')) { if ((Get-FileSha256 (Join-Path $dir $f)) -ne (Get-FileSha256 (Join-Path $distI $f))) { $same = $false } }
     Assert $same 'the three files are installed and match the published fingerprints'
     Assert (-not (Test-Path (Join-Path $dir '.staging')) -and -not (Test-Path (Join-Path $dir 'previous'))) 'no leftover staging folder; nothing to keep from a previous version'
@@ -1502,10 +1502,10 @@ Assert ($rd -match 'releases/latest/download/Install-FamilyFixIt\.zip' -and $rd 
 
     Clear-I; Serve $distI2; $script:I.Lnk.Remove($dl)
     $r = Install-FamilyFixIt -Base $base -Dir $dir
-    Assert ($r.Ok -and $r.Version -eq '2.2.1' -and (Get-InstalledVersion $dir) -eq '2.2.1') 'a newer version in the list updates the install'
+    Assert ($r.Ok -and $r.Version -eq '2.2.2' -and (Get-InstalledVersion $dir) -eq '2.2.2') 'a newer version in the list updates the install'
     Assert (($script:I.Actions -join ',') -eq 'GuardianOff,GuardianOn,CheckInOn') 'update restarts the watcher so it runs the new program'
     Assert ($script:I.LnkWrites -eq 1 -and $script:I.Lnk.ContainsKey($dl)) 'a missing shortcut is put back'
-    Assert ((Get-InstalledVersion (Join-Path $dir 'previous')) -eq '2.2.0') 'the old program is kept in previous/'
+    Assert ((Get-InstalledVersion (Join-Path $dir 'previous')) -eq '2.2.1') 'the old program is kept in previous/'
 
     # a download that does not match the fingerprint
     Reset-Inst; Serve $distI; $script:I.Tamper['/FamilyFixIt.ps1'] = $true
@@ -1515,7 +1515,7 @@ Assert ($rd -match 'releases/latest/download/Install-FamilyFixIt\.zip' -and $rd 
     Assert ((Get-Content $script:InstallLog -Raw) -match 'CHECKSUM MISMATCH') 'tampered download: logged'
     Reset-Inst; Serve $distI; $null = Install-FamilyFixIt -Base $base -Dir $dir; Clear-I; Serve $distI2; $script:I.Tamper['/FamilyFixIt.ps1'] = $true
     $r = Install-FamilyFixIt -Base $base -Dir $dir
-    Assert (-not $r.Ok -and (Get-InstalledVersion $dir) -eq '2.2.0') 'tampered update: the working old copy is left exactly as it was'
+    Assert (-not $r.Ok -and (Get-InstalledVersion $dir) -eq '2.2.1') 'tampered update: the working old copy is left exactly as it was'
 
     # network problems
     Reset-Inst; Serve $distI; $script:I.WebFail = $true
@@ -1818,6 +1818,51 @@ $bj2 = [IO.File]::ReadAllText((Join-Path $root 'guides.json')).Replace('"id": "s
 $threw = $false; try { & $pub -SourceDir $badSrc -OutDir (Join-Path $tmp 'badout2') -WarningAction SilentlyContinue | Out-Null } catch { $threw = $true }
 Assert $threw 'publish refuses a guides.json with a repeated id'
 Assert ($script:AllowedUpdateFiles -contains 'guides.json') 'the updater is allowed to write guides.json'
+
+Section 'Published files: the "not set up yet" guards survive publishing'
+$pw2 = (Get-Command pwsh).Source
+$ph = '<' + 'OWNER>'
+foreach ($f in @('FamilyFixIt.ps1', 'Install-FixIt.ps1', 'Install-FamilyFixIt.cmd', 'README.md')) {
+    Assert (-not ([IO.File]::ReadAllText((Join-Path $dist $f)).Contains($ph))) "published $f has no placeholder text left"
+    Assert ([IO.File]::ReadAllText((Join-Path $dist $f)).Contains('octo-test')) "published $f has the owner name"
+}
+$pi = [IO.File]::ReadAllText((Join-Path $dist 'Install-FixIt.ps1'))
+Assert ($pi -match "InstallerPlaceholder = \('<' \+ 'OWNER>'\)" -and $pi -match 'Base\.Contains\(\$script:InstallerPlaceholder\)' -and $pi -notmatch "-match 'octo-test'") 'published installer: the guard compares with the split placeholder, not with the owner name'
+$pf = [IO.File]::ReadAllText((Join-Path $dist 'FamilyFixIt.ps1'))
+Assert ($pf -match "OwnerPlaceholder = \('<' \+ 'OWNER>'\)" -and $pf -notmatch "match 'octo-test'" -and $pf -notmatch "(?i)contains\('octo-test'\)") 'published program: the update guards compare with the split placeholder, not with the owner name'
+Assert ($pf -match "raw\.githubusercontent\.com/octo-test/family-it-fixit/main/manifest\.json") 'published program: the default update address has the owner name'
+# run the PUBLISHED installer's guard, in its own PowerShell so nothing leaks into these tests
+$tI = Join-Path $tmp 'guard-installer.ps1'
+@"
+. '$((Join-Path $dist 'Install-FixIt.ps1').Replace("'", "''"))' -LibraryOnly
+function Test-InstallWindows { return `$true }
+function Get-InstallText { param([string]`$Url) throw 'pretend: offline' }
+`$real = Install-FamilyFixIt -Base 'https://raw.githubusercontent.com/octo-test/family-it-fixit/main' -Dir (Join-Path ([IO.Path]::GetTempPath()) 'fixit-guard-x') -Launch `$false
+`$ph = Install-FamilyFixIt -Base ('https://raw.githubusercontent.com/<' + 'OWNER>/family-it-fixit/main') -Dir (Join-Path ([IO.Path]::GetTempPath()) 'fixit-guard-y') -Launch `$false
+'REAL=' + `$real.Title
+'PLACEHOLDER=' + `$ph.Title
+"@ | Set-Content -Path $tI -Encoding ASCII
+$o = & $pw2 -NoProfile -File $tI 2>&1 | Out-String
+Assert ($o -match 'REAL=(?!Not set up yet)\S' -and $o -notmatch 'REAL=Not set up yet') 'published installer WITH the real owner gets past the guard (it goes on to try the download)'
+Assert ($o -match 'PLACEHOLDER=Not set up yet') 'published installer with the placeholder address still stops with "Not set up yet"'
+# the published program's update check
+$tF = Join-Path $tmp 'guard-program.ps1'
+@"
+. '$((Join-Path $dist 'FamilyFixIt.ps1').Replace("'", "''"))' -LibraryOnly -LogPath '$((Join-Path $tmp 'guard-program.log').Replace("'", "''"))'
+function Get-WebText { param([string]`$Url) throw 'pretend: offline' }
+'REAL=' + (Get-RemoteManifest -Url `$script:DefaultManifestUrl).State
+'PLACEHOLDER=' + (Get-RemoteManifest -Url ('https://raw.githubusercontent.com/<' + 'OWNER>/family-it-fixit/main/manifest.json')).State
+'DEFAULT=' + `$script:DefaultManifestUrl
+"@ | Set-Content -Path $tF -Encoding ASCII
+$o = & $pw2 -NoProfile -File $tF 2>&1 | Out-String
+Assert ($o -match 'REAL=Offline') 'published program WITH the real owner checks for updates (reaches the network step)'
+Assert ($o -match 'PLACEHOLDER=NotSetUp') 'published program with the placeholder keeps updates switched off'
+Assert ($o -match 'DEFAULT=https://raw\.githubusercontent\.com/octo-test/') 'published program starts with the real owner address'
+# an unpublished (placeholder) copy still blocks
+$tF2 = Join-Path $tmp 'guard-program2.ps1'
+(Get-Content $tF -Raw).Replace((Join-Path $dist 'FamilyFixIt.ps1'), (Join-Path $root 'FamilyFixIt.ps1')).Replace('REAL=', 'SRC=') | Set-Content -Path $tF2 -Encoding ASCII
+$o = & $pw2 -NoProfile -File $tF2 2>&1 | Out-String
+Assert ($o -match 'SRC=NotSetUp') 'the unpublished source copy keeps updates off until it is published with an owner'
 
 Section 'Logging'
 $log = Get-Content $logFile -Raw

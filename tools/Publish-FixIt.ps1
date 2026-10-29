@@ -2,7 +2,7 @@
 Publish-FixIt.ps1  -  for Trey only (not used by the family).
 Builds a folder that is ready to commit to the public GitHub repo:
   - copies the tool files
-  - fills in your GitHub name where the script says <OWNER> (use -Owner)
+  - fills in your GitHub name on the address lines (and in the README) that say <OWNER> (use -Owner); the checks inside the scripts never contain that literal text
   - writes manifest.json (version + SHA-256 of each file the family's copy downloads, plus the approved
     app list from apps.json for the 'Install an app' button, and the help guides from guides.json for 'Help me with...')
   - refuses to continue if it finds something that looks like a secret or personal info
@@ -47,11 +47,18 @@ foreach ($f in ($runtimeFiles + $extraFiles)) {
 $placeholder = '<OWNER>'
 if ($Owner) {
     if ($Owner -notmatch '^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$') { throw 'That does not look like a GitHub user or organization name.' }
-    foreach ($f in (@('FamilyFixIt.ps1') + $installerFiles)) {
+    # Only the address lines change (https://raw.githubusercontent.com/<OWNER>/... and https://github.com/<OWNER>/...).
+    # The checks inside the scripts build the placeholder from two pieces, so they are never rewritten and keep working.
+    $urlPattern = '(https://(?:raw\.githubusercontent\.com|github\.com)/)' + [regex]::Escape($placeholder) + '/'
+    foreach ($f in (@('FamilyFixIt.ps1', 'README.md') + $installerFiles)) {
         $dest = Join-Path $OutDir $f
         $bytes = [IO.File]::ReadAllBytes($dest)
-        $text = [Text.Encoding]::UTF8.GetString($bytes).Replace($placeholder, $Owner)
+        $text = [regex]::Replace([Text.Encoding]::UTF8.GetString($bytes), $urlPattern, ('${1}' + $Owner + '/'))
+        if ($f -eq 'README.md') { $text = $text.Replace($placeholder, $Owner) }   # the docs text: fill the name in everywhere
         [IO.File]::WriteAllBytes($dest, [Text.Encoding]::UTF8.GetBytes($text))
+    }
+    foreach ($f in @('FamilyFixIt.ps1', 'Install-FixIt.ps1', 'Install-FamilyFixIt.cmd', 'README.md')) {
+        if ([IO.File]::ReadAllText((Join-Path $OutDir $f)).Contains($placeholder)) { throw ('A <OWNER> placeholder is still in ' + $f + ' after filling in the name.') }
     }
     Write-Host ('Set the update and installer addresses to use GitHub name: ' + $Owner)
 } else {
