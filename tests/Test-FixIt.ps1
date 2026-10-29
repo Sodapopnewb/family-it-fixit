@@ -446,8 +446,88 @@ Assert (@(Get-ChildItem $out -File).Count -eq 0) 'dry-run: no report file writte
 $script:DryRun = $false
 function Get-SpoolerState { throw 'pretend failure' }
 $res = Invoke-FixItReport
-Assert ($res.Ok -and ([IO.File]::ReadAllText($res.ReportPath)) -match 'Could not read this: pretend failure') 'one broken section does not stop the report'
+Assert ($res.Ok -and ([IO.File]::ReadAllText($res.ReportPath)) -match 'Print Spooler service: not available on this PC') 'one broken item does not stop the report (a short plain note instead)'
+Assert (([IO.File]::ReadAllText($res.ReportPath)) -match 'Printers found: 1') 'the rest of the Printing section still shows when the spooler status fails'
 function Get-SpoolerState { return [pscustomobject]@{ Status = $script:Spooler.Status; StartType = $script:Spooler.StartType } }
+
+Section 'Report: a normal user (no administrator rights) - access denied everywhere'
+$savedFns = @{}; foreach ($fn in @('Get-SpoolFiles', 'Get-FixItPrintJobs', 'Get-FixItDiskHealth', 'Get-FixItBackupSummary', 'Get-FixItCrashes', 'Get-FixItUnexpectedShutdowns', 'Get-FixItOsInfo', 'Get-FixItPcCodeLine', 'Get-FixItEvents')) { $savedFns[$fn] = (Get-Command $fn).ScriptBlock }
+$adminLogFile = $script:LogFile; $script:LogFile = Join-Path $tmp 'report-denied.log'; Set-Content $script:LogFile @()
+Reset-All; $script:Admin = $false
+$script:Printers = @((NetPrinter 'Office Printer' $false $true), (NetPrinter 'Hall Printer' $false $false))
+$denied = { throw (New-Object System.UnauthorizedAccessException("Access to the path 'C:\Windows\System32\spool\PRINTERS' is denied.")) }
+function Get-SpoolFiles { throw (New-Object System.UnauthorizedAccessException("Access to the path 'C:\Windows\System32\spool\PRINTERS' is denied.")) }
+$script:JobCalls = @()
+function Get-FixItPrintJobs { param([string]$PrinterName) $script:JobCalls += $PrinterName; if ($PrinterName -eq 'Hall Printer') { throw (New-Object System.UnauthorizedAccessException('Access is denied')) }; return @([pscustomobject]@{ Id = 3; Status = 'Error'; Submitted = [datetime]'2026-10-26 09:15' }) }
+function Get-FixItEvents { param([string]$LogName, [int]$Max = 25) if ($LogName -eq 'Application') { throw (New-Object System.UnauthorizedAccessException('Attempted to perform an unauthorized operation.')) }; return @([pscustomobject]@{ TimeCreated = (Get-Date); ProviderName = 'Spooler'; Id = 7031; Message = 'The Print Spooler service terminated unexpectedly' }) }
+function Get-FixItDiskHealth { throw 'Access denied' }
+function Get-FixItBackupSummary { throw (New-Object System.UnauthorizedAccessException('denied')) }
+function Get-FixItCrashes { throw (New-Object System.UnauthorizedAccessException('denied')) }
+function Get-FixItUnexpectedShutdowns { throw (New-Object System.UnauthorizedAccessException('denied')) }
+function Get-FixItOsInfo { throw (New-Object System.UnauthorizedAccessException('Access denied')) }
+function Get-FixItPcCodeLine { throw (New-Object System.UnauthorizedAccessException('Access denied')) }
+$res = Invoke-FixItReport
+$rt = ''; if ($res.ReportPath) { $rt = [IO.File]::ReadAllText($res.ReportPath) }
+Assert ($res.Ok -and $res.Message -match 'Report sent to Trey') 'normal user: the report is still made and sent'
+Assert ($rt -match '=== Printing ===' -and $rt -match 'Printers found: 2' -and $rt -match 'Office Printer') 'normal user: the Printing section is still in the report'
+Assert ($rt -match 'Print Spooler service: Running') 'normal user: spooler status still shown'
+Assert ($rt -match 'Print queue folder: not checked \(it needs administrator rights\)') 'normal user: the spool folder is skipped with a plain note'
+Assert ($rt -match 'Waiting print jobs: 1, oldest submitted 2026-10-26 09:15 \(status: Error\)') 'normal user: stuck jobs come from the per-printer job list'
+Assert ($rt -match 'Waiting print jobs: not shown \(needs administrator rights\)') 'a printer whose job list is denied gets a plain note; the other printer still shows its jobs'
+Assert ($script:JobCalls -contains 'Office Printer' -and $script:JobCalls -contains 'Hall Printer') 'job lists are asked for each printer'
+Assert ($rt -match 'Application log: not shown' -and $rt -match 'The Print Spooler service terminated unexpectedly') 'the System log still shows when the Application log is denied'
+Assert ($rt -match 'Disk health: not shown' -and $rt -match 'Blue-screen crashes in the last 30 days: not shown' -and $rt -match 'OneDrive backup: not shown') 'each health item degrades on its own'
+Assert ($rt -match 'Free space on C:' -and $rt -match 'Days since last restart' -and $rt -match 'Connection test:') 'other health items still show'
+Assert ($rt -match '=== Outlook ===' -and $rt -match '=== Acrobat ===' -and $rt -match 'Computer name: ') 'Outlook, Acrobat and Windows sections are all still there'
+$rtBody = ($rt -split '=== What this tool did recently')[0]   # the last part is a copy of the log's own lines (for Trey)
+Assert ($rtBody -notmatch '(?i)denied|failed|unauthorized|exception|UnauthorizedAccess|Could not read') 'nothing scary in the report text: no "denied", "failed" or "exception"'
+Assert ($res.Message -notmatch '(?i)denied|failed|unauthorized|exception|warn') 'nothing scary in the message the person sees'
+$lg = Get-Content $script:LogFile -Raw
+Assert ($lg -match 'needs administrator rights, so it was left out' -and $lg -match 'PRINTERS' -or $lg -match 'Access is denied') 'the technical reason is kept in the log'
+Assert ($lg -notmatch '\[WARN\] Report (section|item)') 'access denied is not logged as a WARN (it is expected for a normal user)'
+# a real (non-permission) failure is still logged as a WARN, but the section stays
+function Get-FixItPrintJobs { param([string]$PrinterName) throw 'pretend: spooler RPC unavailable' }
+$res = Invoke-FixItReport
+$rt = [IO.File]::ReadAllText($res.ReportPath)
+Assert ($rt -match 'Waiting print jobs: not available on this PC' -and $rt -match 'Printers found: 2') 'other failures also degrade one line only'
+Assert ((Get-Content $script:LogFile -Raw) -match '\[WARN\] Report item "      Waiting print jobs" could not be read: pretend: spooler RPC unavailable') 'other failures are a WARN in the log'
+# an administrator does read the spool folder
+$script:Admin = $true
+function Get-SpoolFiles { return @(1, 2, 3) }
+function Get-FixItPrintJobs { param([string]$PrinterName) return @() }
+$res = Invoke-FixItReport
+$rt = [IO.File]::ReadAllText($res.ReportPath)
+Assert ($rt -match 'Files waiting in the print queue folder: 3' -and $rt -notmatch 'not checked') 'administrator: the spool folder is read and counted'
+$script:Admin = $false; $script:SpoolReads = 0
+function Get-SpoolFiles { $script:SpoolReads++; return @() }
+$null = Invoke-FixItReport
+Assert ($script:SpoolReads -eq 0) 'normal user: the spool folder is never even touched'
+$rtKeep = $rt
+foreach ($fn in $savedFns.Keys) { Set-Item -Path "Function:\$fn" -Value $savedFns[$fn] }
+$script:LogFile = $adminLogFile
+
+Section 'Report: access-denied detection and the print job reader'
+Assert (Test-FixItAccessDenied (New-Object System.UnauthorizedAccessException('x'))) 'UnauthorizedAccessException is access denied'
+Assert (Test-FixItAccessDenied (New-Object System.Security.SecurityException('x'))) 'SecurityException is access denied'
+Assert (Test-FixItAccessDenied ([Exception]'Access to the path ''C:\x'' is denied.')) 'the English "is denied" message counts'
+Assert (Test-FixItAccessDenied (New-Object System.InvalidOperationException('outer', (New-Object System.UnauthorizedAccessException('inner'))))) 'an inner access-denied counts'
+$er = $null; try { Get-Item -LiteralPath (Join-Path $tmp 'no-such-file.txt') -ErrorAction Stop } catch { $er = $_ }
+Assert (-not (Test-FixItAccessDenied $er)) 'a plain not-found error is not access denied'
+Assert (-not (Test-FixItAccessDenied $null) -and -not (Test-FixItAccessDenied (New-Object System.IO.IOException('disk busy')))) 'null and unrelated errors are not access denied'
+# real Get-FixItPrintJobs: Get-PrintJob first, then Win32_PrintJob when it is not allowed
+function Get-PrintJob { param([string]$PrinterName, $ErrorAction) throw (New-Object System.UnauthorizedAccessException('denied')) }
+function Get-CimInstance { param([string]$ClassName, $ErrorAction) return @([pscustomobject]@{ Name = 'Office Printer, 12'; JobId = 12; JobStatus = 'Paused'; TimeSubmitted = [datetime]'2026-10-20' }, [pscustomobject]@{ Name = 'Other Printer, 4'; JobId = 4; JobStatus = ''; TimeSubmitted = [datetime]'2026-10-21' }) }
+$jb = @(Get-FixItPrintJobs -PrinterName 'Office Printer')
+Assert ($jb.Count -eq 1 -and $jb[0].Id -eq 12 -and $jb[0].Status -eq 'Paused') 'print jobs fall back to Win32_PrintJob and only list this printer'
+function Get-CimInstance { param([string]$ClassName, $ErrorAction) throw (New-Object System.UnauthorizedAccessException('denied again')) }
+$threw = $false; try { [void](Get-FixItPrintJobs -PrinterName 'Office Printer') } catch { $threw = $true }
+Assert $threw 'if both ways fail the error is passed up (the report turns it into one plain line)'
+function Get-PrintJob { param([string]$PrinterName, $ErrorAction) return @([pscustomobject]@{ ID = 9; JobStatus = 'Printing'; SubmittedTime = [datetime]'2026-10-27 08:00'; DocumentName = 'secret.docx' }) }
+$jb = @(Get-FixItPrintJobs -PrinterName 'Office Printer')
+Assert ($jb.Count -eq 1 -and $jb[0].Id -eq 9 -and ($jb[0].PSObject.Properties.Name -notcontains 'DocumentName')) 'Get-PrintJob is used first and document names are never kept'
+foreach ($fn in @('Get-PrintJob', 'Get-CimInstance')) { Remove-Item "Function:\$fn" -ErrorAction SilentlyContinue }
+$srcAll = [IO.File]::ReadAllText((Join-Path $root 'FamilyFixIt.ps1'))
+Assert ($srcAll -notmatch '(?m)^\s*\$[a-z]+\s*=\s*@\(Get-SpoolFiles\)' -or $srcAll -match 'if \(Test-FixItAdmin\) \{\s*\r?\n\s*Invoke-ReportItem ''Files waiting') 'the report reads the spool folder only behind an administrator check'
 
 Section 'Empty results (a clean PC with nothing to show)'
 Reset-All
@@ -700,6 +780,8 @@ foreach ($e in $entry) { $queue.Enqueue($e) }
 while ($queue.Count -gt 0) {
     $fnName = [string]$queue.Dequeue()
     if ($seen.ContainsKey($fnName) -or -not $fnAsts.ContainsKey($fnName)) { continue }
+    # Test mode only reads (it checks that a step could work); the Test-mode tests below prove it changes nothing
+    if ($fnName -in @('Get-FixItPreflight', 'Invoke-FixItProbe', 'Invoke-FixItTestStep')) { continue }
     $seen[$fnName] = $true
     foreach ($ca in $fnAsts[$fnName].FindAll({ param($n) $n -is [Management.Automation.Language.CommandAst] }, $true)) { $cn = $ca.GetCommandName(); if ($cn) { $queue.Enqueue($cn) } }
     # a script block that is run later (Invoke-AdminPart -Part 'OutlookAdmin') names its function by text
@@ -1000,6 +1082,45 @@ $r = Invoke-StatusCheck
 Assert ($r.Title -match 'No problem found' -and $r.Message -match 'could not read') 'status page unreadable: honest message'
 Assert ((CallsLike 'reg*') -eq 0 -and $script:Posts.Count -eq 0 -and $script:StatusFeedUrl -match '^https://') 'no credentials, nothing changed or sent, https only'
 
+Section 'Health badge: restart and backup signals'
+$hbT = $null; $hbE = $null
+$astHb = [Management.Automation.Language.Parser]::ParseFile((Join-Path $root 'FamilyFixIt.ps1'), [ref]$hbT, [ref]$hbE)
+$realPending = ($astHb.Find({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Test-PendingReboot' }, $true)).Body.GetScriptBlock()
+Reset-All
+Add-RegPretend 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager' @{ PendingFileRenameOperations = 'x' }
+Assert (-not (& $realPending)) 'PendingFileRenameOperations alone is NOT a pending restart'
+Reset-All; Add-RegPretend 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired'
+Assert ((& $realPending)) 'Windows Update RebootRequired is a pending restart'
+Reset-All; Add-RegPretend 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending'
+Assert ((& $realPending)) 'CBS RebootPending is a pending restart'
+Reset-All; $script:Uptime = 3; $script:Pending = $false
+Assert ((Get-FixItHealthPill).Ok) 'badge: 3 days up, nothing pending: healthy'
+$script:Uptime = 7.0
+Assert ((Get-FixItHealthPill).Ok) 'badge: exactly 7 days is still fine'
+$script:Uptime = 8
+$pill = Get-FixItHealthPill
+Assert (-not $pill.Ok -and $pill.Text -match 'restart waiting') 'badge: up more than 7 days: restart waiting'
+$script:Uptime = 1; $script:Pending = $true
+$pill = Get-FixItHealthPill
+Assert (-not $pill.Ok -and $pill.Text -match 'restart waiting') 'badge: Windows says a restart is pending: restart waiting'
+Reset-All
+$pill = Get-FixItHealthPill
+Assert ($pill.Ok) 'badge: a clean PC is healthy'
+# no OneDrive at all, or a folder outside OneDrive: not a badge problem (still in Trey's report and the weekly lines)
+$realBkFn = (Get-Command Get-FixItBackupSummary).ScriptBlock
+$bk0 = [pscustomobject]@{ Ok = $false; Installed = $false; Warnings = @('OneDrive is not installed, so your Desktop, Documents and Pictures are not backed up online.'); Important = @() }
+function Get-FixItBackupSummary { return $bk0 }
+$pill = Get-FixItHealthPill
+Assert ($pill.Ok -and $pill.Text -match 'no backup') 'badge: no OneDrive installed is quiet (not "Needs a look")'
+$bk0 = [pscustomobject]@{ Ok = $false; Installed = $true; Warnings = @('Not backed up to OneDrive: Pictures.'); Important = @() }
+$pill = Get-FixItHealthPill
+Assert ($pill.Ok) 'badge: one folder outside OneDrive is quiet'
+$bk0 = [pscustomobject]@{ Ok = $false; Installed = $true; Warnings = @('OneDrive syncing is paused for a@b.c.'); Important = @('OneDrive syncing is paused for a@b.c.') }
+$pill = Get-FixItHealthPill
+Assert (-not $pill.Ok -and $pill.Text -match 'backup needs a look') 'badge: paused OneDrive sync does need a look'
+Set-Item -Path Function:\Get-FixItBackupSummary -Value $realBkFn
+$astHb = $null
+
 Section 'Health check and weekly check-in'
 Reset-All
 $r = Invoke-HealthCheck
@@ -1009,10 +1130,16 @@ Assert ($h.kind -eq 'health' -and $h.version -eq $script:FixItVersion) 'tagged h
 foreach ($want in @('Free disk', 'updates waiting to install', 'waiting for a restart', 'Defender', 'OneDrive', 'Days since last restart', 'Family Fix-It version', 'ATTENTION: nothing')) { Assert ($h.report -match $want) "health text has: $want" }
 Assert ($h.report -notmatch '(?i)\.docx|Documents\\|password') 'health text has no file names or secrets'
 Assert (@(Get-ChildItem $o3 -File | Where-Object { $_.Name -like 'Health*' }).Count -eq 0) 'health check saves no file on the Desktop'
-Reset-All; $script:Free = [int64]5GB; $script:Uptime = 20; $script:Pending = $true; $script:PendUp = 12; $script:Def = [pscustomobject]@{ Enabled = $false; RealTime = $false; SignatureAgeDays = 12; LastQuickScan = (Get-Date).AddDays(-60) }; $script:ODLast = (Get-Date).AddDays(-9)
+Reset-All; $script:Free = [int64]5GB; $script:Uptime = 20; $script:Pending = $true; $script:PendUp = 25; $script:Def = [pscustomobject]@{ Enabled = $false; RealTime = $false; SignatureAgeDays = 20; LastQuickScan = (Get-Date).AddDays(-60) }; $script:ODLast = (Get-Date).AddDays(-20)
 $null = Invoke-HealthCheck
 $h = $script:Posts[0].Json | ConvertFrom-Json
-foreach ($want in @('ATTENTION:', 'Low disk', 'not been restarted', 'updates are waiting', 'protection is turned off', 'definitions are 12 days', 'No virus scan', 'OneDrive has not synced')) { Assert ($h.report -match $want) "attention list mentions: $want" }
+foreach ($want in @('ATTENTION:', 'Low disk', 'not been restarted', 'updates are waiting', 'protection is turned off', 'definitions are 20 days', 'OneDrive has not synced')) { Assert ($h.report -match $want) "attention list mentions: $want" }
+Assert ($h.report -notmatch 'No virus scan in over') 'an old last-scan date alone is not raised (Defender scans on its own; the date stays in the lines)'
+# moderate values are quiet in the "ATTENTION" list but still shown in the lines
+Reset-All; $script:Free = [int64]50GB; $script:Uptime = 10; $script:Pending = $false; $script:PendUp = 15; $script:Def = [pscustomobject]@{ Enabled = $true; RealTime = $true; SignatureAgeDays = 10; LastQuickScan = (Get-Date).AddDays(-60) }; $script:ODLast = (Get-Date).AddDays(-9)
+$null = Invoke-HealthCheck
+$h = $script:Posts[0].Json | ConvertFrom-Json
+Assert ($h.report -match 'ATTENTION: nothing' -and $h.report -match 'definitions 10 day' -and $h.report -match 'waiting to install: 15' -and $h.report -match 'Last Defender scan: ') 'moderate values (10-day-old definitions, 15 updates, 9 days since OneDrive sync, scan 60 days ago) are quiet in ATTENTION but still listed'
 Reset-All; $script:PostFail = $true
 $r = Invoke-HealthCheck
 Assert (-not $r.Ok) 'offline: reported quietly as not sent'
@@ -1400,7 +1527,7 @@ $gb = FnText 'Invoke-GuiButton'
 $iPlan = $gb.IndexOf('Confirm-FixItPlan -Which $Which'); $iBusy = $gb.IndexOf('Working on it'); $iRun = $gb.IndexOf('Invoke-FixItAction -Which $Which -SkipPlan')
 Assert ($iPlan -gt 0 -and $iPlan -lt $iBusy -and $iBusy -lt $iRun) 'a button asks first, then shows "working", then runs the fix'
 $callers = @($fnAsts | Where-Object { $_.Extent.Text -match 'Invoke-FixItAction ' -and $_.Name -notin @('Invoke-FixItAction') } | ForEach-Object { $_.Name })
-Assert (($callers | Sort-Object) -join ',' -eq 'Invoke-FixItAndShow,Invoke-GuiButton') 'only two places run a main action: the button handler (after the window) and the command line (which asks too)'
+Assert (($callers | Sort-Object) -join ',' -eq 'Invoke-FixItAndShow,Invoke-FixItTestAll,Invoke-GuiButton') 'only three places run a main action: the button handler (after the window), the command line (which asks too) and the Test mode check-everything run (which changes nothing)'
 Assert ((FnText 'Invoke-FixItAndShow') -notmatch '-SkipPlan') 'the command line never skips the window'
 foreach ($k in @($fullL.TileIds)) { Assert ($src -match "'$k'\s+\{ \[void\]\(Invoke-FixItAndShow -Which '$k'\)") "command line action $k exists" }
 
@@ -1428,14 +1555,14 @@ $outPin = & (Get-Command pwsh).Source -NoProfile -File (Join-Path $root 'FamilyF
 Assert ($LASTEXITCODE -eq 0 -and $outPin -match 'Pin to taskbar') 'command line: -Action Pin prints the steps'
 
 Section 'Version'
-Assert ($script:FixItVersion -eq '2.3.3') 'the program is version 2.3.3'
+Assert ($script:FixItVersion -eq '2.3.4') 'the program is version 2.3.4'
 
 Section 'Publish + update'
 $pub = Join-Path $root 'tools/Publish-FixIt.ps1'
 $dist = Join-Path $tmp 'dist1'
 & $pub -Owner 'octo-test' -OutDir $dist -WarningAction SilentlyContinue | Out-Null
 $man = Get-Content (Join-Path $dist 'manifest.json') -Raw | ConvertFrom-Json
-Assert ($man.version -eq '2.3.3' -and @($man.files).Count -eq 4) 'manifest has version and 4 runtime files'
+Assert ($man.version -eq '2.3.4' -and @($man.files).Count -eq 4) 'manifest has version and 4 runtime files'
 Assert (@($man.apps).Count -eq 4 -and $man.apps[0].id -eq 'Google.Chrome') 'manifest carries the approved app list'
 Assert (@($man.assets).Count -eq 1 -and $man.assets[0].path -eq 'FamilyFixIt.ico' -and $man.assets[0].sha256 -match '^[0-9a-f]{64}$' -and [int]$man.assets[0].size -gt 1000) 'manifest lists the program icon under assets, with its SHA-256 and size'
 Assert (@($man.files | Where-Object { $_.path -like '*.ico' }).Count -eq 0) 'the icon is NOT in "files" (versions up to 2.3.1 refuse unknown names there, which would break their update)'
@@ -1464,7 +1591,7 @@ Assert (-not (Select-String -Path (Join-Path $dist '*') -Pattern '(?i)treyb|@gma
 # a newer version 1.0.1 to update to
 $newSrc = Join-Path $tmp 'newsrc'; Copy-Item -LiteralPath $root -Destination $newSrc -Recurse
 $ps = Join-Path $newSrc 'FamilyFixIt.ps1'
-[IO.File]::WriteAllText($ps, ([IO.File]::ReadAllText($ps).Replace("FixItVersion = '2.3.3'", "FixItVersion = '2.3.4'")))
+[IO.File]::WriteAllText($ps, ([IO.File]::ReadAllText($ps).Replace("FixItVersion = '2.3.4'", "FixItVersion = '2.3.5'")))
 $dist2 = Join-Path $tmp 'dist2'
 & (Join-Path $newSrc 'tools/Publish-FixIt.ps1') -SourceDir $newSrc -Owner 'octo-test' -OutDir $dist2 | Out-Null
 $base = 'https://raw.githubusercontent.com/octo-test/family-it-fixit/main/'
@@ -1475,7 +1602,7 @@ $script:ManifestUrl = $base + 'manifest.json'
 Reset-All; Set-Web $dist2; $script:InstallDir = New-Install
 $res = Invoke-FixItUpdate
 Assert ($res.Ok -and $res.Title -eq 'Updated') 'newer version installs after asking'
-Assert ([IO.File]::ReadAllText((Join-Path $script:InstallDir 'FamilyFixIt.ps1')) -match "FixItVersion = '2.3.4'") 'installed script is the new one'
+Assert ([IO.File]::ReadAllText((Join-Path $script:InstallDir 'FamilyFixIt.ps1')) -match "FixItVersion = '2.3.5'") 'installed script is the new one'
 Assert (Test-Path (Join-Path $script:InstallDir 'previous/FamilyFixIt.ps1')) 'old version kept in previous/'
 Assert (@($script:Asked).Count -eq 1) 'asked before updating'
 
@@ -1540,6 +1667,14 @@ Assert (-not (Test-FixItWindowFullscreen $null)) 'nothing in front: not full scr
 
 Section 'Guardian: when to ask'
 $t0 = Get-Date
+Assert ($script:GuardianLooksNeeded -eq 4 -and $script:GuardianQuietMinutes -eq 120) 'the Guardian waits for 4 looks in a row and stays quiet 2 hours after "I am fine"'
+$st = New-FixItGuardianState
+$res = @(); foreach ($i in 0..3) { $res += (Get-FixItGuardianDecision -Fg (MkFg) -State $st -Now $t0.AddSeconds(1.5 * $i)) }
+Assert (($res -join ',') -eq 'None,None,None,Show') 'a page that is full screen for only 3 looks (a few seconds) does not raise the question; the 4th does'
+$st = New-FixItGuardianState
+Set-FixItGuardianFine -Fg (MkFg -H 5) -State $st -Now $t0
+Assert ($st.ProcQuiet['msedge'] -ge $t0.AddMinutes(119)) '"I am fine" keeps the same browser quiet for about 2 hours'
+$script:GuardianLooksNeeded = 2; $script:GuardianQuietMinutes = 30   # the older checks below use the short settings
 $st = New-FixItGuardianState
 Assert ((Get-FixItGuardianDecision -Fg (MkFg) -State $st -Now $t0) -eq 'None') 'first look: wait (needs two in a row)'
 Assert ((Get-FixItGuardianDecision -Fg (MkFg) -State $st -Now $t0.AddSeconds(1.5)) -eq 'Show') 'second look in a row: ask'
@@ -1574,6 +1709,7 @@ $st = New-FixItGuardianState
 foreach ($i in 0..250) { Set-FixItGuardianFine -Fg (MkFg -H (5000 + $i)) -State $st -Now $t0 }
 Assert ($st.Dismissed.Count -le 201) 'the list of dismissed windows cannot grow forever'
 
+$script:GuardianLooksNeeded = 4; $script:GuardianQuietMinutes = 120
 Section 'Guardian: facts for the report'
 $fl = @(Get-FixItBrowserFlags -CommandLine '"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" --kiosk "https://evil.example/virus-alert" --no-first-run --user-data-dir="C:\Users\x\AppData\Local\Temp\p" --app=https://evil.example/a')
 Assert ($fl -contains 'https://evil.example/virus-alert' -and $fl -contains '--kiosk' -and ($fl | Where-Object { $_ -like '--app=https://evil.example/a' }) -and -not ($fl -match 'Users')) 'kiosk / app flags and web addresses are picked out of a command line, paths are not'
@@ -1700,6 +1836,7 @@ Invoke-GuardianFineClick
 Assert ($script:GState.Dismissed.ContainsKey('1001') -and (CallsLike 'toast close') -ge 1) "I'm fine: remembers the window and closes the toast"
 
 Section 'Guardian: the watcher loop'
+$script:GuardianLooksNeeded = 2   # the loop checks below use the short setting
 Reset-Guardian
 $script:FgNow = $null; $script:FgThrow = $false
 function Get-FixItForeground { if ($script:FgThrow) { throw 'pretend: user32 failed' }; return $script:FgNow }
@@ -1741,6 +1878,7 @@ $r = Invoke-GuardianRun
 Assert ($script:LoopRan -eq 1 -and $script:HkMade -eq 1 -and $script:MutexReleased -eq 1 -and $global:HkDisposed -and $null -ne $script:GState) 'run: hotkey registered, loop started, everything cleaned up afterwards'
 Assert ((Get-Content $script:LogFile -Raw) -match 'Guardian started' -and (Get-Content $script:LogFile -Raw) -match 'Guardian stopped') 'start and stop are logged'
 
+$script:GuardianLooksNeeded = 4
 Section 'Guardian: turn on / off'
 $runKey = $script:GuardianRunKey; $runName = $script:GuardianRunName
 $script:GRunning = $false
@@ -1953,7 +2091,7 @@ $relDir = Join-Path $tmp 'release1'
 $distI = Join-Path $tmp 'dist-i1'
 $newSrcI = Join-Path $tmp 'newsrc-i'; Copy-Item -LiteralPath $root -Destination $newSrcI -Recurse
 $psI = Join-Path $newSrcI 'FamilyFixIt.ps1'
-[IO.File]::WriteAllText($psI, ([IO.File]::ReadAllText($psI).Replace("FixItVersion = '2.3.3'", "FixItVersion = '2.3.4'")))
+[IO.File]::WriteAllText($psI, ([IO.File]::ReadAllText($psI).Replace("FixItVersion = '2.3.4'", "FixItVersion = '2.3.5'")))
 $distI2 = Join-Path $tmp 'dist-i2'
 & (Join-Path $newSrcI 'tools/Publish-FixIt.ps1') -SourceDir $newSrcI -Owner 'octo-test' -OutDir $distI2 -ReleaseDir (Join-Path $tmp 'release2') -WarningAction SilentlyContinue | Out-Null
 
@@ -2008,7 +2146,7 @@ Assert ($rd -match 'releases/latest/download/Install-FamilyFixIt\.zip' -and $rd 
 
     Reset-Inst; Serve $distI
     $r = Install-FamilyFixIt -Base $base -Dir $dir
-    Assert ($r.Ok -and $r.Title -eq 'Installed' -and $r.Version -eq '2.3.3' -and $r.Changed) 'fresh install works'
+    Assert ($r.Ok -and $r.Title -eq 'Installed' -and $r.Version -eq '2.3.4' -and $r.Changed) 'fresh install works'
     $same = $true; foreach ($f in @('FamilyFixIt.ps1', 'Start-FixIt.cmd', 'README.md')) { if ((Get-FileSha256 (Join-Path $dir $f)) -ne (Get-FileSha256 (Join-Path $distI $f))) { $same = $false } }
     Assert $same 'the three files are installed and match the published fingerprints'
     Assert (-not (Test-Path (Join-Path $dir '.staging')) -and -not (Test-Path (Join-Path $dir 'previous'))) 'no leftover staging folder; nothing to keep from a previous version'
@@ -2022,6 +2160,13 @@ Assert ($rd -match 'releases/latest/download/Install-FamilyFixIt\.zip' -and $rd 
     $icoPath = Join-Path $dir 'FamilyFixIt.ico'
     Assert ((Test-Path $icoPath) -and (Get-FileSha256 $icoPath) -eq (Get-FileSha256 (Join-Path $distI 'FamilyFixIt.ico'))) 'the program icon is installed and matches its published SHA-256'
     Assert ($script:I.Lnk[$dl].Icon -eq ($icoPath + ',0') -and $script:I.Lnk[$sm].Icon -eq ($icoPath + ',0')) 'Desktop and Start menu shortcuts use the program icon (not the old built-in one)'
+
+    $tl = Join-Path $prog 'Family Fix-It (Test mode).lnk'
+    Assert ($script:I.Lnk.ContainsKey($tl)) 'a separate "Family Fix-It (Test mode)" shortcut is made in the Start menu'
+    Assert ($script:I.Lnk[$tl].Arguments -match '-File "[^"]*FamilyFixIt\.ps1" -Test$' -and $script:I.Lnk[$tl].Target -eq $script:I.Lnk[$sm].Target) 'the Test mode shortcut runs the same program with -Test'
+    Assert ($script:I.Lnk[$tl].Icon -eq ($icoPath + ',0')) 'the Test mode shortcut has the program icon'
+    Assert (-not $script:I.Lnk.ContainsKey((Join-Path $desk 'Family Fix-It (Test mode).lnk'))) 'the Test mode shortcut is not put on the Desktop'
+    Assert ($script:I.Lnk[$sm].Arguments -notmatch ' -Test$' -and $script:I.Lnk[$dl].Arguments -notmatch ' -Test$') 'the normal shortcuts do not start Test mode'
 
     Clear-I; $before = (Get-FileSha256 (Join-Path $dir 'FamilyFixIt.ps1'))
     $r = Install-FamilyFixIt -Base $base -Dir $dir
@@ -2055,10 +2200,10 @@ Assert ($rd -match 'releases/latest/download/Install-FamilyFixIt\.zip' -and $rd 
 
     Clear-I; Serve $distI2; $script:I.Lnk.Remove($dl)
     $r = Install-FamilyFixIt -Base $base -Dir $dir
-    Assert ($r.Ok -and $r.Version -eq '2.3.4' -and (Get-InstalledVersion $dir) -eq '2.3.4') 'a newer version in the list updates the install'
+    Assert ($r.Ok -and $r.Version -eq '2.3.5' -and (Get-InstalledVersion $dir) -eq '2.3.5') 'a newer version in the list updates the install'
     Assert (($script:I.Actions -join ',') -eq 'GuardianOff,GuardianOn,CheckInOn') 'update restarts the watcher so it runs the new program'
     Assert ($script:I.LnkWrites -eq 1 -and $script:I.Lnk.ContainsKey($dl)) 'a missing shortcut is put back'
-    Assert ((Get-InstalledVersion (Join-Path $dir 'previous')) -eq '2.3.3') 'the old program is kept in previous/'
+    Assert ((Get-InstalledVersion (Join-Path $dir 'previous')) -eq '2.3.4') 'the old program is kept in previous/'
 
     # a download that does not match the fingerprint
     Reset-Inst; Serve $distI; $script:I.Tamper['/FamilyFixIt.ps1'] = $true
@@ -2068,7 +2213,7 @@ Assert ($rd -match 'releases/latest/download/Install-FamilyFixIt\.zip' -and $rd 
     Assert ((Get-Content $script:InstallLog -Raw) -match 'CHECKSUM MISMATCH') 'tampered download: logged'
     Reset-Inst; Serve $distI; $null = Install-FamilyFixIt -Base $base -Dir $dir; Clear-I; Serve $distI2; $script:I.Tamper['/FamilyFixIt.ps1'] = $true
     $r = Install-FamilyFixIt -Base $base -Dir $dir
-    Assert (-not $r.Ok -and (Get-InstalledVersion $dir) -eq '2.3.3') 'tampered update: the working old copy is left exactly as it was'
+    Assert (-not $r.Ok -and (Get-InstalledVersion $dir) -eq '2.3.4') 'tampered update: the working old copy is left exactly as it was'
 
     # network problems
     Reset-Inst; Serve $distI; $script:I.WebFail = $true
@@ -2526,7 +2671,7 @@ Assert ($rm.State -eq 'Ok' -and @($rm.Assets).Count -eq 0) 'a list with no asset
 Reset-All; Set-Web $distI3; $script:ManifestUrl = $base + 'manifest.json'
 $script:InstallDir = New-Install; Reset-Lnks
 Copy-Item (Join-Path $distI3 'FamilyFixIt.ps1') $script:InstallDir -Force
-$script:FixItVersion = '2.3.4'   # pretend we are the newest program, so only the icon is missing
+$script:FixItVersion = '2.3.5'   # pretend we are the newest program, so only the icon is missing
 $fixed = Repair-FixItIcon
 $ico2 = Join-Path $script:InstallDir 'FamilyFixIt.ico'
 Assert ($fixed -and (Test-Path $ico2) -and (Get-FileSha256 $ico2) -eq (Get-FileSha256 $icoSrc) -and $script:Lnks[$lnkDesk].Icon -eq ($ico2 + ',0')) 'missing icon: fetched from the update list, verified, shortcuts pointed at it'
@@ -2542,7 +2687,7 @@ Assert ((Repair-FixItIcon) -eq $false -and -not (Test-Path $ico2)) 'practice run
 $script:DryRun = $false
 $script:ManifestUrl = 'https://raw.githubusercontent.com/<' + 'OWNER>/family-it-fixit/main/manifest.json'
 Assert ((Repair-FixItIcon) -eq $false) 'update address not set up: does nothing'
-$script:FixItVersion = '2.3.3'
+$script:FixItVersion = '2.3.4'
 
 # window / taskbar icon
 Assert (@([regex]::Matches($src, 'New-Object System\.Windows\.Forms\.Form')).Count -eq @([regex]::Matches($src, '(?m)^\s*(\$\w+) = New-Object System\.Windows\.Forms\.Form\r?\n\s*Set-FixItFormIcon \1')).Count) 'every window (main, confirm, pickers, guides ...) gets the program icon right after it is created'
@@ -2747,6 +2892,15 @@ Section 'Logging'
 $log = Get-Content $logFile -Raw
 Assert ($log -match '(?m)^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d \[INFO\] Doing: Stop the Print Spooler service') 'actions logged with timestamps'
 Assert ($log -match '\[ERROR\] FAILED:') 'failures logged'
+
+# ---- version 2.3.4 tests (Test mode, My files, window never freezes): they need the REAL functions, so they run in their own PowerShell
+Section 'Version 2.3.4 tests (own process)'
+$pwshExe = (Get-Process -Id $PID).Path
+$v234 = & $pwshExe -NoProfile -File (Join-Path $PSScriptRoot 'Test-FixIt-V234.ps1') 2>&1 | ForEach-Object { [string]$_ }
+foreach ($ln in $v234) { if ($ln -match 'FAIL:|^==') { Write-Host $ln } }
+$sumLine = @($v234 | Where-Object { $_ -match '^Passed: \d+\s+Failed: \d+' }) | Select-Object -Last 1
+if ($sumLine -match 'Passed: (\d+)\s+Failed: (\d+)') { $script:Pass += [int]$Matches[1]; $script:Fail += [int]$Matches[2] }
+else { $script:Fail++; Write-Host '  FAIL: the 2.3.4 test file did not finish'; $v234 | Select-Object -Last 15 | ForEach-Object { Write-Host ('    ' + $_) } }
 
 Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host ''

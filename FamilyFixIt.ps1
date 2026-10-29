@@ -8,11 +8,12 @@ Run with no options to open the friendly window.
 Command-line use (for Trey):
   FamilyFixIt.ps1 -Action Printer|Acrobat|AcrobatRepair|Outlook|Network|Slow|Sound|Browser|WinUpdate|OneDrive|Scam|Screen|Report|Pin|Update [-WhatIf]
   -WhatIf (alias -DryRun) shows what would happen and changes nothing (nothing is sent either).
+  -Test (Test mode) runs the normal window and questions but only CHECKS each change step (PASS/WARN/FAIL); -Action TestAll checks every button.
   -ReportUrl overrides the address that reports are sent to.
   Guardian (runs at sign-in, hidden) watches for a full-screen browser page and offers a way out; GuardianOn/GuardianOff/GuardianDemo.
 #>
 param(
-    [ValidateSet('Gui', 'Printer', 'Acrobat', 'AcrobatRepair', 'Outlook', 'Network', 'Slow', 'Sound', 'Browser', 'WinUpdate', 'OneDrive', 'Scam', 'Screen', 'Report', 'Pin', 'Update', 'Restart', 'Status', 'Undo', 'CheckIn', 'CheckInOn', 'CheckInOff', 'HealthCheck', 'History', 'Files', 'Install', 'Guardian', 'GuardianOn', 'GuardianOff', 'GuardianDemo', 'PCInfo', 'Guides', 'Simple',
+    [ValidateSet('Gui', 'TestAll', 'Printer', 'Acrobat', 'AcrobatRepair', 'Outlook', 'Network', 'Slow', 'Sound', 'Browser', 'WinUpdate', 'OneDrive', 'Scam', 'Screen', 'Report', 'Pin', 'Update', 'Restart', 'Status', 'Undo', 'CheckIn', 'CheckInOn', 'CheckInOff', 'HealthCheck', 'History', 'Files', 'Install', 'Guardian', 'GuardianOn', 'GuardianOff', 'GuardianDemo', 'PCInfo', 'Guides', 'Simple',
         'PrinterAdmin', 'AcrobatAdmin', 'AcrobatRepairAdmin', 'NetworkAdmin', 'SlowAdmin', 'SoundAdmin', 'OutlookAdmin', 'DefenderScanAdmin', 'WinUpdateAdmin', 'WinUpdateDeepAdmin', 'UndoAdmin')]
     [string]$Action = 'Gui',
     [Alias('DryRun')][switch]$WhatIf,
@@ -26,6 +27,7 @@ param(
     [string]$OutputDir,
     [switch]$NoUpdateCheck,
     [switch]$Yes,
+    [switch]$Test,
     [switch]$LibraryOnly
 )
 
@@ -35,7 +37,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 # Settings
 # ---------------------------------------------------------------------------
-$script:FixItVersion = '2.3.3'
+$script:FixItVersion = '2.3.4'
 $script:DefaultManifestUrl = 'https://raw.githubusercontent.com/Sodapopnewb/family-it-fixit/main/manifest.json'
 $script:OwnerPlaceholder = ('<' + 'OWNER>')   # the guards compare with this; Publish never rewrites it
 # Where reports are sent (a small Cloudflare Worker that Trey runs). The app header is NOT a secret.
@@ -50,9 +52,13 @@ $script:AllowedUpdateFiles = @('FamilyFixIt.ps1', 'Start-FixIt.cmd', 'README.md'
 $script:AllowedAssetFiles = @('FamilyFixIt.ico')
 $script:IconFileName = 'FamilyFixIt.ico'
 $script:ShortcutFileName = 'Family Fix-It.lnk'
+$script:TestShortcutFileName = 'Family Fix-It (Test mode).lnk'   # Start menu only; opens the window in Test mode (-Test)
 $script:SelfPath = $PSCommandPath
 $script:InstallDir = $PSScriptRoot
 $script:DryRun = [bool]$WhatIf
+# Test mode (-Test, or -Action TestAll): every change step is only CHECKED, never run. It builds on practice mode (-WhatIf).
+$script:TestMode = ([bool]$Test -or $Action -eq 'TestAll')
+if ($script:TestMode) { $script:DryRun = $true }
 $winDir = $env:SystemRoot
 if (-not $winDir) { $winDir = 'C:\Windows' }
 $script:SpoolFolder = $winDir.TrimEnd('\') + '\System32\spool\PRINTERS'
@@ -108,6 +114,7 @@ function New-FixItResult {
 # Returns $true when it worked (or would have), $false when it failed.
 function Invoke-FixItStep {
     param([string]$Description, [scriptblock]$Do)
+    if ($script:TestMode) { return (Invoke-FixItTestStep -Description $Description -Do $Do) }
     if ($script:DryRun) {
         Write-FixItLog ('Would do: {0}' -f $Description) 'DRYRUN'
         return $true
@@ -121,6 +128,622 @@ function Invoke-FixItStep {
         Write-FixItLog ('FAILED: {0} -- {1}' -f $Description, $_.Exception.Message) 'ERROR'
         return $false
     }
+}
+
+# ---------------------------------------------------------------------------
+# Test mode (-Test): the normal window and questions, but every change step becomes a read-only check
+# that says whether the step COULD work here. Nothing is changed, closed, restarted or sent.
+#   - Every adapter that changes something starts with:  if ($script:TestMode) { Invoke-FixItProbe ... }
+#   - Invoke-FixItProbe only answers inside Invoke-FixItStep (a checked step). Anywhere else it THROWS,
+#     so a change that is not behind a checked step cannot run in Test mode.
+#   - Invoke-FixItStep in Test mode runs the step's code with the adapters in "check" mode and records
+#     PASS / WARN / FAIL for the step. The checklist is shown at the end of each button.
+# ---------------------------------------------------------------------------
+$script:TestAll = $false
+$script:InProbe = $false
+$script:ProbeResults = $null
+$script:TestRecords = New-Object System.Collections.ArrayList
+$script:TestLastReportPreview = ''
+
+function New-FixItProbeResult {
+    param([string]$Status, [string]$Text)
+    return [pscustomobject]@{ Status = $Status; Text = $Text }
+}
+
+function Get-FixItWorstStatus {
+    param($Statuses)
+    $s = @($Statuses)
+    if ($s -contains 'FAIL') { return 'FAIL' }
+    if ($s -contains 'WARN') { return 'WARN' }
+    return 'PASS'
+}
+
+# Called by every changing adapter in Test mode. Records a check; refuses when not inside a checked step.
+function Invoke-FixItProbe {
+    param([string]$Adapter, $Arguments = $null)
+    if (-not $script:InProbe) {
+        Write-FixItLog ('TEST MODE BLOCKED: {0} tried to change something outside a checked step' -f $Adapter) 'ERROR'
+        throw ('Test mode: {0} tried to change something outside a checked step. Nothing was changed.' -f $Adapter)
+    }
+    $found = @()
+    try { $found = @(Get-FixItPreflight -Adapter $Adapter -Arguments $Arguments) }
+    catch { $found = @((New-FixItProbeResult 'FAIL' ('could not be checked: {0}' -f $_.Exception.Message))) }
+    foreach ($f in $found) { if ($null -ne $f) { [void]$script:ProbeResults.Add($f) } }
+}
+
+# The Test-mode version of Invoke-FixItStep. Always returns $true so the rest of the button is checked too.
+function Invoke-FixItTestStep {
+    param([string]$Description, [scriptblock]$Do)
+    Write-FixItLog ('Test mode - checking: {0}' -f $Description) 'TEST'
+    $prevIn = $script:InProbe
+    $prevRes = $script:ProbeResults
+    $script:InProbe = $true
+    $script:ProbeResults = New-Object System.Collections.ArrayList
+    try { & $Do | Out-Null }
+    catch {
+        $m = $_.Exception.Message
+        if ($_.Exception.InnerException) { $m = $_.Exception.InnerException.Message }
+        [void]$script:ProbeResults.Add((New-FixItProbeResult 'FAIL' ('the check stopped: {0}' -f $m)))
+    }
+    finally {
+        $mine = @($script:ProbeResults)
+        $script:InProbe = $prevIn
+        $script:ProbeResults = $prevRes
+    }
+    $uniq = New-Object System.Collections.ArrayList; $seenText = @{}
+    foreach ($m1 in $mine) { $kk = ('{0}|{1}' -f $m1.Status, $m1.Text); if (-not $seenText.ContainsKey($kk)) { $seenText[$kk] = $true; [void]$uniq.Add($m1) } }
+    $mine = @($uniq)
+    if ($mine.Count -eq 0) { $mine = @((New-FixItProbeResult 'PASS' 'nothing needs to be checked for this step')) }
+    $st = Get-FixItWorstStatus -Statuses @($mine | ForEach-Object { $_.Status })
+    [void]$script:TestRecords.Add([pscustomobject]@{ Step = $Description; Status = $st; Checks = $mine })
+    foreach ($c in $mine) { Write-FixItLog ('Test mode - {0}: {1} - {2}' -f $c.Status, $Description, ($c.Text -replace '\s+', ' ')) 'TEST' }
+    return $true
+}
+
+# What the normal window would have said, for the checklist ("Practice run" is only Test mode's own wording, so it is left out).
+function Get-FixItTestSaid {
+    param($Result)
+    if ($null -eq $Result) { return '' }
+    if ([string]$Result.Title -eq 'Practice run') { return '' }
+    return ('{0} - {1}' -f $Result.Title, $Result.Message)
+}
+
+# One check that is not a step (for example "can the report address be reached?").
+function Add-FixItTestNote {
+    param([string]$Step, [string]$Status, [string]$Text)
+    [void]$script:TestRecords.Add([pscustomobject]@{ Step = $Step; Status = $Status; Checks = @((New-FixItProbeResult $Status $Text)) })
+}
+
+# ----- read-only facts the checks use (replaceable in the tests) -----
+function Test-FixItCanElevate {
+    try {
+        $id = [Security.Principal.WindowsIdentity]::GetCurrent()
+        foreach ($g in @($id.Groups)) { if ([string]$g.Value -eq 'S-1-5-32-544') { return $true } }
+    } catch { }
+    return $false
+}
+function Test-FixItCommandPresent { param([string]$Name) return [bool](Get-Command -Name $Name -ErrorAction SilentlyContinue) }
+function Test-FixItUriHandler {
+    param([string]$Scheme)
+    try { return [bool](Test-Path -LiteralPath ('Registry::HKEY_CLASSES_ROOT\' + $Scheme)) } catch { return $false }
+}
+function Test-FixItProcessExists { param([int]$Id) return [bool](Get-Process -Id $Id -ErrorAction SilentlyContinue) }
+# Does the registry key exist, can it be written (asks Windows for write access but writes nothing), does it need administrator rights?
+function Get-FixItRegAccess {
+    param([string]$Path)
+    $needsAdmin = ($Path -match '(?i)^(HKLM:|Registry::HKEY_LOCAL_MACHINE|HKEY_LOCAL_MACHINE)')
+    $exists = $false; try { $exists = [bool](Test-Path -LiteralPath $Path) } catch { }
+    $near = $Path
+    while ($near -and -not (Test-Path -LiteralPath $near -ErrorAction SilentlyContinue)) {
+        $up = Split-Path -Parent $near
+        if ($up -eq $near) { $near = ''; break }
+        $near = $up
+    }
+    $canWrite = $false
+    if (-not $needsAdmin -and $near) {
+        $sub = ($near -replace '^(HKCU:|HKEY_CURRENT_USER|Registry::HKEY_CURRENT_USER)\\?', '')
+        try {
+            $k = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($sub, $true)
+            if ($null -ne $k) { $canWrite = $true; $k.Close() }
+        } catch { $canWrite = $false }
+    }
+    return [pscustomobject]@{ Exists = $exists; NearestExists = [bool]$near; CanWrite = $canWrite; NeedsAdmin = $needsAdmin }
+}
+# Can this existing file be opened for writing? (Opens it and closes it again. Writes nothing.)
+function Test-FixItFileWritable {
+    param([string]$Path)
+    try { $fs = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Write, [IO.FileShare]::ReadWrite); $fs.Close(); return $true } catch { return $false }
+}
+# Only asks whether the address answers (no data is sent to it).
+function Test-FixItReportReachable {
+    param([string]$Url)
+    try {
+        $u = New-Object System.Uri($Url)
+        return (Test-FixItHttps -Url ($u.Scheme + '://' + $u.Host + '/'))
+    } catch { return $false }
+}
+
+# Administrator rights: PASS when already on, or when this account is allowed to say yes to Windows' question (nothing is elevated here).
+function Get-FixItAdminCheck {
+    param([string]$What)
+    if (Test-FixItAdmin) { return (New-FixItProbeResult 'PASS' 'administrator rights are already on') }
+    if (Test-FixItCanElevate) { return (New-FixItProbeResult 'PASS' ('{0} needs administrator permission. Windows will ask, and this account is allowed to say yes' -f $What)) }
+    return (New-FixItProbeResult 'FAIL' ('{0} needs administrator permission, and this account is not allowed to give it' -f $What))
+}
+
+function Get-FixItNativeNeedsAdmin {
+    param([string]$File, [string[]]$Arguments)
+    $f = ([IO.Path]::GetFileName($File)).ToLowerInvariant()
+    $a = (@($Arguments) -join ' ').ToLowerInvariant()
+    if ($f -in @('dism.exe', 'sfc.exe')) { return $true }
+    if ($f -eq 'netsh.exe') { return $true }
+    if ($f -eq 'ipconfig.exe') { return $true }
+    return $false
+}
+# Programs that only READ something may run in Test mode (everything else is checked, never run).
+function Test-FixItNativeReadOnly {
+    param([string]$File, [string[]]$Arguments)
+    $f = ([IO.Path]::GetFileName($File)).ToLowerInvariant()
+    $first = ''; if (@($Arguments).Count -gt 0) { $first = ([string]@($Arguments)[0]).ToLowerInvariant() }
+    if ($f -eq 'schtasks.exe' -and $first -eq '/query') { return $true }
+    if ($f -eq 'winget.exe' -and $first -eq 'list') { return $true }
+    return $false
+}
+
+function Get-FixItPreflight {
+    param([string]$Adapter, $Arguments = $null)
+    $A = @{}
+    if ($null -ne $Arguments) { foreach ($k in @($Arguments.Keys)) { $A[[string]$k] = $Arguments[$k] } }
+    $o = New-Object System.Collections.ArrayList
+    $pass = { param($t) [void]$o.Add((New-FixItProbeResult 'PASS' $t)) }
+    $warn = { param($t) [void]$o.Add((New-FixItProbeResult 'WARN' $t)) }
+    $fail = { param($t) [void]$o.Add((New-FixItProbeResult 'FAIL' $t)) }
+    $admin = { param($t) [void]$o.Add((Get-FixItAdminCheck -What $t)) }
+    $need = { param($cmd) if (Test-FixItCommandPresent -Name $cmd) { & $pass ('{0} is available' -f $cmd) } else { & $fail ('{0} was not found on this PC' -f $cmd) } }
+    switch ($Adapter) {
+        { $_ -in @('Set-RegDword', 'Set-RegString', 'Remove-RegValue', 'Restore-FixItRegValue') } {
+            $path = [string]$A['Path']; $name = [string]$A['Name']
+            $acc = Get-FixItRegAccess -Path $path
+            $removing = ($_ -eq 'Remove-RegValue') -or ($_ -eq 'Restore-FixItRegValue' -and $A.ContainsKey('Existed') -and -not [bool]$A['Existed'])
+            if ($removing -and ($null -eq (Get-RegValue -Path $path -Name $name))) { & $pass ('the setting "{0}" is not there, so there is nothing to remove' -f $name); break }
+            if ($acc.Exists) { & $pass ('the setting location exists ({0})' -f $path) }
+            elseif ($acc.NearestExists) { & $pass ('the setting location does not exist yet, but it can be created ({0})' -f $path) }
+            else { & $fail ('the setting location was not found ({0})' -f $path) }
+            if ($acc.NeedsAdmin) { & $admin 'changing this setting' }
+            elseif ($acc.CanWrite) { & $pass 'this user is allowed to change the setting' }
+            else { & $fail 'this user is not allowed to change the setting' }
+            break
+        }
+        { $_ -in @('Stop-FixItService', 'Start-FixItService', 'Set-FixItServiceStartType') } {
+            $n = [string]$A['Name']; $st = Get-FixItServiceStatus -Name $n
+            if ($st -eq 'Missing') { & $fail ('the Windows service "{0}" was not found' -f $n) } else { & $pass ('the Windows service "{0}" exists (it is {1})' -f $n, $st) }
+            & $admin 'controlling a Windows service'
+            break
+        }
+        { $_ -in @('Stop-SpoolerService', 'Start-SpoolerService') } {
+            $st = Get-FixItServiceStatus -Name 'Spooler'
+            if ($st -eq 'Missing') { & $fail 'the Print Spooler service was not found' } else { & $pass ('the Print Spooler service exists (it is {0})' -f $st) }
+            & $admin 'controlling the Print Spooler'
+            break
+        }
+        'Remove-SpoolFile' {
+            if (Test-Path -LiteralPath ([string]$A['FullName'])) { & $pass 'the stuck print file exists' } else { & $warn 'the stuck print file is already gone' }
+            & $admin 'clearing the print queue folder'
+            break
+        }
+        { $_ -in @('Remove-FixItPrinter', 'Set-FixItDefaultPrinter') } {
+            $n = [string]$A['Name']; $have = @()
+            try { $have = @(Get-FixItPrinters | Where-Object { $_.Name -eq $n }) } catch { & $warn ('the printer list could not be read: {0}' -f $_.Exception.Message); break }
+            if ($have.Count -gt 0) { & $pass ('the printer "{0}" exists' -f $n) } else { & $fail ('the printer "{0}" was not found' -f $n) }
+            & $need 'Get-Printer'
+            break
+        }
+        'Add-FixItPrinterConnection' {
+            $n = [string]$A['Name']; $srv = ''
+            if ($n.StartsWith('\\')) { $srv = ($n.TrimStart('\') -split '\\')[0] }
+            if ($srv) { if (Test-HostReachable -ComputerName $srv) { & $pass ('the print server "{0}" answers' -f $srv) } else { & $warn ('the print server "{0}" did not answer just now' -f $srv) } }
+            & $need 'Add-Printer'
+            break
+        }
+        'Stop-FixItApp' {
+            if (Test-FixItProcessExists -Id ([int]$A['Id'])) { & $pass 'the program is running and could be closed' } else { & $warn 'the program is not running any more' }
+            break
+        }
+        'Request-AppClose' {
+            $n = @(Get-RunningApp -ProcessNames @($A['ProcessNames'])).Count
+            if ($n -gt 0) { & $pass ('{0} program(s) are running and could be asked to close' -f $n) } else { & $pass 'none of those programs are running' }
+            break
+        }
+        'Stop-FixItAppsByName' {
+            $n = @(Get-RunningApp -ProcessNames @($A['ProcessNames'])).Count
+            if ($n -gt 0) { & $pass ('{0} program(s) are running and could be ended' -f $n) } else { & $pass 'none of those programs are running' }
+            break
+        }
+        'Stop-FixItProcessForce' {
+            if (Test-FixItProcessExists -Id ([int]$A['Id'])) { & $pass 'the program is running and could be ended' } else { & $warn 'the program is not running any more' }
+            break
+        }
+        'Clear-FixItFolder' {
+            $p = [string]$A['Path']
+            if (-not (Test-SafeCleanPath -Path $p)) { & $fail ('this folder is not on the safe list: {0}' -f $p); break }
+            if (Test-Path -LiteralPath $p) { & $pass ('the folder exists ({0})' -f $p) } else { & $pass ('the folder is not there, so there is nothing to clear ({0})' -f $p) }
+            if ($p -match '(?i)^[A-Z]:\\Windows\\') { & $admin 'clearing this folder' } else { & $pass 'this is the user''s own folder, so no extra permission is needed' }
+            break
+        }
+        'Clear-FixItRecycleBin' { & $need 'Clear-RecycleBin'; break }
+        'Restart-FixItAdapter' {
+            $n = [string]$A['Name']; $have = @()
+            try { $have = @(Get-FixItAdapters) } catch { }
+            if ($have -contains $n) { & $pass ('the network adapter "{0}" exists and is up' -f $n) } else { & $fail ('the network adapter "{0}" was not found' -f $n) }
+            & $need 'Restart-NetAdapter'
+            & $admin 'restarting the network adapter'
+            break
+        }
+        { $_ -in @('Restart-FixItNow', 'Restart-FixItComputer') } { & $need 'shutdown.exe'; & $pass 'any user may restart the computer'; break }
+        'Set-FixItAudioDevice' {
+            $d = $null; try { $d = Get-FixItAudioDevice -Kind ([string]$A['Kind']) } catch { }
+            if ($null -ne $d) { & $pass ('the {0} "{1}" was found' -f ([string]$A['Kind']).ToLowerInvariant(), $d.Name) } else { & $fail ('no {0} was found' -f ([string]$A['Kind']).ToLowerInvariant()) }
+            break
+        }
+        { $_ -in @('Start-FixItOutlook', 'Start-FixItOutlookSafe') } {
+            $ol = $null; try { $ol = Get-OutlookInfo } catch { }
+            if ($null -ne $ol -and $ol.Installed -and $ol.Path) { & $pass ('Outlook was found ({0})' -f $ol.Path) } else { & $fail 'Outlook was not found on this PC' }
+            break
+        }
+        'Open-FixItSettings' {
+            $sch = ([string]$A['Uri'] -replace ':.*$', '')
+            if (Test-FixItUriHandler -Scheme $sch) { & $pass ('Windows knows how to open "{0}" pages' -f $sch) } else { & $fail ('Windows has no handler for "{0}" pages' -f $sch) }
+            break
+        }
+        'Open-FixItUrl' {
+            if (Test-FixItUriHandler -Scheme 'https') { & $pass 'Windows has a web browser for https pages' } else { & $fail 'Windows has no web browser set for https pages' }
+            break
+        }
+        'Open-FixItBrowserPage' {
+            $e = [string]$A['Exe']
+            if (Test-FixItCommandPresent -Name $e) { & $pass ('{0} was found' -f $e) } else { & $fail ('{0} was not found on this PC' -f $e) }
+            break
+        }
+        'Open-FixItFile' {
+            if (Test-FixItCommandPresent -Name 'notepad.exe') { & $pass 'Notepad is available' } else { & $fail 'Notepad was not found' }
+            if (Test-Path -LiteralPath ([string]$A['Path'])) { & $pass 'the file exists' } else { & $warn 'the file does not exist yet' }
+            break
+        }
+        { $_ -in @('Open-FixItUserFile', 'Show-FixItFileInFolder') } {
+            if (Test-Path -LiteralPath ([string]$A['Path'])) { & $pass 'the file exists' } else { & $fail 'the file was not found' }
+            break
+        }
+        'Copy-FixItBackup' {
+            if (Test-Path -LiteralPath ([string]$A['Source'])) { & $pass 'the file to back up exists' } else { & $pass 'the file to back up is not there, so nothing needs saving' }
+            $dd = [string]$A['DestDir']
+            if ((Test-Path -LiteralPath $dd) -or (Test-Path -LiteralPath (Split-Path -Parent $dd))) { & $pass 'the backup folder exists or can be made' } else { & $fail 'the backup folder cannot be made here' }
+            break
+        }
+        'Start-FixItDefenderScan' {
+            & $need 'Start-MpScan'
+            $svc = Get-FixItServiceStatus -Name 'WinDefend'
+            if ($svc -eq 'Missing') { & $warn 'Microsoft Defender was not found (another virus program may be in charge)' } else { & $pass ('Microsoft Defender exists (it is {0})' -f $svc) }
+            break
+        }
+        { $_ -in @('Start-FixItOneDriveReset', 'Start-FixItOneDrive') } {
+            if ($A['Exe'] -and (Test-Path -LiteralPath ([string]$A['Exe']))) { & $pass 'OneDrive was found' } else { & $fail 'OneDrive was not found' }
+            break
+        }
+        'Register-FixItTask' { & $need 'schtasks.exe'; & $pass 'a task for this user needs no extra permission'; break }
+        'Unregister-FixItTask' {
+            & $need 'schtasks.exe'
+            if (Test-FixItTask -Name ([string]$A['Name'])) { & $pass ('the task "{0}" exists' -f $A['Name']) } else { & $pass ('the task "{0}" is not there, so there is nothing to remove' -f $A['Name']) }
+            break
+        }
+        'Install-FixItApp' { & $need 'winget.exe'; break }
+        'Invoke-Msi' {
+            & $need 'msiexec.exe'
+            & $admin 'repairing a program'
+            break
+        }
+        'Install-FixItUpdate' {
+            $dir = $script:InstallDir
+            $main = ''; if ($dir) { $main = Join-Path $dir 'FamilyFixIt.ps1' }
+            if ($main -and (Test-Path -LiteralPath $main)) {
+                if (Test-FixItFileWritable -Path $main) { & $pass 'the program file can be replaced by the update' } else { & $fail 'the program file cannot be replaced (it is locked or read-only)' }
+            } else { & $warn 'the program folder is not known here' }
+            break
+        }
+        'Save-WebFile' { & $pass 'a download would be saved in a temporary folder'; break }
+        'Send-WebReport' {
+            $url = [string]$A['Url']; $json = [string]$A['Json']
+            $bytes = (New-Object Text.UTF8Encoding($false)).GetByteCount($json)
+            if (Test-FixItReportReachable -Url $url) { & $pass ('the report address answers ({0})' -f $url) } else { & $warn ('the report address did not answer just now ({0}); a real report would be saved on the Desktop instead' -f $url) }
+            $preview = ''
+            try {
+                $obj = $json | ConvertFrom-Json
+                $lines = @(([string]$obj.report) -split "`r?`n")
+                $first = @($lines | Select-Object -First 14)
+                $preview = ('This is what WOULD be sent ({0} bytes; PC name {1}, version {2}). The first {3} of {4} lines:' -f $bytes, $obj.pcName, $obj.version, $first.Count, $lines.Count) + "`n" + (($first | ForEach-Object { '    | ' + $_ }) -join "`n")
+            } catch { $preview = ('This is what WOULD be sent: {0} bytes (nothing is sent in Test mode)' -f $bytes) }
+            $script:TestLastReportPreview = $preview
+            & $pass ($preview + "`n" + 'Nothing is sent in Test mode.')
+            break
+        }
+        'Write-FixItTextFile' {
+            $dir = Split-Path -Parent ([string]$A['Path'])
+            if ($dir -and (Test-Path -LiteralPath $dir)) { & $pass ('the folder exists ({0})' -f $dir) } else { & $fail ('the folder was not found ({0})' -f $dir) }
+            break
+        }
+        { $_ -in @('Rename-FixItFolderAside', 'Restore-FixItFolder') } {
+            $p = [string]$A['Path']
+            if ($_ -eq 'Restore-FixItFolder') { if (Test-Path -LiteralPath ([string]$A['Aside'])) { & $pass 'the saved folder exists' } else { & $fail 'the saved folder is gone' } }
+            elseif (Test-Path -LiteralPath $p) { & $pass ('the folder exists ({0})' -f $p) } else { & $pass ('the folder is not there, so there is nothing to set aside ({0})' -f $p) }
+            & $admin 'changing a Windows folder'
+            break
+        }
+        'Restore-FixItFile' {
+            if (Test-Path -LiteralPath ([string]$A['Backup'])) { & $pass 'the saved copy exists' } else { & $fail 'the saved copy is gone' }
+            if (Test-Path -LiteralPath (Split-Path -Parent ([string]$A['Original']))) { & $pass 'the folder for the original exists' } else { & $fail 'the folder for the original was not found' }
+            break
+        }
+        'Clear-FixItBrowserSessions' {
+            $n = 0; try { $n = @(Get-FixItSessionTargets).Count } catch { }
+            & $pass ('{0} browser "restore pages" file(s) would be set aside (a backup is made first)' -f $n)
+            break
+        }
+        'Start-FixItGuardianProcess' {
+            if ($script:SelfPath -and (Test-Path -LiteralPath $script:SelfPath)) { & $pass 'the program file for the watcher exists' } else { & $fail 'the program file for the watcher was not found' }
+            & $need 'powershell.exe'
+            break
+        }
+        'Stop-FixItGuardianProcess' { & $pass 'the watcher could be stopped (it is only this tool''s own helper)'; break }
+        'Repair-FixItIcon' { & $pass 'the shortcut icon could be refreshed'; break }
+        'Invoke-FixItNative' {
+            $file = [string]$A['File']; $args2 = @($A['Arguments'])
+            & $need $file
+            if (Get-FixItNativeNeedsAdmin -File $file -Arguments $args2) { & $admin ('running {0}' -f $file) } else { & $pass 'no administrator permission is needed' }
+            break
+        }
+        default { & $warn ('no check is written for "{0}" yet' -f $Adapter) }
+    }
+    return @($o)
+}
+
+# ----- the checklist -----
+function Format-FixItTestChecklist {
+    param([string]$Title, $Records, [string]$Said = '')
+    $recs = @($Records)
+    $overall = Get-FixItWorstStatus -Statuses @($recs | ForEach-Object { $_.Status })
+    $o = New-Object System.Collections.Generic.List[string]
+    $o.Add(('TEST MODE - {0}' -f $Title))
+    $o.Add(('Overall: {0}   (nothing was changed on this PC)' -f $overall))
+    if ($Said) { $o.Add(''); $o.Add(('The normal answer would have said: {0}' -f $Said)) }
+    $o.Add('')
+    if ($recs.Count -eq 0) { $o.Add('[PASS] This button changes nothing, so there was nothing to check.') }
+    foreach ($r in $recs) {
+        $o.Add(('[{0}] {1}' -f $r.Status, $r.Step))
+        foreach ($c in @($r.Checks)) {
+            $lines = @(([string]$c.Text) -split "`r?`n")
+            $o.Add(('       {0}: {1}' -f $c.Status, $lines[0]))
+            foreach ($l in @($lines | Select-Object -Skip 1)) { $o.Add(('           {0}' -f $l)) }
+        }
+    }
+    return @($o)
+}
+
+function Get-FixItTestSummaryLine {
+    param($Records)
+    $recs = @($Records)
+    $p = @($recs | Where-Object { $_.Status -eq 'PASS' }).Count
+    $w = @($recs | Where-Object { $_.Status -eq 'WARN' }).Count
+    $f = @($recs | Where-Object { $_.Status -eq 'FAIL' }).Count
+    return ('{0} check(s): {1} PASS, {2} WARN, {3} FAIL' -f $recs.Count, $p, $w, $f)
+}
+
+function Start-FixItTestButton { $script:TestRecords = New-Object System.Collections.ArrayList }
+function Get-FixItTestRecords { return @($script:TestRecords) }
+# A button that never reached a change step (nothing to fix on this PC, or it stopped early) must not look like a plain PASS
+# with nothing behind it: say what happened, in the checklist.
+function Complete-FixItTestRecords {
+    param($Result = $null)
+    if (@($script:TestRecords).Count -gt 0) { return }
+    if ($null -eq $Result) { Add-FixItTestNote -Step 'This button' -Status 'WARN' -Text 'it gave no answer and reached no change step'; return }
+    $what = ('{0} - {1}' -f $Result.Title, $Result.Message)
+    if ([string]$Result.Title -eq 'Practice run') { Add-FixItTestNote -Step 'This button' -Status 'PASS' -Text 'no change step was needed on this PC (nothing was found that needs fixing)'; return }
+    if ($Result.Ok) { Add-FixItTestNote -Step 'This button' -Status 'PASS' -Text ('no change step was needed. It said: {0}' -f $what); return }
+    Add-FixItTestNote -Step 'This button' -Status 'WARN' -Text ('it stopped before any change step was reached (for example, this PC does not have the program or device it fixes). It said: {0}' -f $what)
+}
+
+# The buttons that "Test all buttons" runs (every fix, the report, the restart, the undo, the toggles and the update check).
+$script:TestAllKeys = @('Printer', 'Acrobat', 'AcrobatRepair', 'Outlook', 'Network', 'Slow', 'Sound', 'Browser', 'WinUpdate', 'OneDrive', 'Scam', 'Screen', 'Report', 'Update', 'Restart', 'Undo', 'CheckIn', 'Guardian', 'HealthCheck')
+
+function Get-FixItTestResultsPath {
+    $dir = $OutputDir
+    if (-not $dir) { $dir = Get-DesktopFolder }
+    return (Join-Path $dir ('FamilyFixIt-TestResults-{0}-{1}.txt' -f $env:COMPUTERNAME, (Get-Date -Format 'yyyyMMdd-HHmm')))
+}
+
+# Runs every button's checks one after the other (questions are answered "yes" so it never waits for a person).
+# Returns a list of @{ Key; Title; Status; Records; Said }.
+function Invoke-FixItTestAll {
+    param([scriptblock]$Progress = $null)
+    $script:TestAll = $true
+    $out = New-Object System.Collections.ArrayList
+    try {
+        $i = 0
+        foreach ($k in $script:TestAllKeys) {
+            $i++
+            $t = (Get-FixItActionTable)[$k]
+            if (-not $t) { continue }
+            if ($Progress) { try { & $Progress $i $script:TestAllKeys.Count ([string]$t.Title) } catch { } }
+            Start-FixItTestButton
+            $said = ''
+            $r = $null
+            try {
+                $r = Invoke-FixItAction -Which $k -SkipPlan
+                $said = Get-FixItTestSaid -Result $r
+            } catch {
+                Add-FixItTestNote -Step ('The "{0}" button' -f $t.Title) -Status 'FAIL' -Text ('stopped early: {0}' -f $_.Exception.Message)
+                Write-FixItLog ('Test all: {0} stopped: {1}' -f $k, $_.Exception.Message) 'ERROR'
+            }
+            Complete-FixItTestRecords -Result $r
+            $recs = @(Get-FixItTestRecords)
+            [void]$out.Add([pscustomobject]@{ Key = $k; Title = [string]$t.Title; Status = (Get-FixItWorstStatus -Statuses @($recs | ForEach-Object { $_.Status })); Records = $recs; Said = $said })
+        }
+    } finally { $script:TestAll = $false }
+    return @($out)
+}
+
+function Format-FixItTestAllReport {
+    param($Results)
+    $res = @($Results)
+    $o = New-Object System.Collections.Generic.List[string]
+    $o.Add(('Family Fix-It {0} - TEST MODE results' -f $script:FixItVersion))
+    $o.Add(('PC: {0}   User: {1}   Date: {2}' -f $env:COMPUTERNAME, $env:USERNAME, (Get-Date -Format 'yyyy-MM-dd HH:mm')))
+    $o.Add('Nothing was changed, closed, restarted or sent on this PC. Each step was only checked.')
+    $o.Add('')
+    $o.Add('SUMMARY')
+    foreach ($r in $res) { $o.Add(('  [{0}] {1}' -f $r.Status, $r.Title)) }
+    $o.Add('')
+    $o.Add('DETAILS')
+    foreach ($r in $res) {
+        $o.Add('')
+        $o.Add('-----------------------------------------------------------------')
+        foreach ($l in (Format-FixItTestChecklist -Title $r.Title -Records $r.Records -Said $r.Said)) { $o.Add($l) }
+    }
+    return @($o)
+}
+
+# Saves the results next to the Desktop. This is the one file Test mode writes, and only because the person asked for it.
+function Save-FixItTestResults {
+    param($Results)
+    $path = Get-FixItTestResultsPath
+    $text = (Format-FixItTestAllReport -Results $Results) -join "`r`n"
+    [IO.File]::WriteAllText($path, $text, (New-Object Text.UTF8Encoding($true)))
+    Write-FixItLog ('Test mode: results saved to {0}' -f $path)
+    return $path
+}
+
+# ---------------------------------------------------------------------------
+# Keeping the window alive (nothing slow may run on the window's own thread)
+#   - Wait-FixIt         : a wait that keeps the window responding (a plain Start-Sleep freezes it)
+#   - Invoke-FixItOffUi  : runs one slow, stateless function in a background worker and keeps the window
+#                          responding until it is done (slow Windows questions, web calls, programs that take a while)
+#   - Test-FixItOffUiWanted : true only while the window is open and we are not already in the worker
+# ---------------------------------------------------------------------------
+$script:InOffUiWorker = $false
+$script:OffUiBroken = $false
+$script:OffUiWorkers = New-Object System.Collections.ArrayList
+$script:OffUiDefaultSeconds = 180
+$script:ActionBusy = $false
+$script:OffUiRunner = @'
+param($Self, $Log, $NeedLoad, $Cmd, $CmdArgs)
+if ($NeedLoad) {
+    try { . $Self -LibraryOnly -LogPath $Log } catch { throw ('FIXIT-OFFUI-LOAD: ' + $_.Exception.Message) }
+    $script:LogFile = $Log
+    $script:InOffUiWorker = $true
+    $script:GuiActive = $false
+}
+& $Cmd @CmdArgs
+'@
+
+function Update-FixItUi {
+    if ($script:GuiActive) { try { [System.Windows.Forms.Application]::DoEvents() } catch { } }
+}
+
+function Wait-FixIt {
+    param([double]$Seconds = 0, [int]$Milliseconds = 0)
+    $ms = [int]([math]::Round($Seconds * 1000)) + $Milliseconds
+    if ($ms -le 0) { return }
+    if ($script:InProbe) { return }   # Test mode only checks; it never waits for a change to settle
+    if (-not $script:GuiActive) { Start-Sleep -Milliseconds $ms; return }
+    $end = (Get-Date).AddMilliseconds($ms)
+    while ($true) {
+        Update-FixItUi
+        $left = ($end - (Get-Date)).TotalMilliseconds
+        if ($left -le 0) { break }
+        [Threading.Thread]::Sleep([int][math]::Min(30, [math]::Ceiling($left)))
+    }
+}
+
+function Test-FixItOffUiWanted { return ([bool]$script:GuiActive -and -not $script:InOffUiWorker -and -not $script:OffUiBroken) }
+
+function Get-FixItOffUiWorker {
+    foreach ($w in $script:OffUiWorkers) { if (-not $w.Busy) { return $w } }
+    $rs = [runspacefactory]::CreateRunspace()
+    $rs.ApartmentState = [Threading.ApartmentState]::MTA
+    $rs.Open()
+    $w = [pscustomobject]@{ Runspace = $rs; Busy = $false; Ready = $false }
+    [void]$script:OffUiWorkers.Add($w)
+    return $w
+}
+
+function Remove-FixItOffUiWorker {
+    param($Worker)
+    [void]$script:OffUiWorkers.Remove($Worker)
+    # a worker that is still busy (it took too long) is only asked to stop; an idle one is closed properly so the program can exit
+    try { if ($Worker.Busy) { $Worker.Runspace.CloseAsync() } else { $Worker.Runspace.Close(); $Worker.Runspace.Dispose() } } catch { }
+}
+
+function Stop-FixItOffUiWorkers {
+    foreach ($w in @($script:OffUiWorkers)) { Remove-FixItOffUiWorker -Worker $w }
+}
+
+# Runs the named function in the background worker and waits for it, keeping the window responding.
+# Errors come back as errors. Too slow: the worker is abandoned and a plain "took too long" error is thrown.
+# When the worker itself cannot start, it falls back (once, logged) to running the function right here.
+function Invoke-FixItOffUi {
+    param([string]$Command, $Arguments = $null, [int]$TimeoutSeconds = 0)
+    if ($TimeoutSeconds -le 0) { $TimeoutSeconds = $script:OffUiDefaultSeconds }
+    $argTable = @{}
+    if ($null -ne $Arguments) { foreach ($k in @($Arguments.Keys)) { $argTable[[string]$k] = $Arguments[$k] } }
+    $w = $null; $ps = $null; $h = $null
+    try {
+        $w = Get-FixItOffUiWorker
+        $w.Busy = $true
+        $ps = [powershell]::Create()
+        $ps.Runspace = $w.Runspace
+        [void]$ps.AddScript($script:OffUiRunner).AddArgument($script:SelfPath).AddArgument($script:LogFile).AddArgument(-not $w.Ready).AddArgument($Command).AddArgument($argTable)
+        $h = $ps.BeginInvoke()
+    } catch {
+        Write-FixItLog ('The background worker could not start ({0}); doing "{1}" in the window instead' -f $_.Exception.Message, $Command) 'WARN'
+        $script:OffUiBroken = $true
+        if ($w) { $w.Busy = $false; Remove-FixItOffUiWorker -Worker $w }
+        if ($ps) { try { $ps.Dispose() } catch { } }
+        return (& $Command @argTable)
+    }
+    $started = Get-Date
+    $deadline = $started.AddSeconds($TimeoutSeconds)
+    $timedOut = $false
+    while (-not $h.IsCompleted) {
+        Update-FixItUi
+        [void]$h.AsyncWaitHandle.WaitOne(30)
+        if ((Get-Date) -gt $deadline) { $timedOut = $true; break }
+    }
+    if ($timedOut) {
+        Write-FixItLog ('Background work "{0}" took longer than {1} seconds and was left behind' -f $Command, $TimeoutSeconds) 'WARN'
+        try { [void]$ps.BeginStop($null, $null) } catch { }
+        Remove-FixItOffUiWorker -Worker $w
+        throw ('"{0}" took too long (more than {1} seconds)' -f $Command, $TimeoutSeconds)
+    }
+    $result = @()
+    $failure = $null
+    try { $result = @($ps.EndInvoke($h)) }
+    catch {
+        $failure = $_.Exception
+        if ($failure.InnerException) { $failure = $failure.InnerException }
+    }
+    $ps.Dispose()
+    $w.Busy = $false
+    if ($null -ne $failure) {
+        if ($failure.Message -like 'FIXIT-OFFUI-LOAD:*') {
+            Write-FixItLog ('The background worker could not load the program ({0}); doing "{1}" in the window instead' -f $failure.Message, $Command) 'WARN'
+            $script:OffUiBroken = $true
+            Remove-FixItOffUiWorker -Worker $w
+            return (& $Command @argTable)
+        }
+        throw $failure
+    }
+    $w.Ready = $true
+    $ms = [int]((Get-Date) - $started).TotalMilliseconds
+    if ($ms -gt 2000) { Write-FixItLog ('Background work "{0}" took {1} ms (the window stayed responsive)' -f $Command, $ms) }
+    foreach ($o in $result) { $o }
 }
 
 # ---------------------------------------------------------------------------
@@ -152,6 +775,7 @@ function Get-RegValue {
 
 function Set-RegDword {
     param([string]$Path, [string]$Name, [int]$Value)
+    if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Set-RegDword' -Arguments $PSBoundParameters; return }
     Register-FixItRegUndo -Path $Path -Name $Name
     if (-not (Test-Path -LiteralPath $Path)) { New-Item -Path $Path -Force | Out-Null }
     New-ItemProperty -LiteralPath $Path -Name $Name -Value $Value -PropertyType DWord -Force | Out-Null
@@ -159,6 +783,7 @@ function Set-RegDword {
 
 function Remove-RegValue {
     param([string]$Path, [string]$Name)
+    if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Remove-RegValue' -Arguments $PSBoundParameters; return }
     Register-FixItRegUndo -Path $Path -Name $Name
     Remove-ItemProperty -LiteralPath $Path -Name $Name -Force
 }
@@ -169,20 +794,24 @@ function Get-SpoolerState {
 }
 
 function Stop-SpoolerService {
+    if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Stop-SpoolerService' -Arguments $PSBoundParameters; return }
+    if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Stop-SpoolerService' -Arguments $PSBoundParameters) }
     Stop-Service -Name 'Spooler' -Force -ErrorAction Stop
     $end = (Get-Date).AddSeconds(25)
-    while ((Get-Service -Name 'Spooler').Status -ne 'Stopped' -and (Get-Date) -lt $end) { Start-Sleep -Milliseconds 500 }
+    while ((Get-Service -Name 'Spooler').Status -ne 'Stopped' -and (Get-Date) -lt $end) { Wait-FixIt -Milliseconds 500 }
     if ((Get-Service -Name 'Spooler').Status -ne 'Stopped') {
         Write-FixItLog 'Print Spooler did not stop in time; ending its process' 'WARN'
         Stop-Process -Name 'spoolsv' -Force -ErrorAction SilentlyContinue
-        Start-Sleep -Seconds 2
+        Wait-FixIt -Seconds 2
     }
 }
 
 function Start-SpoolerService {
+    if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Start-SpoolerService' -Arguments $PSBoundParameters; return }
+    if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Start-SpoolerService' -Arguments $PSBoundParameters) }
     Start-Service -Name 'Spooler' -ErrorAction Stop
     $end = (Get-Date).AddSeconds(25)
-    while ((Get-Service -Name 'Spooler').Status -ne 'Running' -and (Get-Date) -lt $end) { Start-Sleep -Milliseconds 500 }
+    while ((Get-Service -Name 'Spooler').Status -ne 'Running' -and (Get-Date) -lt $end) { Wait-FixIt -Milliseconds 500 }
     if ((Get-Service -Name 'Spooler').Status -ne 'Running') { throw 'Print Spooler did not start' }
 }
 
@@ -192,9 +821,37 @@ function Get-SpoolFiles {
         Where-Object { $_.Extension -in @('.SHD', '.SPL', '.shd', '.spl') })
 }
 
-function Remove-SpoolFile { param([string]$FullName) Remove-Item -LiteralPath $FullName -Force -ErrorAction Stop }
+function Remove-SpoolFile { param([string]$FullName)
+    if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Remove-SpoolFile' -Arguments $PSBoundParameters; return }
+ Remove-Item -LiteralPath $FullName -Force -ErrorAction Stop }
+
+# Waiting print jobs for one printer. Never needs administrator rights (this is NOT the spool folder).
+# Tries Get-PrintJob first, then Win32_PrintJob. Document names are left out on purpose (private).
+function Get-FixItPrintJobs {
+    param([string]$PrinterName)
+    if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Get-FixItPrintJobs' -Arguments $PSBoundParameters) }
+    $out = @()
+    try {
+        foreach ($j in @(Get-PrintJob -PrinterName $PrinterName -ErrorAction Stop)) {
+            $sub = $null; try { $sub = [datetime]$j.SubmittedTime } catch { }
+            $out += [pscustomobject]@{ Id = [int]$j.ID; Status = [string]$j.JobStatus; Submitted = $sub }
+        }
+        return $out
+    } catch {
+        $first = $_
+        try {
+            foreach ($j in @(Get-CimInstance -ClassName Win32_PrintJob -ErrorAction Stop)) {
+                if (-not ([string]$j.Name).StartsWith($PrinterName + ',', [StringComparison]::OrdinalIgnoreCase)) { continue }
+                $sub = $null; try { $sub = [datetime]$j.TimeSubmitted } catch { }
+                $out += [pscustomobject]@{ Id = [int]$j.JobId; Status = [string]$j.JobStatus; Submitted = $sub }
+            }
+            return $out
+        } catch { throw $first }
+    }
+}
 
 function Get-FixItPrinters {
+    if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Get-FixItPrinters' -Arguments $PSBoundParameters) }
     $result = @()
     $wmi = @{}
     try { foreach ($w in @(Get-CimInstance -ClassName Win32_Printer)) { $wmi[[string]$w.Name] = $w } } catch { }
@@ -221,6 +878,7 @@ function Get-FixItPrinters {
 
 function Test-HostReachable {
     param([string]$ComputerName)
+    if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Test-HostReachable' -Arguments $PSBoundParameters) }
     try {
         $c = New-Object Net.Sockets.TcpClient
         $iar = $c.BeginConnect($ComputerName, 445, $null, $null)
@@ -230,10 +888,15 @@ function Test-HostReachable {
     } catch { return $false }
 }
 
-function Remove-FixItPrinter { param([string]$Name) Remove-Printer -Name $Name -ErrorAction Stop }
-function Add-FixItPrinterConnection { param([string]$Name) Add-Printer -ConnectionName $Name -ErrorAction Stop }
+function Remove-FixItPrinter { param([string]$Name)
+    if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Remove-FixItPrinter' -Arguments $PSBoundParameters; return }
+ Remove-Printer -Name $Name -ErrorAction Stop }
+function Add-FixItPrinterConnection { param([string]$Name)
+    if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Add-FixItPrinterConnection' -Arguments $PSBoundParameters; return }
+ Add-Printer -ConnectionName $Name -ErrorAction Stop }
 function Set-FixItDefaultPrinter {
     param([string]$Name)
+    if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Set-FixItDefaultPrinter' -Arguments $PSBoundParameters; return }
     $p = Get-CimInstance -ClassName Win32_Printer -Filter ("Name='{0}'" -f ($Name.Replace('\', '\\').Replace("'", "\'")))
     if ($p) { Invoke-CimMethod -InputObject $p -MethodName SetDefaultPrinter | Out-Null }
 }
@@ -309,6 +972,7 @@ function Set-FixItPrinterAsDefault {
 # Asks which printer. The window shows a list of buttons; the command line shows numbers. Returns '' when the person goes back.
 function Select-FixItPrinter {
     param([string[]]$Names, [string]$Current = '')
+    if ($script:TestAll) { Write-FixItLog 'Test all: the first printer was picked' 'TEST'; return [string]@($Names)[0] }
     if ($script:GuiActive) { return [string](Show-FixItPrinterPickDialog -Names $Names -Current $Current) }
     if (-not (Test-FixItCanAsk)) { Write-FixItLog 'Nobody is there to pick a printer' 'WARN'; return '' }
     $i = 1
@@ -326,12 +990,14 @@ function Get-RunningApp {
 
 function Request-AppClose {
     param([string[]]$ProcessNames)
+    if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Request-AppClose' -Arguments $PSBoundParameters; return }
     foreach ($p in @(Get-Process -Name $ProcessNames -ErrorAction SilentlyContinue)) { [void]$p.CloseMainWindow() }
     $end = (Get-Date).AddSeconds(20)
-    while (@(Get-Process -Name $ProcessNames -ErrorAction SilentlyContinue).Count -gt 0 -and (Get-Date) -lt $end) { Start-Sleep -Milliseconds 500 }
+    while (@(Get-Process -Name $ProcessNames -ErrorAction SilentlyContinue).Count -gt 0 -and (Get-Date) -lt $end) { Wait-FixIt -Milliseconds 500 }
 }
 
 function Get-InstalledProducts {
+    if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Get-InstalledProducts' -Arguments $PSBoundParameters) }
     $roots = @(
         'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
         'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall',
@@ -384,13 +1050,25 @@ function Get-FixItFileVersion {
     return ''
 }
 
+# "No events found" is a normal answer (a clean PC). Anything else (for example access denied) is thrown so the report can say "not available" instead of "no errors".
+function Test-FixItNoEvents {
+    param($Err)
+    $id = ''; try { $id = [string]$Err.FullyQualifiedErrorId } catch { }
+    $m = ''; try { $m = [string]$Err.Exception.Message } catch { }
+    return ($id -like 'NoMatchingEventsFound*' -or $m -match 'No events were found')
+}
 function Get-FixItEvents {
     param([string]$LogName, [int]$Max = 25)
+    if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Get-FixItEvents' -Arguments $PSBoundParameters) }
     $filter = @{ LogName = $LogName; Level = @(1, 2); StartTime = (Get-Date).AddDays(-7) }
-    try { return @(Get-WinEvent -FilterHashtable $filter -MaxEvents $Max -ErrorAction Stop) } catch { return @() }
+    try { return @(Get-WinEvent -FilterHashtable $filter -MaxEvents $Max -ErrorAction Stop) } catch {
+        if (Test-FixItNoEvents -Err $_) { return @() }
+        throw
+    }
 }
 
 function Get-FixItOsInfo {
+    if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Get-FixItOsInfo' -Arguments $PSBoundParameters) }
     $os = Get-CimInstance -ClassName Win32_OperatingSystem
     $disk = $null
     try { $disk = Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DeviceID='C:'" } catch { }
@@ -408,16 +1086,21 @@ function Get-FixItOsInfo {
 
 function Get-DesktopFolder { return [Environment]::GetFolderPath('Desktop') }
 
-function Open-FixItFile { param([string]$Path) Start-Process -FilePath 'notepad.exe' -ArgumentList ('"{0}"' -f $Path) | Out-Null }
+function Open-FixItFile { param([string]$Path)
+    if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Open-FixItFile' -Arguments $PSBoundParameters; return }
+ Start-Process -FilePath 'notepad.exe' -ArgumentList ('"{0}"' -f $Path) | Out-Null }
 
 function Invoke-Msi {
     param([string]$ProductCode)
+    if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Invoke-Msi' -Arguments $PSBoundParameters; return 0 }
+    if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Invoke-Msi' -Arguments $PSBoundParameters) }
     $p = Start-Process -FilePath 'msiexec.exe' -ArgumentList @('/fa', $ProductCode, '/qb', '/norestart') -Wait -PassThru
     return [int]$p.ExitCode
 }
 
 function Get-WebText {
     param([string]$Url)
+    if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Get-WebText' -Arguments $PSBoundParameters) }
     try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
     $r = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 10
     return [string]$r.Content
@@ -425,6 +1108,8 @@ function Get-WebText {
 
 function Save-WebFile {
     param([string]$Url, [string]$Dest)
+    if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Save-WebFile' -Arguments $PSBoundParameters; return }
+    if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Save-WebFile' -Arguments $PSBoundParameters) }
     try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
     Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 30 -OutFile $Dest
 }
@@ -452,6 +1137,7 @@ function Get-FixItShortcutPaths {
     foreach ($w in @('Desktop', 'Programs')) {
         try { $fo = [Environment]::GetFolderPath($w); if ($fo) { $list += (Join-Path $fo $script:ShortcutFileName) } } catch { }
     }
+    try { $fo = [Environment]::GetFolderPath('Programs'); if ($fo) { $list += (Join-Path $fo $script:TestShortcutFileName) } } catch { }
     return $list
 }
 function Read-FixItShortcut {
@@ -511,6 +1197,7 @@ function Set-FixItFormIcon {
 # If the icon file is missing (for example after an update from a version that did not know about it), fetch it
 # from the update list, check its fingerprint, then point the shortcuts at it. Quiet; never asks anything.
 function Repair-FixItIcon {
+    if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Repair-FixItIcon' -Arguments $PSBoundParameters; return $false }
     if ($script:DryRun) { return $false }
     $ico = Get-FixItIconPath
     if (Test-FixItIconFile -Path $ico) { [void](Update-FixItShortcutIcons); return $false }
@@ -550,6 +1237,7 @@ function Test-FixItHas {
 
 function Set-RegString {
     param([string]$Path, [string]$Name, [string]$Value)
+    if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Set-RegString' -Arguments $PSBoundParameters; return }
     Register-FixItRegUndo -Path $Path -Name $Name
     if (-not (Test-Path -LiteralPath $Path)) { New-Item -Path $Path -Force | Out-Null }
     New-ItemProperty -LiteralPath $Path -Name $Name -Value $Value -PropertyType String -Force | Out-Null
@@ -559,6 +1247,11 @@ function Set-RegString {
 # Runs a program and returns its exit code and text. -Live shows the program's own progress in the window.
 function Invoke-FixItNative {
     param([string]$File, [string[]]$Arguments = @(), [switch]$Live)
+    if ($script:TestMode -and -not (Test-FixItNativeReadOnly -File $File -Arguments $Arguments)) {
+        Invoke-FixItProbe -Adapter 'Invoke-FixItNative' -Arguments $PSBoundParameters
+        return [pscustomobject]@{ ExitCode = 0; Output = '' }
+    }
+    if ((Test-FixItOffUiWanted) -and -not $Live) { return (Invoke-FixItOffUi -Command 'Invoke-FixItNative' -Arguments $PSBoundParameters) }
     $old = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
@@ -576,9 +1269,15 @@ function Invoke-FixItTool {
     if ($OkCodes -notcontains [int]$r.ExitCode) { throw ('{0} ended with code {1}' -f $File, $r.ExitCode) }
 }
 
-function Open-FixItSettings { param([string]$Uri) Start-Process -FilePath $Uri | Out-Null }
-function Open-FixItUrl { param([string]$Url) Start-Process -FilePath $Url | Out-Null }
-function Restart-FixItComputer { Start-Process -FilePath 'shutdown.exe' -ArgumentList @('/r', '/t', '30', '/c', 'Family Fix-It: restarting your computer in 30 seconds. Save your work.') | Out-Null }
+function Open-FixItSettings { param([string]$Uri)
+    if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Open-FixItSettings' -Arguments $PSBoundParameters; return }
+ Start-Process -FilePath $Uri | Out-Null }
+function Open-FixItUrl { param([string]$Url)
+    if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Open-FixItUrl' -Arguments $PSBoundParameters; return }
+ Start-Process -FilePath $Url | Out-Null }
+function Restart-FixItComputer {
+    if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Restart-FixItComputer' -Arguments $PSBoundParameters; return }
+ Start-Process -FilePath 'shutdown.exe' -ArgumentList @('/r', '/t', '30', '/c', 'Family Fix-It: restarting your computer in 30 seconds. Save your work.') | Out-Null }
 
 function Get-FixItServiceStatus {
     param([string]$Name)
@@ -586,42 +1285,56 @@ function Get-FixItServiceStatus {
 }
 function Stop-FixItService {
     param([string]$Name)
+    if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Stop-FixItService' -Arguments $PSBoundParameters; return }
+    if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Stop-FixItService' -Arguments $PSBoundParameters) }
     $s = Get-Service -Name $Name -ErrorAction Stop
     if ($s.Status -eq 'Stopped') { return }
     Stop-Service -Name $Name -Force -ErrorAction Stop
     $end = (Get-Date).AddSeconds(30)
-    while ((Get-Service -Name $Name).Status -ne 'Stopped' -and (Get-Date) -lt $end) { Start-Sleep -Milliseconds 500 }
+    while ((Get-Service -Name $Name).Status -ne 'Stopped' -and (Get-Date) -lt $end) { Wait-FixIt -Milliseconds 500 }
     if ((Get-Service -Name $Name).Status -ne 'Stopped') { throw ('{0} did not stop' -f $Name) }
 }
 function Start-FixItService {
     param([string]$Name)
+    if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Start-FixItService' -Arguments $PSBoundParameters; return }
+    if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Start-FixItService' -Arguments $PSBoundParameters) }
     $s = Get-Service -Name $Name -ErrorAction Stop
     if ($s.Status -eq 'Running') { return }
     Start-Service -Name $Name -ErrorAction Stop
     $end = (Get-Date).AddSeconds(30)
-    while ((Get-Service -Name $Name).Status -ne 'Running' -and (Get-Date) -lt $end) { Start-Sleep -Milliseconds 500 }
+    while ((Get-Service -Name $Name).Status -ne 'Running' -and (Get-Date) -lt $end) { Wait-FixIt -Milliseconds 500 }
     if ((Get-Service -Name $Name).Status -ne 'Running') { throw ('{0} did not start' -f $Name) }
 }
 
 function Get-FixItFreeBytes {
+    if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Get-FixItFreeBytes' -Arguments $PSBoundParameters) }
     $disk = Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DeviceID='C:'"
     if ($disk) { return [int64]$disk.FreeSpace }
     return [int64]0
 }
 function Get-FixItUptimeDays {
+    if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Get-FixItUptimeDays' -Arguments $PSBoundParameters) }
     $os = Get-CimInstance -ClassName Win32_OperatingSystem
     return [math]::Round(((Get-Date) - $os.LastBootUpTime).TotalDays, 1)
 }
+# Only the two flags Windows itself sets when an update needs a restart. PendingFileRenameOperations is NOT used:
+# installers and antivirus leave it set all the time, so it caused "restart waiting" when nothing was waiting.
 function Test-PendingReboot {
     foreach ($k in @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending',
                      'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired')) {
         if (Test-RegKey -Path $k) { return $true }
     }
-    $v = Get-RegValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager' -Name 'PendingFileRenameOperations'
-    if ($v) { return $true }
     return $false
 }
+# Days since the last REAL restart. With Windows "fast startup", Shut down does not reset this (only Restart does).
+$script:RestartHintDays = 7
+function Test-FixItRestartWanted {
+    $pending = $false; try { $pending = [bool](Test-PendingReboot) } catch { }
+    $days = 0; try { $days = [double](Get-FixItUptimeDays) } catch { }
+    return [pscustomobject]@{ Wanted = ($pending -or $days -gt $script:RestartHintDays); Pending = $pending; Days = $days }
+}
 function Get-FixItLastUpdate {
+    if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Get-FixItLastUpdate' -Arguments $PSBoundParameters) }
     try {
         $h = @(Get-HotFix -ErrorAction Stop | Where-Object { $_.InstalledOn } | Sort-Object InstalledOn -Descending | Select-Object -First 1)
         if ($h.Count -gt 0) { return ('{0} on {1}' -f $h[0].HotFixID, ([datetime]$h[0].InstalledOn).ToString('yyyy-MM-dd')) }
@@ -630,16 +1343,20 @@ function Get-FixItLastUpdate {
 }
 function Get-FixItTopApps {
     param([int]$Count = 5)
+    if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Get-FixItTopApps' -Arguments $PSBoundParameters) }
     $g = @(Get-Process -ErrorAction SilentlyContinue | Group-Object -Property ProcessName | ForEach-Object {
         [pscustomobject]@{ Name = $_.Name; MemMB = [math]::Round((($_.Group | Measure-Object -Property WorkingSet64 -Sum).Sum) / 1MB) } })
     return @($g | Sort-Object MemMB -Descending | Select-Object -First $Count)
 }
 function Get-FixItHungApps {
+    if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Get-FixItHungApps' -Arguments $PSBoundParameters) }
     return @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 -and -not $_.Responding } |
         ForEach-Object { [pscustomobject]@{ Name = $_.ProcessName; Id = $_.Id; Title = [string]$_.MainWindowTitle } })
 }
 function Stop-FixItApp {
     param([int]$Id)
+    if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Stop-FixItApp' -Arguments $PSBoundParameters; return }
+    if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Stop-FixItApp' -Arguments $PSBoundParameters) }   # it waits up to 5 seconds for the program to close
     $p = Get-Process -Id $Id -ErrorAction Stop
     [void]$p.CloseMainWindow()
     if (-not $p.WaitForExit(5000)) { $p.Kill() }
@@ -662,6 +1379,7 @@ function Test-SafeCleanPath {
 
 function Get-FixItFolderBytes {
     param([string]$Path)
+    if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Get-FixItFolderBytes' -Arguments $PSBoundParameters) }
     if (-not (Test-Path -LiteralPath $Path)) { return [int64]0 }
     $m = Get-ChildItem -LiteralPath $Path -Recurse -Force -File -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum
     if ($m -and $m.Sum) { return [int64]$m.Sum }
@@ -671,6 +1389,8 @@ function Get-FixItFolderBytes {
 # Empties a folder (keeps the folder). Files that are in use are skipped. Returns the bytes freed.
 function Clear-FixItFolder {
     param([string]$Path)
+    if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Clear-FixItFolder' -Arguments $PSBoundParameters; return [int64]0 }
+    if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Clear-FixItFolder' -Arguments $PSBoundParameters) }
     if (-not (Test-SafeCleanPath -Path $Path)) { throw ('Refusing to clean this folder: {0}' -f $Path) }
     if (-not (Test-Path -LiteralPath $Path)) { return [int64]0 }
     $before = Get-FixItFolderBytes -Path $Path
@@ -680,9 +1400,13 @@ function Clear-FixItFolder {
     $after = Get-FixItFolderBytes -Path $Path
     return [int64]([math]::Max([int64]0, $before - $after))
 }
-function Clear-FixItRecycleBin { Clear-RecycleBin -Force -ErrorAction Stop }
+function Clear-FixItRecycleBin {
+    if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Clear-FixItRecycleBin' -Arguments $PSBoundParameters; return }
+    if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Clear-FixItRecycleBin' -Arguments $PSBoundParameters) }
+ Clear-RecycleBin -Force -ErrorAction Stop }
 
 function Get-FixItBrowserCacheFolders {
+    if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Get-FixItBrowserCacheFolders' -Arguments $PSBoundParameters) }
     $out = @()
     $local = $env:LOCALAPPDATA
     if (-not $local) { return $out }
@@ -700,16 +1424,19 @@ function Get-FixItBrowserCacheFolders {
 
 # ----- internet checks
 function Get-FixItGateway {
+    if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Get-FixItGateway' -Arguments $PSBoundParameters) }
     $c = @(Get-CimInstance -ClassName Win32_NetworkAdapterConfiguration -Filter 'IPEnabled=True' -ErrorAction Stop)
     foreach ($a in $c) { foreach ($g in @($a.DefaultIPGateway)) { if ($g -and $g -match '^\d+\.\d+\.\d+\.\d+$') { return [string]$g } } }
     return ''
 }
 function Test-FixItPing {
     param([string]$Target)
+    if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Test-FixItPing' -Arguments $PSBoundParameters) }
     try { return [bool](Test-Connection -ComputerName $Target -Count 2 -Quiet -ErrorAction Stop) } catch { return $false }
 }
 function Test-FixItDns {
     param([string]$Name)
+    if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Test-FixItDns' -Arguments $PSBoundParameters) }
     try { return (@([Net.Dns]::GetHostAddresses($Name)).Count -gt 0) } catch { return $false }
 }
 function Test-FixItWeb {
@@ -724,9 +1451,13 @@ function Get-FixItUserProxy {
     }
 }
 function Get-FixItAdapters {
+    if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Get-FixItAdapters' -Arguments $PSBoundParameters) }
     return @(Get-NetAdapter -Physical -ErrorAction Stop | Where-Object { $_.Status -eq 'Up' } | ForEach-Object { [string]$_.Name })
 }
-function Restart-FixItAdapter { param([string]$Name) Restart-NetAdapter -Name $Name -Confirm:$false -ErrorAction Stop }
+function Restart-FixItAdapter { param([string]$Name)
+    if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Restart-FixItAdapter' -Arguments $PSBoundParameters; return }
+    if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Restart-FixItAdapter' -Arguments $PSBoundParameters) }
+ Restart-NetAdapter -Name $Name -Confirm:$false -ErrorAction Stop }
 
 # ----- sound, microphone, camera
 function Initialize-FixItAudio {
@@ -788,6 +1519,7 @@ function Get-FixItAudioDevice {
 }
 function Set-FixItAudioDevice {
     param([ValidateSet('Speakers', 'Microphone')][string]$Kind, [int]$Volume, [bool]$Muted = $false)
+    if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Set-FixItAudioDevice' -Arguments $PSBoundParameters; return }
     $flow = 0; if ($Kind -eq 'Microphone') { $flow = 1 }
     Initialize-FixItAudio
     [FixItAudio]::Set($flow, $Volume, $Muted)
@@ -810,6 +1542,7 @@ function Get-FixItCameras {
 
 # ----- Outlook
 function Get-FixItOutlookAddins {
+    if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Get-FixItOutlookAddins' -Arguments $PSBoundParameters) }
     $out = @()
     $roots = @('HKCU:\Software\Microsoft\Office\Outlook\Addins', 'HKLM:\SOFTWARE\Microsoft\Office\Outlook\Addins', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Office\Outlook\Addins')
     foreach ($r in $roots) {
@@ -835,12 +1568,14 @@ function Get-FixItCrashingAddins {
     return $out
 }
 function Start-FixItOutlookSafe {
+    if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Start-FixItOutlookSafe' -Arguments $PSBoundParameters; return }
     $ol = Get-OutlookInfo
     $exe = 'outlook.exe'
     if ($ol.Installed -and $ol.Path) { $exe = $ol.Path }
     Start-Process -FilePath $exe -ArgumentList '/safe' | Out-Null
 }
 function Start-FixItOutlook {
+    if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Start-FixItOutlook' -Arguments $PSBoundParameters; return }
     $ol = Get-OutlookInfo
     $exe = 'outlook.exe'
     if ($ol.Installed -and $ol.Path) { $exe = $ol.Path }
@@ -850,12 +1585,14 @@ function Start-FixItOutlook {
 $script:OutlookProcessNames = @('OUTLOOK', 'olk')
 function Stop-FixItAppsByName {
     param([string[]]$ProcessNames)
+    if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Stop-FixItAppsByName' -Arguments $PSBoundParameters; return }
     foreach ($p in @(Get-Process -Name $ProcessNames -ErrorAction SilentlyContinue)) { try { $p.Kill() } catch { } }
     $end = (Get-Date).AddSeconds(10)
-    while (@(Get-Process -Name $ProcessNames -ErrorAction SilentlyContinue).Count -gt 0 -and (Get-Date) -lt $end) { Start-Sleep -Milliseconds 300 }
+    while (@(Get-Process -Name $ProcessNames -ErrorAction SilentlyContinue).Count -gt 0 -and (Get-Date) -lt $end) { Wait-FixIt -Milliseconds 300 }
 }
 # ----- browsers
 function Get-FixItBrowserProfiles {
+    if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Get-FixItBrowserProfiles' -Arguments $PSBoundParameters) }
     $out = @()
     $local = $env:LOCALAPPDATA
     if (-not $local) { return $out }
@@ -892,6 +1629,7 @@ function Get-FixItBrowserSettings {
 }
 function Get-FixItBrowserExtensions {
     param([string]$Dir)
+    if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Get-FixItBrowserExtensions' -Arguments $PSBoundParameters) }
     $out = @()
     $root = Join-Path $Dir 'Extensions'
     if (-not (Test-Path -LiteralPath $root)) { return $out }
@@ -920,15 +1658,20 @@ function Get-FixItBrowserExtensions {
 }
 function Copy-FixItBackup {
     param([string]$Source, [string]$DestDir)
+    if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Copy-FixItBackup' -Arguments $PSBoundParameters; return }
+    if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Copy-FixItBackup' -Arguments $PSBoundParameters) }
     if (-not (Test-Path -LiteralPath $Source)) { return }
     if (-not (Test-Path -LiteralPath $DestDir)) { New-Item -ItemType Directory -Path $DestDir -Force | Out-Null }
     Copy-Item -LiteralPath $Source -Destination $DestDir -Force -ErrorAction Stop
 }
-function Start-FixItDefenderScan { Start-MpScan -ScanType QuickScan -ErrorAction Stop }
+function Start-FixItDefenderScan {
+    if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Start-FixItDefenderScan' -Arguments $PSBoundParameters; return }
+ Start-MpScan -ScanType QuickScan -ErrorAction Stop }
 
 # ----- Windows Update
 function Rename-FixItFolderAside {
     param([string]$Path, [string]$Tag)
+    if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Rename-FixItFolderAside' -Arguments $PSBoundParameters; return '' }
     if (-not (Test-Path -LiteralPath $Path)) { return }
     $leaf = Split-Path -Leaf $Path
     $parent = Split-Path -Parent $Path
@@ -952,6 +1695,7 @@ function Get-FixItState {
 }
 function Set-FixItStateValue {
     param([string]$Name, [string]$Value)
+    if ($script:TestMode) { return }
     $f = Get-FixItStateFile
     $d = Split-Path -Parent $f
     if (-not (Test-Path -LiteralPath $d)) { New-Item -ItemType Directory -Path $d -Force | Out-Null }
@@ -964,6 +1708,7 @@ function Set-FixItStateValue {
 
 # ----- OneDrive
 function Get-FixItOneDriveInfo {
+    if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Get-FixItOneDriveInfo' -Arguments $PSBoundParameters) }
     $exe = ''
     foreach ($c in @(($env:LOCALAPPDATA + '\Microsoft\OneDrive\OneDrive.exe'), ($env:ProgramFiles + '\Microsoft OneDrive\OneDrive.exe'), (${env:ProgramFiles(x86)} + '\Microsoft OneDrive\OneDrive.exe'))) {
         if ($c -and (Test-Path -LiteralPath $c)) { $exe = $c; break }
@@ -1002,45 +1747,75 @@ function Get-FixItKnownFolders {
 }
 function Start-FixItOneDriveReset {
     param([string]$Exe)
+    if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Start-FixItOneDriveReset' -Arguments $PSBoundParameters; return }
     Start-Process -FilePath $Exe -ArgumentList '/reset' | Out-Null
 }
 function Start-FixItOneDrive {
     param([string]$Exe)
+    if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Start-FixItOneDrive' -Arguments $PSBoundParameters; return }
     Start-Process -FilePath $Exe | Out-Null
+}
+
+# Small adapters that were inline code before. Test mode checks them instead of running them.
+function Write-FixItTextFile {
+    param([string]$Path, [string]$Text)
+    if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Write-FixItTextFile' -Arguments $PSBoundParameters; return }
+    [IO.File]::WriteAllText($Path, $Text, (New-Object Text.UTF8Encoding($true)))
+}
+function Set-FixItServiceStartType {
+    param([string]$Name, [string]$StartType)
+    if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Set-FixItServiceStartType' -Arguments $PSBoundParameters; return }
+    Set-Service -Name $Name -StartupType $StartType
+}
+function Open-FixItBrowserPage {
+    param([string]$Exe, [string]$Url)
+    if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Open-FixItBrowserPage' -Arguments $PSBoundParameters; return }
+    Start-Process -FilePath $Exe -ArgumentList $Url | Out-Null
 }
 
 # ----- extra facts for reports
 function Get-FixItCrashes {
+    if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Get-FixItCrashes' -Arguments $PSBoundParameters) }
     $out = @()
     try {
         $ev = @(Get-WinEvent -FilterHashtable @{ LogName = 'System'; ProviderName = 'Microsoft-Windows-WER-SystemErrorReporting'; Id = 1001; StartTime = (Get-Date).AddDays(-30) } -MaxEvents 10 -ErrorAction Stop)
         foreach ($e in $ev) { $out += [pscustomobject]@{ Time = [datetime]$e.TimeCreated; Message = [string]$e.Message } }
-    } catch { }
+    } catch { if (-not (Test-FixItNoEvents -Err $_)) { throw } }
     return $out
 }
 function Get-FixItUnexpectedShutdowns {
-    try { return @(Get-WinEvent -FilterHashtable @{ LogName = 'System'; ProviderName = 'Microsoft-Windows-Kernel-Power'; Id = 41; StartTime = (Get-Date).AddDays(-30) } -MaxEvents 50 -ErrorAction Stop).Count } catch { return 0 }
+    if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Get-FixItUnexpectedShutdowns' -Arguments $PSBoundParameters) }
+    try { return @(Get-WinEvent -FilterHashtable @{ LogName = 'System'; ProviderName = 'Microsoft-Windows-Kernel-Power'; Id = 41; StartTime = (Get-Date).AddDays(-30) } -MaxEvents 50 -ErrorAction Stop).Count } catch {
+        if (Test-FixItNoEvents -Err $_) { return 0 }
+        throw
+    }
 }
 function Get-FixItDiskHealth {
+    if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Get-FixItDiskHealth' -Arguments $PSBoundParameters) }
     $out = @()
     try {
         foreach ($d in @(Get-PhysicalDisk -ErrorAction Stop)) {
             $out += [pscustomobject]@{ Name = [string]$d.FriendlyName; Type = [string]$d.MediaType; Health = [string]$d.HealthStatus; Status = [string]$d.OperationalStatus }
         }
-    } catch { }
+    } catch { Write-FixItLog ('Disk list not available: {0}' -f $_.Exception.Message) }
     $pred = 'not available'
     try {
         $s = @(Get-CimInstance -Namespace 'root\wmi' -ClassName 'MSStorageDriver_FailurePredictStatus' -ErrorAction Stop)
         if ($s.Count -gt 0) { if (@($s | Where-Object { $_.PredictFailure }).Count -gt 0) { $pred = 'FAILURE PREDICTED' } else { $pred = 'OK' } }
-    } catch { }
+    } catch {
+        if (Test-FixItAccessDenied -Err $_) { $pred = 'not checked (needs administrator rights)' }
+        Write-FixItLog ('Disk prediction not available: {0}' -f $_.Exception.Message)
+    }
     return [pscustomobject]@{ Disks = $out; SmartPrediction = $pred }
 }
 function Get-FixItRemoteToolProcesses {
+    if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Get-FixItRemoteToolProcesses' -Arguments $PSBoundParameters) }
     $pat = '^(AnyDesk|TeamViewer.*|ScreenConnect.*|ConnectWise.*|Splashtop.*|SRService|SRManager|LogMeIn.*|RustDesk|UltraViewer.*|ZA_Connect|ZohoMeeting|ZohoURS|ZAService|Zoho.*|quickassist|msra|vncviewer|winvnc|tvnserver|uvnc.*|Supremo.*|AmmyyAdmin|DWAgent.*|RemotePC.*|GoToAssist.*|g2.*agent|bomgar.*|BASupSrvc.*|Atera.*|AteraAgent|ISLLight|helpwire.*|aweray.*|ToDesk.*|Parsec.*|Chrome ?Remote.*|remoting_host)$'
     return @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -match $pat } | ForEach-Object { [pscustomobject]@{ Name = $_.ProcessName; Id = $_.Id } })
 }
 function Get-FixItRecentInstalls {
     param([int]$Days = 14)
+    if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Get-FixItRecentInstalls' -Arguments $PSBoundParameters) }
     $out = @()
     $cut = (Get-Date).AddDays(-$Days)
     foreach ($r in @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall', 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall')) {
@@ -1058,6 +1833,7 @@ function Get-FixItRecentInstalls {
 }
 function Get-FixItRecentDownloads {
     param([int]$Days = 7, [int]$Max = 30)
+    if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Get-FixItRecentDownloads' -Arguments $PSBoundParameters) }
     $dir = Join-Path $env:USERPROFILE 'Downloads'
     if (-not (Test-Path -LiteralPath $dir)) { return @() }
     return @(Get-ChildItem -LiteralPath $dir -File -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -ge (Get-Date).AddDays(-$Days) } |
@@ -1067,6 +1843,8 @@ function Get-FixItRecentDownloads {
 # Posts the report. This is the ONLY place that sends anything over the internet.
 function Send-WebReport {
     param([string]$Url, [string]$Json, [string]$AppValue)
+    if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Send-WebReport' -Arguments $PSBoundParameters; return 200 }
+    if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Send-WebReport' -Arguments $PSBoundParameters) }
     try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
     $bytes = (New-Object Text.UTF8Encoding($false)).GetBytes($Json)
     $r = Invoke-WebRequest -Uri $Url -Method Post -Body $bytes -ContentType 'application/json; charset=utf-8' -Headers @{ 'X-FixIt-App' = $AppValue } -UseBasicParsing -TimeoutSec 20
@@ -1078,6 +1856,7 @@ function Send-WebReport {
 # ---------------------------------------------------------------------------
 function Restore-FixItRegValue {
     param([string]$Path, [string]$Name, [bool]$Existed, [string]$Type, [string]$Value)
+    if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Restore-FixItRegValue' -Arguments $PSBoundParameters; return }
     if (-not $Existed) {
         if ((Test-Path -LiteralPath $Path) -and ((Get-Item -LiteralPath $Path).GetValueNames() -contains $Name)) { Remove-ItemProperty -LiteralPath $Path -Name $Name -Force -ErrorAction Stop }
         return
@@ -1091,12 +1870,14 @@ function Restore-FixItRegValue {
 }
 function Restore-FixItFile {
     param([string]$Backup, [string]$Original)
+    if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Restore-FixItFile' -Arguments $PSBoundParameters; return }
     if (-not (Test-Path -LiteralPath $Backup)) { throw 'The saved copy is gone' }
     Copy-Item -LiteralPath $Backup -Destination $Original -Force -ErrorAction Stop
 }
 # Puts a folder that was set aside back in place. The folder that Windows made meanwhile is kept next to it.
 function Restore-FixItFolder {
     param([string]$Path, [string]$Aside)
+    if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Restore-FixItFolder' -Arguments $PSBoundParameters; return }
     $leaf = Split-Path -Leaf $Path
     if ($leaf -notin @('SoftwareDistribution', 'catroot2')) { throw ('Refusing to touch {0}' -f $Path) }
     if (-not (Test-Path -LiteralPath $Aside)) { throw 'The saved folder is gone' }
@@ -1104,17 +1885,20 @@ function Restore-FixItFolder {
     Rename-Item -LiteralPath $Aside -NewName $leaf -ErrorAction Stop
 }
 function Get-FixItPendingUpdates {
+    if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Get-FixItPendingUpdates' -Arguments $PSBoundParameters) }
     $s = New-Object -ComObject 'Microsoft.Update.Session'
     $r = $s.CreateUpdateSearcher().Search("IsInstalled=0 and IsHidden=0")
     return [int]$r.Updates.Count
 }
 function Get-FixItDefender {
+    if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Get-FixItDefender' -Arguments $PSBoundParameters) }
     $m = Get-MpComputerStatus -ErrorAction Stop
     $q = $null; if ($m.QuickScanEndTime -and $m.QuickScanEndTime.Year -gt 2000) { $q = [datetime]$m.QuickScanEndTime }
     return [pscustomobject]@{ Enabled = [bool]$m.AMServiceEnabled; RealTime = [bool]$m.RealTimeProtectionEnabled; SignatureAgeDays = [int]$m.AntivirusSignatureAge; LastQuickScan = $q }
 }
 # Best effort: the newest time OneDrive wrote to its own logs.
 function Get-FixItOneDriveLastSync {
+    if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Get-FixItOneDriveLastSync' -Arguments $PSBoundParameters) }
     $dir = Join-Path $env:LOCALAPPDATA 'Microsoft\OneDrive\logs'
     if (-not (Test-Path -LiteralPath $dir)) { return $null }
     $f = @(Get-ChildItem -LiteralPath $dir -Recurse -File -Filter '*.log' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1)
@@ -1124,11 +1908,13 @@ function Get-FixItOneDriveLastSync {
 # True when the website answers at all (even with an error page); false when it cannot be reached.
 function Test-FixItHttps {
     param([string]$Url)
+    if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Test-FixItHttps' -Arguments $PSBoundParameters) }
     try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
     try { Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 10 -Method Head | Out-Null; return $true }
     catch { return ($null -ne (Get-FixItProp $_.Exception 'Response' $null)) }
 }
 function Restart-FixItNow {
+    if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Restart-FixItNow' -Arguments $PSBoundParameters; return }
     Start-Process -FilePath 'shutdown.exe' -ArgumentList @('/r', '/t', '0', '/c', 'Family Fix-It: restarting your computer.') | Out-Null
 }
 function Test-FixItTask {
@@ -1138,6 +1924,7 @@ function Test-FixItTask {
 }
 function Register-FixItTask {
     param([string]$Name, [string]$Xml)
+    if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Register-FixItTask' -Arguments $PSBoundParameters; return }
     $tmp = Join-Path ([IO.Path]::GetTempPath()) ('fixit-task-{0}.xml' -f ([guid]::NewGuid().ToString('N')))
     try {
         [IO.File]::WriteAllText($tmp, $Xml, [Text.Encoding]::Unicode)
@@ -1146,12 +1933,14 @@ function Register-FixItTask {
 }
 function Unregister-FixItTask {
     param([string]$Name)
+    if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Unregister-FixItTask' -Arguments $PSBoundParameters; return }
     Invoke-FixItTool -File 'schtasks.exe' -Arguments @('/Delete', '/TN', $Name, '/F')
 }
 
 # Runs one of this script's "...Admin" parts in a Windows-permission (UAC) window and waits for it.
 function Start-FixItElevated {
     param([string]$Part, [string]$ResultPath, [switch]$Visible, [string]$InputPath)
+    if ($script:TestMode) { throw 'Test mode never asks Windows for administrator rights.' }
     $q = { param($s) '"' + $s + '"' }
     $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (& $q $script:SelfPath), '-Action', $Part,
         '-LogPath', (& $q $script:LogFile), '-ResultFile', (& $q $ResultPath))
@@ -1160,10 +1949,7 @@ function Start-FixItElevated {
     $exe = Join-Path $PSHOME 'powershell.exe'
     if (-not (Test-Path -LiteralPath $exe)) { $exe = 'powershell.exe' }
     $proc = Start-Process -FilePath $exe -ArgumentList $argList -Verb RunAs -WindowStyle $(if ($Visible) { 'Normal' } else { 'Hidden' }) -PassThru
-    while (-not $proc.HasExited) {
-        try { [System.Windows.Forms.Application]::DoEvents() } catch { }
-        Start-Sleep -Milliseconds 200
-    }
+    while (-not $proc.HasExited) { Wait-FixIt -Milliseconds 200 }
     return [int]$proc.ExitCode
 }
 
@@ -1187,6 +1973,7 @@ function Test-FixItCanAsk {
 # Questions for the person. The window and the command line each supply their own.
 function Confirm-FixIt {
     param([string]$Question, [string]$Title = 'Family Fix-It', [string]$Kind = '', [string]$Detail = '')
+    if ($script:TestAll) { Write-FixItLog ('Test all: answered yes to: {0}' -f $Question) 'TEST'; return $true }
     if ($script:GuiActive) {
         if ($Kind -eq 'Fixed') { return (Show-FixItFixedDialog -Title $Question -Detail $Detail) }
         $r = [System.Windows.Forms.MessageBox]::Show($Question, $Title, 'YesNo', 'Question')
@@ -1261,7 +2048,7 @@ function Invoke-PrinterAdmin {
 
     if ($state.StartType -eq 'Disabled') {
         $details += 'The printing service was switched off in Windows settings.'
-        if (-not (Invoke-FixItStep 'Set Print Spooler to start automatically' { Set-Service -Name 'Spooler' -StartupType Automatic })) { $ok = $false }
+        if (-not (Invoke-FixItStep 'Set Print Spooler to start automatically' { Set-FixItServiceStartType -Name 'Spooler' -StartType 'Automatic' })) { $ok = $false }
     }
     if (-not (Invoke-FixItStep 'Start the Print Spooler service' { Start-SpoolerService })) { $ok = $false }
 
@@ -1303,7 +2090,7 @@ function Invoke-PrinterRefreshUser {
         if ($removed) {
             $added = Invoke-FixItStep ('Add network printer {0} back' -f $p.Name) { Add-FixItPrinterConnection -Name $p.Name }
             if (-not $added -and -not $script:DryRun) {
-                $added = Invoke-FixItStep ('Try again to add network printer {0}' -f $p.Name) { Start-Sleep -Seconds 2; Add-FixItPrinterConnection -Name $p.Name }
+                $added = Invoke-FixItStep ('Try again to add network printer {0}' -f $p.Name) { Wait-FixIt -Seconds 2; Add-FixItPrinterConnection -Name $p.Name }
             }
         }
         if ($removed -and $added) { $fixed++ } else {
@@ -1575,7 +2362,7 @@ function Invoke-AcrobatRepairAdmin {
     $ok = $true
     $reboot = $false
     foreach ($prod in $products) {
-        if ($script:DryRun) { Write-FixItLog ('Would do: Repair {0} with msiexec /fa {1}' -f $prod.DisplayName, $prod.ProductCode) 'DRYRUN'; continue }
+        if ($script:DryRun) { [void](Invoke-FixItStep ('Repair {0} with msiexec /fa {1}' -f $prod.DisplayName, $prod.ProductCode) { [void](Invoke-Msi -ProductCode $prod.ProductCode) }); continue }
         Write-FixItLog ('Doing: Repair {0} with msiexec /fa {1}' -f $prod.DisplayName, $prod.ProductCode)
         try {
             $code = Invoke-Msi -ProductCode $prod.ProductCode
@@ -1597,6 +2384,7 @@ function Invoke-AcrobatRepair {
         Write-FixItLog 'Acrobat (full version) not found' 'WARN'
         return New-FixItResult $false 'Acrobat not found' 'The full version of Adobe Acrobat does not seem to be installed on this computer. Please click "Something else is wrong" and send Trey the report.'
     }
+    if ($script:TestMode) { [void](Invoke-FixItStep 'Ask Acrobat to close if it is open' { Request-AppClose -ProcessNames @('Acrobat', 'AcroCEF', 'AcroRd32') }) }
     if (@(Get-RunningApp -ProcessNames @('Acrobat', 'AcroCEF', 'AcroRd32')).Count -gt 0 -and -not $script:DryRun) {
         if (Confirm-FixIt 'Acrobat is open. It needs to be closed before it can be repaired. Close it now? (Save your work first.)') {
             Request-AppClose -ProcessNames @('Acrobat', 'AcroCEF', 'AcroRd32')
@@ -1716,6 +2504,45 @@ function Invoke-AcrobatFix {
 # ---------------------------------------------------------------------------
 # 3. Something else is wrong: make a report (never sends anything)
 # ---------------------------------------------------------------------------
+# True when an error means "you are not an administrator" (access denied and friends).
+function Test-FixItAccessDenied {
+    param($Err)
+    if ($null -eq $Err) { return $false }
+    $e = $Err
+    if ($Err -is [System.Management.Automation.ErrorRecord]) {
+        $e = $Err.Exception
+        try { if ([string]$Err.CategoryInfo.Category -eq 'PermissionDenied') { return $true } } catch { }
+    }
+    $n = 0
+    while ($null -ne $e -and $n -lt 5) {
+        if ($e -is [UnauthorizedAccessException] -or $e -is [System.Security.SecurityException]) { return $true }
+        if ([string]$e.Message -match '(?i)access.{0,60}denied|unauthorized|not authorized|requires elevation|elevated|privilege|0x80041003') { return $true }
+        $e = $e.InnerException
+        $n++
+    }
+    return $false
+}
+
+# Plain note for the report when one item could not be read. The technical reason goes only in the log.
+function Get-FixItReportItemNote {
+    param([string]$Label, $Err)
+    $why = ''; try { $why = [string]$Err.Exception.Message } catch { $why = [string]$Err }
+    if (Test-FixItAccessDenied -Err $Err) {
+        Write-FixItLog ('Report item "{0}" needs administrator rights, so it was left out: {1}' -f $Label, $why)
+        return ('{0}: not shown (needs administrator rights)' -f $Label)
+    }
+    Write-FixItLog ('Report item "{0}" could not be read: {1}' -f $Label, $why) 'WARN'
+    return ('{0}: not available on this PC' -f $Label)
+}
+
+# One small piece of a report section. If it fails, only this piece becomes a short note; the rest of the section still shows.
+function Invoke-ReportItem {
+    param([string]$Label, [scriptblock]$Body)
+    $lines = @()
+    try { $lines = @(& $Body) } catch { return @(Get-FixItReportItemNote -Label $Label -Err $_) }
+    return $lines
+}
+
 function Add-ReportSection {
     param([System.Collections.Generic.List[string]]$Out, [string]$Title, [scriptblock]$Body)
     $Out.Add('')
@@ -1723,8 +2550,7 @@ function Add-ReportSection {
     try {
         foreach ($l in @(& $Body)) { $Out.Add([string]$l) }
     } catch {
-        $Out.Add('(Could not read this: ' + $_.Exception.Message + ')')
-        Write-FixItLog ('Report section "{0}" failed: {1}' -f $Title, $_.Exception.Message) 'WARN'
+        $Out.Add((Get-FixItReportItemNote -Label 'This part' -Err $_))
     }
 }
 
@@ -1739,121 +2565,181 @@ function Format-EventLines {
     }
 }
 
+function Format-FixItPrintJobLine {
+    param($Jobs)
+    $j = @($Jobs | Where-Object { $null -ne $_ })
+    if ($j.Count -eq 0) { return '      Waiting print jobs: 0' }
+    $sts = @($j | ForEach-Object { [string]$_.Status } | Where-Object { $_ } | Sort-Object -Unique)
+    $old = ''
+    $subs = @($j | Where-Object { $_.Submitted } | ForEach-Object { [datetime]$_.Submitted } | Sort-Object)
+    if ($subs.Count -gt 0) { $old = ', oldest submitted {0}' -f $subs[0].ToString('yyyy-MM-dd HH:mm') }
+    return ('      Waiting print jobs: {0}{1}{2}' -f $j.Count, $old, $(if ($sts.Count -gt 0) { ' (status: ' + ($sts -join ', ') + ')' } else { '' }))
+}
+
 function Get-FixItReportText {
     param([ValidateSet('report', 'scam')][string]$Kind = 'report', [string]$Note = '')
     $o = New-Object 'System.Collections.Generic.List[string]'
     if ($Kind -eq 'scam') { $o.Add('FAMILY FIX-IT *** SCAM ALERT ***'); $o.Add('A scary pop-up alert (the red button, or the pop-up watcher). Call them now.') }
     else { $o.Add('FAMILY FIX-IT REPORT') }
     $o.Add('Made: ' + (Get-Date -Format 'yyyy-MM-dd HH:mm') + '   Tool version: ' + $script:FixItVersion)
-    $o.Add((Get-FixItPcCodeLine))
+    foreach ($l in (Invoke-ReportItem 'PC code' { Get-FixItPcCodeLine })) { $o.Add([string]$l) }
     $o.Add('This report is saved on the Desktop and sent to Trey by the tool.')
     $o.Add('(It includes the computer name, the Windows user name and the printer names.)')
     if ($Note) { $o.Add(''); $o.Add('NOTE: ' + $Note) }
 
     Add-ReportSection $o 'Windows' {
-        $i = Get-FixItOsInfo
-        'Computer name: ' + $i.ComputerName
-        'Windows user: ' + $i.UserName
-        'Windows: {0} (version {1}, build {2}, {3})' -f $i.Caption, $i.Version, $i.Build, $i.Arch
-        'Last restarted: ' + $i.LastBoot
-        'Free space on C: ' + $(if ($null -ne $i.FreeGB) { '{0} GB' -f $i.FreeGB } else { 'unknown' })
-        'Running as administrator: ' + (Test-FixItAdmin)
+        $info = $null
+        try { $info = Get-FixItOsInfo } catch { Get-FixItReportItemNote -Label 'Windows details' -Err $_ }
+        if ($info) {
+            'Computer name: ' + $info.ComputerName
+            'Windows user: ' + $info.UserName
+            'Windows: {0} (version {1}, build {2}, {3})' -f $info.Caption, $info.Version, $info.Build, $info.Arch
+            'Last restarted: ' + $info.LastBoot
+            'Free space on C: ' + $(if ($null -ne $info.FreeGB) { '{0} GB' -f $info.FreeGB } else { 'unknown' })
+        } else {
+            'Computer name: ' + $env:COMPUTERNAME
+            'Windows user: ' + $env:USERNAME
+        }
+        Invoke-ReportItem 'Running as administrator' { 'Running as administrator: ' + (Test-FixItAdmin) }
     }
     if ($Kind -eq 'scam') { Add-ReportSection $o 'Scam check: remote-control programs, recent installs and downloads' { Get-FixItScamLines } }
     Add-ReportSection $o 'Health check' { Get-FixItHealthLines }
     Add-ReportSection $o 'Printing' {
-        $s = Get-SpoolerState
-        'Print Spooler service: {0} (starts: {1})' -f $s.Status, $s.StartType
-        $f = @(Get-SpoolFiles)
-        'Files waiting in the print queue folder: ' + $f.Count
-        $pr = @(Get-FixItPrinters)
-        'Printers found: ' + $pr.Count
-        foreach ($p in $pr) {
-            '  - {0}{1}  [{2}] status={3}{4}' -f $p.Name, $(if ($p.IsDefault) { ' (default)' } else { '' }), $(if ($p.IsNetwork) { 'network' } else { 'local/direct' }), $p.StatusText, $(if ($p.WorkOffline) { ' OFFLINE' } else { '' })
+        Invoke-ReportItem 'Print Spooler service' {
+            $s = Get-SpoolerState
+            'Print Spooler service: {0} (starts: {1})' -f $s.Status, $s.StartType
+        }
+        # The spool folder can only be read by an administrator. A normal user gets the per-printer job lists below instead.
+        if (Test-FixItAdmin) {
+            Invoke-ReportItem 'Files waiting in the print queue folder' { 'Files waiting in the print queue folder: ' + @(Get-SpoolFiles).Count }
+        } else {
+            'Print queue folder: not checked (it needs administrator rights). Waiting print jobs are listed for each printer instead.'
+        }
+        $ctx = @{ Printers = @(); Jobs = 0 }
+        Invoke-ReportItem 'Printers' {
+            $ctx.Printers = @(Get-FixItPrinters)
+            'Printers found: ' + $ctx.Printers.Count
+        }
+        foreach ($p in @($ctx.Printers)) {
+            Invoke-ReportItem ('Printer ' + [string]$p.Name) {
+                '  - {0}{1}  [{2}] status={3}{4}' -f $p.Name, $(if ($p.IsDefault) { ' (default)' } else { '' }), $(if ($p.IsNetwork) { 'network' } else { 'local/direct' }), $p.StatusText, $(if ($p.WorkOffline) { ' OFFLINE' } else { '' })
+            }
+            Invoke-ReportItem '      Waiting print jobs' {
+                $jobs = @(Get-FixItPrintJobs -PrinterName ([string]$p.Name))
+                $ctx.Jobs += $jobs.Count
+                Format-FixItPrintJobLine -Jobs $jobs
+            }
         }
     }
     Add-ReportSection $o 'Outlook' {
-        $ol = Get-OutlookInfo
-        'Outlook installed: ' + $ol.Installed
-        if ($ol.Installed) { 'Outlook version: {0} {1}' -f $ol.Version, $ol.Bitness }
-        'Outlook open right now: ' + (@(Get-RunningApp -ProcessNames @('OUTLOOK')).Count -gt 0)
+        Invoke-ReportItem 'Outlook details' {
+            $ol = Get-OutlookInfo
+            'Outlook installed: ' + $ol.Installed
+            if ($ol.Installed) { 'Outlook version: {0} {1}' -f $ol.Version, $ol.Bitness }
+        }
+        Invoke-ReportItem 'Outlook open right now' { 'Outlook open right now: ' + (@(Get-RunningApp -ProcessNames @('OUTLOOK')).Count -gt 0) }
     }
     Add-ReportSection $o 'Acrobat' {
-        $allProducts = @(Get-InstalledProducts)
-        $ac = @($allProducts | Where-Object { $_.DisplayName -match 'Acrobat' })
-        if ($ac.Count -eq 0) { 'No Adobe Acrobat or Reader found in the list of installed programs.' }
-        foreach ($a in $ac) { '{0}  version {1}{2}' -f $a.DisplayName, $a.DisplayVersion, $(if ($a.WindowsInstaller) { '  (repairable)' } else { '' }) }
-        $exe = Get-FixItFileVersion -ExeName 'Acrobat.exe'
-        if ($exe) { 'Acrobat.exe file version: ' + $exe }
-    }
-    Add-ReportSection $o 'Acrobat add-in in Outlook' {
-        $st = @(Get-AddinState)
-        if ($st.Count -eq 0) { 'The Acrobat PDFMaker add-in is not registered for Outlook.' }
-        foreach ($x in $st) { '{0}  LoadBehavior={1} {2}' -f $x.Path, $x.LoadBehavior, $(if ($x.LoadBehavior -eq 3) { '(on)' } else { '(OFF)' }) }
-        $h = @(Get-ResiliencyHits)
-        'Outlook has switched the Acrobat add-in off or flagged it as crashing: ' + $(if ($h.Count -gt 0) { 'YES (' + $h.Count + ' entries)' } else { 'no' })
-        foreach ($x in $h) { '  - {0} : {1}' -f $x.Path, $x.Name }
-        foreach ($v in $script:OfficeVersions) {
-            $d = @(Get-RegValueNames -Path ('HKCU:\Software\Microsoft\Office\{0}\Outlook\Resiliency\DisabledItems' -f $v))
-            if ($d.Count -gt 0) { 'Outlook {0}: {1} add-in(s) in its disabled list (any program)' -f $v, $d.Count }
+        Invoke-ReportItem 'Installed Acrobat programs' {
+            $allProducts = @(Get-InstalledProducts)
+            $ac = @($allProducts | Where-Object { $_.DisplayName -match 'Acrobat' })
+            if ($ac.Count -eq 0) { 'No Adobe Acrobat or Reader found in the list of installed programs.' }
+            foreach ($a in $ac) { '{0}  version {1}{2}' -f $a.DisplayName, $a.DisplayVersion, $(if ($a.WindowsInstaller) { '  (repairable)' } else { '' }) }
+        }
+        Invoke-ReportItem 'Acrobat.exe file version' {
+            $exe = Get-FixItFileVersion -ExeName 'Acrobat.exe'
+            if ($exe) { 'Acrobat.exe file version: ' + $exe }
         }
     }
-    Add-ReportSection $o 'Recent errors - System log (last 7 days, newest first)' { Format-EventLines (Get-FixItEvents -LogName 'System') }
-    Add-ReportSection $o 'Recent errors - Application log (last 7 days, newest first)' { Format-EventLines (Get-FixItEvents -LogName 'Application') }
+    Add-ReportSection $o 'Acrobat add-in in Outlook' {
+        Invoke-ReportItem 'Acrobat add-in settings' {
+            $st = @(Get-AddinState)
+            if ($st.Count -eq 0) { 'The Acrobat PDFMaker add-in is not registered for Outlook.' }
+            foreach ($x in $st) { '{0}  LoadBehavior={1} {2}' -f $x.Path, $x.LoadBehavior, $(if ($x.LoadBehavior -eq 3) { '(on)' } else { '(OFF)' }) }
+        }
+        Invoke-ReportItem 'Outlook add-in switched-off list' {
+            $h = @(Get-ResiliencyHits)
+            'Outlook has switched the Acrobat add-in off or flagged it as crashing: ' + $(if ($h.Count -gt 0) { 'YES (' + $h.Count + ' entries)' } else { 'no' })
+            foreach ($x in $h) { '  - {0} : {1}' -f $x.Path, $x.Name }
+        }
+        foreach ($v in $script:OfficeVersions) {
+            Invoke-ReportItem ('Outlook ' + $v + ' disabled list') {
+                $d = @(Get-RegValueNames -Path ('HKCU:\Software\Microsoft\Office\{0}\Outlook\Resiliency\DisabledItems' -f $v))
+                if ($d.Count -gt 0) { 'Outlook {0}: {1} add-in(s) in its disabled list (any program)' -f $v, $d.Count }
+            }
+        }
+    }
+    Add-ReportSection $o 'Recent errors - System log (last 7 days, newest first)' { Invoke-ReportItem 'System log' { Format-EventLines (Get-FixItEvents -LogName 'System') } }
+    Add-ReportSection $o 'Recent errors - Application log (last 7 days, newest first)' { Invoke-ReportItem 'Application log' { Format-EventLines (Get-FixItEvents -LogName 'Application') } }
     Add-ReportSection $o 'What this tool did recently (from its log)' {
-        if ($script:LogFile -and (Test-Path -LiteralPath $script:LogFile)) { @(Get-Content -LiteralPath $script:LogFile -Tail 40) } else { 'Nothing yet.' }
+        Invoke-ReportItem 'This tool''s log' {
+            if ($script:LogFile -and (Test-Path -LiteralPath $script:LogFile)) { @(Get-Content -LiteralPath $script:LogFile -Tail 40) } else { 'Nothing yet.' }
+        }
     }
     return ($o -join "`r`n")
 }
 
 # ---------------------------------------------------------------------------
-# Extra facts for every report
+# Extra facts for every report (each item stands alone: one failure never hides the others)
 # ---------------------------------------------------------------------------
 function Get-FixItHealthLines {
     $o = @()
-    $free = Get-FixItFreeBytes
-    $o += ('Free space on C: {0}' -f (Format-FixItBytes $free))
-    $o += ('Days since last restart: {0}' -f (Get-FixItUptimeDays))
-    $o += ('Windows waiting for a restart: {0}' -f $(if (Test-PendingReboot) { 'YES' } else { 'no' }))
-    $o += ('Last Windows update installed: {0}' -f (Get-FixItLastUpdate))
-    $c = Get-FixItConnection
-    $o += 'Connection test:'
-    foreach ($l in (Format-FixItConnection $c)) { $o += ('  ' + $l) }
-    $cr = @(Get-FixItCrashes)
-    if ($cr.Count -eq 0) { $o += 'Blue-screen crashes in the last 30 days: none found' }
-    else {
-        $o += ('Blue-screen crashes in the last 30 days: {0}' -f $cr.Count)
-        foreach ($x in $cr) {
-            $m = ([string]$x.Message) -replace '\s+', ' '
-            if ($m.Length -gt 200) { $m = $m.Substring(0, 200) + '...' }
-            $o += ('  {0}  {1}' -f ([datetime]$x.Time).ToString('yyyy-MM-dd HH:mm'), $m)
+    $o += Invoke-ReportItem 'Free space on C:' { 'Free space on C: {0}' -f (Format-FixItBytes (Get-FixItFreeBytes)) }
+    $o += Invoke-ReportItem 'Days since last restart' { 'Days since last restart: {0}' -f (Get-FixItUptimeDays) }
+    $o += Invoke-ReportItem 'Windows waiting for a restart' { 'Windows waiting for a restart: {0}' -f $(if (Test-PendingReboot) { 'YES' } else { 'no' }) }
+    $o += Invoke-ReportItem 'Last Windows update installed' { 'Last Windows update installed: {0}' -f (Get-FixItLastUpdate) }
+    $o += Invoke-ReportItem 'Connection test' {
+        $c = Get-FixItConnection
+        'Connection test:'
+        foreach ($l in (Format-FixItConnection $c)) { '  ' + $l }
+    }
+    $o += Invoke-ReportItem 'Blue-screen crashes in the last 30 days' {
+        $cr = @(Get-FixItCrashes)
+        if ($cr.Count -eq 0) { 'Blue-screen crashes in the last 30 days: none found' }
+        else {
+            'Blue-screen crashes in the last 30 days: {0}' -f $cr.Count
+            foreach ($x in $cr) {
+                $m = ([string]$x.Message) -replace '\s+', ' '
+                if ($m.Length -gt 200) { $m = $m.Substring(0, 200) + '...' }
+                '  {0}  {1}' -f ([datetime]$x.Time).ToString('yyyy-MM-dd HH:mm'), $m
+            }
         }
     }
-    $o += ('Unexpected shutdowns or power losses in the last 30 days: {0}' -f (Get-FixItUnexpectedShutdowns))
-    $dh = Get-FixItDiskHealth
-    $disks = @($dh.Disks)
-    if ($disks.Count -eq 0) { $o += 'Disk health: not available' }
-    foreach ($d in $disks) { $o += ('Disk {0} ({1}): health {2}, status {3}' -f $d.Name, $d.Type, $d.Health, $d.Status) }
-    $o += ('Disk SMART prediction: {0}' -f $dh.SmartPrediction)
-    $bk = Get-FixItBackupSummary
-    $o += ('OneDrive backup of Desktop/Documents/Pictures: {0}' -f $(if ($bk.Ok) { 'on' } else { 'WARNING' }))
-    foreach ($w in $bk.Warnings) { $o += ('  ' + $w) }
+    $o += Invoke-ReportItem 'Unexpected shutdowns or power losses in the last 30 days' { 'Unexpected shutdowns or power losses in the last 30 days: {0}' -f (Get-FixItUnexpectedShutdowns) }
+    $o += Invoke-ReportItem 'Disk health' {
+        $dh = Get-FixItDiskHealth
+        $disks = @($dh.Disks)
+        if ($disks.Count -eq 0) { 'Disk health: not available' }
+        foreach ($d in $disks) { 'Disk {0} ({1}): health {2}, status {3}' -f $d.Name, $d.Type, $d.Health, $d.Status }
+        'Disk SMART prediction: {0}' -f $dh.SmartPrediction
+    }
+    $o += Invoke-ReportItem 'OneDrive backup' {
+        $bk = Get-FixItBackupSummary
+        'OneDrive backup of Desktop/Documents/Pictures: {0}' -f $(if ($bk.Ok) { 'on' } else { 'not fully set up' })
+        foreach ($w in $bk.Warnings) { '  ' + $w }
+    }
     return $o
 }
 
 function Get-FixItScamLines {
     $o = @()
-    $rt = @(Get-FixItRemoteToolProcesses)
-    if ($rt.Count -eq 0) { $o += 'Remote-control programs running right now: none found' }
-    else { $o += 'REMOTE-CONTROL PROGRAMS RUNNING RIGHT NOW:'; foreach ($r in $rt) { $o += ('  {0} (process {1})' -f $r.Name, $r.Id) } }
-    $ins = @(Get-FixItRecentInstalls -Days 14)
-    $o += ''
-    if ($ins.Count -eq 0) { $o += 'Programs installed in the last 14 days: none found' }
-    else { $o += 'Programs installed in the last 14 days:'; foreach ($i in $ins) { $o += ('  {0}  {1}' -f ([datetime]$i.Date).ToString('yyyy-MM-dd'), $i.Name) } }
-    $dl = @(Get-FixItRecentDownloads -Days 7 -Max 30)
-    $o += ''
-    if ($dl.Count -eq 0) { $o += 'Files downloaded in the last 7 days: none found' }
-    else { $o += 'Files downloaded in the last 7 days (names only):'; foreach ($d in $dl) { $o += ('  {0}  {1}  ({2} KB)' -f ([datetime]$d.Date).ToString('yyyy-MM-dd HH:mm'), $d.Name, $d.KB) } }
+    $o += Invoke-ReportItem 'Remote-control programs' {
+        $rt = @(Get-FixItRemoteToolProcesses)
+        if ($rt.Count -eq 0) { 'Remote-control programs running right now: none found' }
+        else { 'REMOTE-CONTROL PROGRAMS RUNNING RIGHT NOW:'; foreach ($r in $rt) { '  {0} (process {1})' -f $r.Name, $r.Id } }
+    }
+    $o += Invoke-ReportItem 'Recent installs' {
+        $ins = @(Get-FixItRecentInstalls -Days 14)
+        ''
+        if ($ins.Count -eq 0) { 'Programs installed in the last 14 days: none found' }
+        else { 'Programs installed in the last 14 days:'; foreach ($i in $ins) { '  {0}  {1}' -f ([datetime]$i.Date).ToString('yyyy-MM-dd'), $i.Name } }
+    }
+    $o += Invoke-ReportItem 'Recent downloads' {
+        $dl = @(Get-FixItRecentDownloads -Days 7 -Max 30)
+        ''
+        if ($dl.Count -eq 0) { 'Files downloaded in the last 7 days: none found' }
+        else { 'Files downloaded in the last 7 days (names only):'; foreach ($d in $dl) { '  {0}  {1}  ({2} KB)' -f ([datetime]$d.Date).ToString('yyyy-MM-dd HH:mm'), $d.Name, $d.KB } }
+    }
     return $o
 }
 
@@ -1878,6 +2764,11 @@ function Send-FixItReport {
     param([string]$Text, [string]$Kind = 'report')
     $url = $script:ReportUrl
     if (-not $url -or $url -notmatch '^https://') { Write-FixItLog 'No valid report address is set, so nothing was sent' 'WARN'; return $false }
+    if ($script:TestMode) {
+        $json = ''
+        try { $json = Get-FixItReportJson -Text $Text -Kind $Kind } catch { Add-FixItTestNote -Step 'Send the report to Trey' -Status 'FAIL' -Text ('the report could not be put together: ' + $_.Exception.Message); return $true }
+        return [bool](Invoke-FixItStep ('Send the {0} to Trey' -f $Kind) { [void](Send-WebReport -Url $url -Json $json -AppValue $script:AppHeader) })
+    }
     if ($script:DryRun) { Write-FixItLog ('Would do: send the report to {0}' -f $url) 'DRYRUN'; return $true }
     try {
         $json = Get-FixItReportJson -Text $Text -Kind $Kind
@@ -1898,7 +2789,7 @@ function Save-FixItReportFile {
     if (-not $dir) { $dir = Get-DesktopFolder }
     $name = '{0}-{1}-{2}.txt' -f $Prefix, $env:COMPUTERNAME, (Get-Date -Format 'yyyyMMdd-HHmm')
     $path = Join-Path $dir $name
-    $ok = Invoke-FixItStep ('Save report to {0}' -f $path) { [IO.File]::WriteAllText($path, $Text, (New-Object Text.UTF8Encoding($true))) }
+    $ok = Invoke-FixItStep ('Save report to {0}' -f $path) { Write-FixItTextFile -Path $path -Text $Text }
     return [pscustomobject]@{ Ok = $ok; Path = $path; Name = $name }
 }
 
@@ -2009,6 +2900,7 @@ function Get-UpdateStatus {
 
 function Install-FixItUpdate {
     param($Manifest)
+    if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Install-FixItUpdate' -Arguments $PSBoundParameters; return }
     $stage = Join-Path ([IO.Path]::GetTempPath()) ('fixit-update-' + [guid]::NewGuid().ToString('N'))
     try {
         New-Item -ItemType Directory -Path $stage -Force | Out-Null
@@ -2066,6 +2958,7 @@ function Invoke-FixItUpdate {
         'Current'  { Write-FixItLog 'Already the newest version'; if ($Quiet) { return $null }; return New-FixItResult $true 'Up to date' ('You already have the newest version ({0}).' -f $script:FixItVersion) }
     }
     Write-FixItLog ('Newer version available: {0}' -f $s.Version)
+    if ($script:TestMode) { [void](Invoke-FixItStep ('Install version {0} (download the files and replace the program)' -f $s.Version) { Install-FixItUpdate -Manifest $s }) }
     if ($script:DryRun) {
         Write-FixItLog ('Would do: update from {0} to {1}' -f $script:FixItVersion, $s.Version) 'DRYRUN'
         return New-FixItResult $true 'Practice run' ('Practice run only - version {0} is available and would be installed.' -f $s.Version)
@@ -2090,7 +2983,7 @@ function Invoke-FixItUpdate {
 # A question for the person. In practice mode (-WhatIf) it just says yes so every step shows in the log.
 function Confirm-FixItStep {
     param([string]$Question)
-    if ($script:DryRun) { Write-FixItLog ('Would ask: {0}' -f $Question) 'DRYRUN'; return $true }
+    if ($script:DryRun -and -not $script:TestMode) { Write-FixItLog ('Would ask: {0}' -f $Question) 'DRYRUN'; return $true }
     $a = Confirm-FixIt -Question $Question
     Write-FixItLog ('Asked: {0} -> {1}' -f $Question, $(if ($a) { 'yes' } else { 'no' }))
     return [bool]$a
@@ -2145,7 +3038,7 @@ function Invoke-NetworkAdmin {
         $nn = $n
         if (-not (Invoke-FixItStep ('Restart network adapter {0}' -f $nn) { Restart-FixItAdapter -Name $nn })) { $ok = $false }
     }
-    if (-not $script:DryRun -and $names.Count -gt 0) { Start-Sleep -Seconds 8 }
+    if (-not $script:DryRun -and $names.Count -gt 0) { Wait-FixIt -Seconds 8 }
     Add-FixItCannotUndo 'Resetting the network settings and restarting the network adapters cannot be undone (it is safe to repeat).'
     return New-FixItResult $ok 'Network (all users)' $(if ($ok) { 'Done' } else { 'Some steps could not be done.' }) @() @{ Adapters = $names.Count }
 }
@@ -2164,13 +3057,14 @@ function Get-FixItCountdownText {
 # A friendly waiting window with a countdown. The window shows it; the command line prints it.
 function Show-FixItCountdown {
     param([int]$Seconds, [string]$Title = 'Please wait', [string]$Message = '')
+    if ($script:TestAll -or $script:TestMode) { Write-FixItLog ('Test mode: skipped the {0} second countdown' -f $Seconds) 'TEST'; return }
     if ($script:GuiActive) { Show-FixItCountdownDialog -Seconds $Seconds -Title $Title -Message $Message; return }
     Write-Host $Message
     $end = (Get-Date).AddSeconds($Seconds)
     while ((Get-Date) -lt $end) {
         $left = [int][math]::Ceiling(($end - (Get-Date)).TotalSeconds)
         Write-Host ('  {0}:{1:00} left - {2}' -f [int][math]::Floor($left / 60), ($left % 60), (Get-FixItCountdownText -Remaining $left -Total $Seconds))
-        Start-Sleep -Seconds ([math]::Min(10, [math]::Max(1, $left)))
+        Wait-FixIt -Seconds ([math]::Min(10, [math]::Max(1, $left)))
     }
 }
 
@@ -2464,7 +3358,11 @@ function Invoke-OutlookAdmin {
 # Closes every Outlook process (also the ones with no window). Returns 'closed', 'declined' (they said no to ending it by force) or 'stuck'.
 function Close-FixItOutlookFully {
     $names = $script:OutlookProcessNames
-    if ($script:DryRun) { Write-FixItLog 'Would do: close every Outlook program completely (and ask first before ending one by force)' 'DRYRUN'; return 'closed' }
+    if ($script:DryRun) {
+        Write-FixItLog 'Would do: close every Outlook program completely (and ask first before ending one by force)' 'DRYRUN'
+        if ($script:TestMode) { [void](Invoke-FixItStep 'Ask Outlook to close, and end it only if it is stuck' { Request-AppClose -ProcessNames $names; Stop-FixItAppsByName -ProcessNames $names }) }
+        return 'closed'
+    }
     if (@(Get-RunningApp -ProcessNames $names).Count -eq 0) { return 'closed' }
     Write-FixItLog 'Doing: close Outlook completely'
     Request-AppClose -ProcessNames $names
@@ -2473,10 +3371,10 @@ function Close-FixItOutlookFully {
         Write-FixItLog ('Asked: end Outlook by force -> {0}' -f $(if ($force) { 'yes' } else { 'no' }))
         if (-not $force) { return 'declined' }
         [void](Invoke-FixItStep 'End the Outlook programs that are still running' { Stop-FixItAppsByName -ProcessNames $names })
-        Start-Sleep -Seconds 2
+        Wait-FixIt -Seconds 2
         if (@(Get-RunningApp -ProcessNames $names).Count -gt 0) { Write-FixItLog 'Outlook is still running after ending it' 'ERROR'; return 'stuck' }
     }
-    Start-Sleep -Seconds 3
+    Wait-FixIt -Seconds 3
     return 'closed'
 }
 # Asks first (only when Outlook is open), then closes it completely. Same return values as Close-FixItOutlookFully.
@@ -2487,7 +3385,7 @@ function Close-FixItOutlookForFix {
     return (Close-FixItOutlookFully)
 }
 function Open-FixItOutlookForFix {
-    return (Invoke-FixItStep 'Open Outlook again' { Start-Sleep -Seconds 2; Start-FixItOutlook })
+    return (Invoke-FixItStep 'Open Outlook again' { Wait-FixIt -Seconds 2; Start-FixItOutlook })
 }
 $script:OutlookKeepText = 'Your email accounts, passwords, sign-ins and Outlook profiles were not touched.'
 function New-FixItOutlookCloseResult {
@@ -2627,7 +3525,7 @@ function Invoke-BrowserFix {
         $url = 'edge://settings/resetProfileSettings'; if ($b2 -eq 'Chrome') { $url = 'chrome://settings/resetProfileSettings' }
         if (Confirm-FixItStep ('{0}: your homepage or search engine was changed to something unusual. Open the {0} page where you can put them back to normal?' -f $b2)) {
             $exe = 'msedge.exe'; if ($b2 -eq 'Chrome') { $exe = 'chrome.exe' }
-            Invoke-FixItStep ('Open the {0} reset page' -f $b2) { Start-Process -FilePath $exe -ArgumentList $url | Out-Null } | Out-Null
+            Invoke-FixItStep ('Open the {0} reset page' -f $b2) { Open-FixItBrowserPage -Exe $exe -Url $url } | Out-Null
             $lines += ('{0}: opened its settings reset page. Click "Restore settings to their default values".' -f $b2)
         }
     }
@@ -2637,7 +3535,7 @@ function Invoke-BrowserFix {
         if (Confirm-FixItStep 'Open the extensions page so you can turn off the ones you do not want?') {
             $page = 'edge://extensions'; $exe2 = 'msedge.exe'
             if (@($profiles | Where-Object { $_.Browser -eq 'Edge' }).Count -eq 0) { $page = 'chrome://extensions'; $exe2 = 'chrome.exe' }
-            Invoke-FixItStep ('Open {0}' -f $page) { Start-Process -FilePath $exe2 -ArgumentList $page | Out-Null } | Out-Null
+            Invoke-FixItStep ('Open {0}' -f $page) { Open-FixItBrowserPage -Exe $exe2 -Url $page } | Out-Null
         }
     }
     if ($notifSites.Count -gt 0) {
@@ -2646,7 +3544,7 @@ function Invoke-BrowserFix {
         if (Confirm-FixItStep 'Open the notification settings so you can remove sites you do not want?') {
             $exe3 = 'msedge.exe'; $page3 = 'edge://settings/content/notifications'
             if (@($profiles | Where-Object { $_.Browser -eq 'Edge' }).Count -eq 0) { $exe3 = 'chrome.exe'; $page3 = 'chrome://settings/content/notifications' }
-            Invoke-FixItStep ('Open {0}' -f $page3) { Start-Process -FilePath $exe3 -ArgumentList $page3 | Out-Null } | Out-Null
+            Invoke-FixItStep ('Open {0}' -f $page3) { Open-FixItBrowserPage -Exe $exe3 -Url $page3 } | Out-Null
         }
     }
     if (Confirm-FixItStep 'Run a quick virus scan with Microsoft Defender now? It can take 5 to 10 minutes. Windows will ask for permission.') {
@@ -2778,8 +3676,8 @@ function Invoke-OneDriveFix {
     $okReset = Invoke-FixItStep 'Reset OneDrive (onedrive.exe /reset)' { Start-FixItOneDriveReset -Exe $exe }
     if ($okReset -and -not $script:DryRun) {
         $end = (Get-Date).AddSeconds(90)
-        Start-Sleep -Seconds 10
-        while (@(Get-FixItOneDriveInfo | ForEach-Object { $_.Running } | Where-Object { $_ }).Count -eq 0 -and (Get-Date) -lt $end) { Start-Sleep -Seconds 5 }
+        Wait-FixIt -Seconds 10
+        while (@(Get-FixItOneDriveInfo | ForEach-Object { $_.Running } | Where-Object { $_ }).Count -eq 0 -and (Get-Date) -lt $end) { Wait-FixIt -Seconds 5 }
         if (-not (Get-FixItOneDriveInfo).Running) { Invoke-FixItStep 'Start OneDrive again' { Start-FixItOneDrive -Exe $exe } | Out-Null }
     }
     if ($script:DryRun) { return New-FixItResult $true 'Practice run' 'Practice run only - nothing was changed. Details are in the log file.' $lines }
@@ -2862,6 +3760,7 @@ function Read-FixItUndoJournal {
 }
 function Write-FixItUndoJournal {
     param($Records)
+    if ($script:TestMode) { return }
     $f = Get-FixItUndoFile
     $d = Split-Path -Parent $f
     if ($d -and -not (Test-Path -LiteralPath $d)) { New-Item -ItemType Directory -Path $d -Force | Out-Null }
@@ -3257,7 +4156,8 @@ function Confirm-FixItPlan {
     $plan = Get-FixItPlan -Which $Which
     if ($null -eq $plan) { return $true }
     if ($script:Background) { return $true }   # background work is never asked
-    if ($script:DryRun) {
+    if ($script:TestAll) { return $true }
+    if ($script:DryRun -and -not $script:TestMode) {
         Write-FixItLog ('Would show the "what I will do" window for: {0}' -f $plan.Title) 'DRYRUN'
         foreach ($l in (Format-FixItPlanText -Plan $plan)) { if ($l) { Write-FixItLog ('  {0}' -f $l) 'DRYRUN' } }
         return $true
@@ -3293,7 +4193,8 @@ function Invoke-FixItFollowUp {
     if (-not $t -or -not $t.Fix -or $null -eq $Result) { return $null }
     if (Test-FixItDeclined $Result) { return $null }
     if (Test-FixItSkipFollowUp $Result) { return $null }
-    if ($script:DryRun) { Write-FixItLog 'Would ask: Did that fix it?' 'DRYRUN'; return $null }
+    if ($script:DryRun -and -not $script:TestMode) { Write-FixItLog 'Would ask: Did that fix it?' 'DRYRUN'; return $null }
+    if ($script:TestAll) { return $null }
     if (-not (Test-FixItCanAsk)) { Write-FixItLog 'Nobody is there to answer "Did that fix it?", so no report was sent' 'WARN'; return $null }
     $yes = Confirm-FixIt -Question 'Did that fix it?' -Title $t.Title -Kind 'Fixed' -Detail ("I just ran {0}. Try it now, then let me know." -f $t.Title)
     Write-FixItLog ('Did that fix it? ({0}) -> {1}' -f $t.Title, $(if ($yes) { 'yes' } else { 'NO' })) $(if ($yes) { 'INFO' } else { 'WARN' })
@@ -3305,7 +4206,15 @@ function Invoke-FixItFollowUp {
 # What the command line and the window both do for one button.
 function Invoke-FixItAndShow {
     param([string]$Which)
+    if ($script:TestMode) { Start-FixItTestButton }
     $r = Invoke-FixItAction -Which $Which
+    if ($script:TestMode) {
+        $f = Invoke-FixItFollowUp -Which $Which -Result $r
+        $said = Get-FixItTestSaid -Result $r
+        Complete-FixItTestRecords -Result $r
+        foreach ($l in (Format-FixItTestChecklist -Title ([string](Get-FixItActionTable)[$Which].Title) -Records (Get-FixItTestRecords) -Said $said)) { Write-Host $l }
+        return $r
+    }
     Show-FixItResult $r
     $f = Invoke-FixItFollowUp -Which $Which -Result $r
     if ($f) { Show-FixItResult $f }
@@ -3381,7 +4290,7 @@ function Get-FixItBackupSummary {
     $info = Get-FixItOneDriveInfo
     $accts = @($info.Accounts)
     $kf = Get-FixItKnownFolders
-    $warn = @(); $folders = @()
+    $warn = @(); $imp = @(); $folders = @()
     foreach ($pair in @(@('Desktop', $kf.Desktop), @('Documents', $kf.Documents), @('Pictures', $kf.Pictures))) {
         $path = [string]$pair[1]
         $inOd = $false
@@ -3393,18 +4302,18 @@ function Get-FixItBackupSummary {
     if (-not $info.Installed) { $warn += 'OneDrive is not installed, so your Desktop, Documents and Pictures are not backed up online.' }
     else {
         if ($accts.Count -eq 0) { $warn += 'OneDrive is not signed in, so nothing is being backed up online.' }
-        elseif (-not $info.Running) { $warn += 'OneDrive is not running, so nothing is being backed up right now.' }
+        elseif (-not $info.Running) { $warn += 'OneDrive is not running, so nothing is being backed up right now.'; $imp += $warn[$warn.Count - 1] }
         $off = @($folders | Where-Object { -not $_.InOneDrive })
         if ($off.Count -gt 0) { $warn += ('Not backed up to OneDrive: {0}.' -f (($off | ForEach-Object { $_.Name }) -join ', ')) }
         try { $last = Get-FixItOneDriveLastSync } catch { }
-        if ($accts.Count -gt 0 -and $last -and (((Get-Date) - [datetime]$last).TotalDays -gt 7)) { $warn += ('OneDrive has not synced for {0} days.' -f [int]((Get-Date) - [datetime]$last).TotalDays) }
+        if ($accts.Count -gt 0 -and $last -and (((Get-Date) - [datetime]$last).TotalDays -gt 7)) { $warn += ('OneDrive has not synced for {0} days.' -f [int]((Get-Date) - [datetime]$last).TotalDays); if (((Get-Date) - [datetime]$last).TotalDays -gt 14) { $imp += $warn[$warn.Count - 1] } }
         foreach ($a in $accts) {
             $st = 'Unknown'; try { $st = Get-FixItOneDriveSyncState -Kind $a.Kind } catch { }
-            if ($st -eq 'Paused') { $warn += ('OneDrive syncing is paused for {0}.' -f $a.Email) }
-            if ($st -eq 'Problem') { $warn += ('OneDrive has a sync problem for {0}.' -f $a.Email) }
+            if ($st -eq 'Paused') { $warn += ('OneDrive syncing is paused for {0}.' -f $a.Email); $imp += $warn[$warn.Count - 1] }
+            if ($st -eq 'Problem') { $warn += ('OneDrive has a sync problem for {0}.' -f $a.Email); $imp += $warn[$warn.Count - 1] }
         }
     }
-    return [pscustomobject]@{ Installed = [bool]$info.Installed; Running = [bool]$info.Running; SignedIn = ($accts.Count -gt 0); Folders = $folders; LastSync = $last; Warnings = $warn; Ok = ($warn.Count -eq 0) }
+    return [pscustomobject]@{ Installed = [bool]$info.Installed; Running = [bool]$info.Running; SignedIn = ($accts.Count -gt 0); Folders = $folders; LastSync = $last; Warnings = $warn; Important = $imp; Ok = ($warn.Count -eq 0) }
 }
 
 function Get-FixItHealthSummary {
@@ -3421,9 +4330,9 @@ function Get-FixItHealthSummary {
     if ($up -gt 14) { $attention += ('The computer has not been restarted for {0} days.' -f $up) }
     $pend = Test-PendingReboot
     $lines += ('Windows waiting for a restart: {0}' -f $(if ($pend) { 'YES' } else { 'no' }))
-    if ($pend) { $attention += 'Windows is waiting for a restart.' }
+    if ($pend) { $attention += 'Windows is waiting for a restart.' }   # only the two real Windows flags (see Test-PendingReboot)
     $pu = -1; try { $pu = [int](Get-FixItPendingUpdates) } catch { }
-    if ($pu -ge 0) { $lines += ('Windows updates waiting to install: {0}' -f $pu); if ($pu -gt 10) { $attention += ('{0} Windows updates are waiting.' -f $pu) } } else { $lines += 'Windows updates waiting to install: could not check' }
+    if ($pu -ge 0) { $lines += ('Windows updates waiting to install: {0}' -f $pu); if ($pu -gt 20) { $attention += ('{0} Windows updates are waiting.' -f $pu) } } else { $lines += 'Windows updates waiting to install: could not check' }
     $lines += ('Last Windows update installed: {0}' -f (Get-FixItLastUpdate))
     $d = $null; try { $d = Get-FixItDefender } catch { }
     if ($d) {
@@ -3432,14 +4341,14 @@ function Get-FixItHealthSummary {
         if ($d.LastQuickScan) { $ls = ([datetime]$d.LastQuickScan).ToString('yyyy-MM-dd'); $scanAge = [int]((Get-Date) - [datetime]$d.LastQuickScan).TotalDays }
         $lines += ('Last Defender scan: {0}' -f $ls)
         if (-not $d.Enabled -or -not $d.RealTime) { $attention += 'Windows Defender protection is turned off.' }
-        if ($d.SignatureAgeDays -gt 7) { $attention += ('Virus definitions are {0} days old.' -f $d.SignatureAgeDays) }
-        if ($scanAge -gt 30) { $attention += 'No virus scan in over 30 days.' }
+        if ($d.SignatureAgeDays -gt 14) { $attention += ('Virus definitions are {0} days old.' -f $d.SignatureAgeDays) }   # the report still lists the age and the last scan; Defender scans on its own
     } else { $lines += 'Windows Defender: could not check (another antivirus may be in use)' }
     $b = Get-FixItBackupSummary
     $lines += ('OneDrive: {0}' -f $(if (-not $b.Installed) { 'not installed' } elseif (-not $b.SignedIn) { 'not signed in' } elseif ($b.Running) { 'running' } else { 'NOT running' }))
     foreach ($f in $b.Folders) { $lines += ('  {0}: {1}' -f $f.Name, $(if ($f.InOneDrive) { 'backed up to OneDrive' } else { 'NOT backed up' })) }
     if ($b.LastSync) { $lines += ('  Last OneDrive activity: {0}' -f ([datetime]$b.LastSync).ToString('yyyy-MM-dd')) }
-    foreach ($w in $b.Warnings) { $attention += $w }
+    foreach ($w in @($b.Important)) { $attention += $w }   # the other backup notes are already in the lines above
+    foreach ($w in @($b.Warnings)) { if (@($b.Important) -notcontains $w) { Write-FixItLog ('Backup note (not raised): {0}' -f $w) } }
     return [pscustomobject]@{ Lines = $lines; Attention = $attention }
 }
 
@@ -3511,15 +4420,20 @@ function Invoke-CheckInToggle {
 
 # The small "healthy" badge in the window header. Quick and read-only.
 function Get-FixItHealthPill {
+    if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Get-FixItHealthPill') }
     $issues = @()
     try { if ([int64](Get-FixItFreeBytes) -lt 10GB) { $issues += 'low disk space' } } catch { }
-    try { if (Test-PendingReboot) { $issues += 'restart waiting' } } catch { }
+    try { $rw = Test-FixItRestartWanted; if ($rw.Wanted) { $issues += 'restart waiting' } } catch { }
     $bk = $null
     try { $bk = Get-FixItBackupSummary } catch { }
     $dot = [string][char]0x00B7
     $backup = 'backup unknown'
     if ($bk) {
-        if ($bk.Ok) { $backup = 'backup on' } elseif (-not $bk.Installed) { $backup = 'no backup'; $issues += 'no OneDrive backup' } else { $backup = 'backup needs a look'; $issues += 'backup needs a look' }
+        # Only a backup that is set up but not working needs a look. No OneDrive at all, or one folder outside it, is not a problem for the badge (Trey's report still lists it).
+        if (@($bk.Important).Count -gt 0) { $backup = 'backup needs a look'; $issues += 'backup needs a look' }
+        elseif ($bk.Ok) { $backup = 'backup on' }
+        elseif (-not $bk.Installed) { $backup = 'no backup' }
+        else { $backup = 'backup partly on' }
     }
     if ($issues.Count -eq 0) { return [pscustomobject]@{ Ok = $true; Text = ('Your computer looks healthy {0} {1}' -f $dot, $backup) } }
     return [pscustomobject]@{ Ok = $false; Text = ('Needs a look: {0}' -f (($issues | Select-Object -First 2) -join ', ')) }
@@ -3606,29 +4520,157 @@ function Get-FixItUserFolders {
     foreach ($f in $list) { $k = ([string]$f.Path).TrimEnd('\', '/').ToLower(); if (-not $seen.ContainsKey($k)) { $seen[$k] = $true; $out += $f } }
     return $out
 }
-# Walks one folder and returns files (name, full path, folder, last saved, size). Stops after a limit so a huge folder cannot hang the window.
-function Get-FixItFileList {
-    param([string]$Path, [int]$Limit = 40000)
-    if (-not (Test-Path -LiteralPath $Path)) { return @() }
-    return @(Get-ChildItem -LiteralPath $Path -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First $Limit | ForEach-Object {
-        [pscustomobject]@{ Name = $_.Name; FullName = $_.FullName; Folder = $_.DirectoryName; Modified = $_.LastWriteTime; KB = [math]::Round($_.Length / 1KB) } })
-}
-function Get-FixItAllUserFiles {
-    $all = @()
-    foreach ($f in @(Get-FixItUserFolders)) {
-        try { $all += @(Get-FixItFileList -Path $f.Path) } catch { Write-FixItLog ('Could not read {0}: {1}' -f $f.Path, $_.Exception.Message) 'WARN' }
+# ---- The file scan. It never touches the screen, so it can run in a background runspace (the window stays alive).
+# It only LISTS names and dates (no file is opened or read), and it skips anything that could make Windows download or wait:
+#   - reparse points (junctions, symbolic links, OneDrive placeholders that are links) - so loops and other drives are never followed
+#   - cloud-only OneDrive files and folders (Offline / RecallOnOpen / RecallOnDataAccess) - looking inside would download them
+# It stops by itself at a depth, folder, file and time limit, and when State.Cancel is set.
+# $State is a synchronized hashtable: Cancel (in), Files, Folders, Skipped, Done, Reason, Log (out, read by the window).
+$script:FileScanScript = {
+    param([string[]]$Roots, [string]$Words, [string]$JunkPattern, [int]$Max, [int]$MaxDepth, [int]$MaxFolders, [int]$MaxFiles, [int]$MaxSeconds, $State)
+    $skipDirBits = 0x400 -bor 0x1000 -bor 0x40000 -bor 0x400000      # ReparsePoint, Offline, RecallOnOpen, RecallOnDataAccess
+    $skipFileBits = 0x400 -bor 0x1000 -bor 0x40000 -bor 0x400000
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    $wordList = @(); foreach ($w in ($Words -split '\s+')) { if ($w) { $wordList += $w } }
+    $cand = New-Object System.Collections.ArrayList
+    $seen = @{}
+    $State.Files = 0; $State.Folders = 0; $State.Skipped = 0; $State.Denied = 0; $State.Reason = ''
+    $stack = New-Object System.Collections.Queue   # level by level, so every folder gets looked at near its top before any deep tree uses up the limits
+    # a folder inside another listed folder (the OneDrive folder holds Desktop) is walked once
+    $rootList = @(); foreach ($r in $Roots) { if ($r) { $rootList += ([string]$r).TrimEnd('\', '/') } }
+    $keep = @()
+    foreach ($r in $rootList) {
+        $inside = $false
+        foreach ($o in $rootList) { if ($o.ToLower() -ne $r.ToLower() -and ($r.StartsWith($o + '\', [StringComparison]::OrdinalIgnoreCase) -or $r.StartsWith($o + '/', [StringComparison]::OrdinalIgnoreCase))) { $inside = $true } }
+        if (-not $inside) { $keep += $r }
     }
-    $seen = @{}; $out = @()
-    foreach ($x in $all) { if ($x.Name -match $script:JunkFileNames) { continue }; $k = ([string]$x.FullName).ToLower(); if (-not $seen.ContainsKey($k)) { $seen[$k] = $true; $out += $x } }
-    return $out
+    $rootSeen = @{}
+    foreach ($r in $keep) { $rk = $r.ToLower(); if (-not $rootSeen.ContainsKey($rk)) { $rootSeen[$rk] = $true; $stack.Enqueue(@($r, 0)) } }
+    $stop = ''
+    try {
+        while ($stack.Count -gt 0 -and -not $stop) {
+            $item = $stack.Dequeue(); $dir = [string]$item[0]; $depth = [int]$item[1]
+            if ($State.Cancel) { $stop = 'cancelled'; break }
+            if ($sw.Elapsed.TotalSeconds -gt $MaxSeconds) { $stop = 'time limit'; break }
+            if ($State.Folders -ge $MaxFolders) { $stop = 'folder limit'; break }
+            $State.Folders = $State.Folders + 1
+            $State.Current = $dir
+            $n = 0
+            try {
+                $di = New-Object System.IO.DirectoryInfo $dir
+                foreach ($e in $di.EnumerateFileSystemInfos()) {
+                    $n++
+                    if (($n % 100) -eq 0) {
+                        if ($State.Cancel) { $stop = 'cancelled'; break }
+                        if ($sw.Elapsed.TotalSeconds -gt $MaxSeconds) { $stop = 'time limit'; break }
+                    }
+                    $attr = [int]$e.Attributes
+                    if ($e -is [System.IO.DirectoryInfo]) {
+                        if (($attr -band $skipDirBits) -ne 0 -or ($attr -band 0x4) -ne 0) { $State.Skipped = $State.Skipped + 1; continue }   # 0x4 = System
+                        if ($depth + 1 -gt $MaxDepth) { continue }
+                        $stack.Enqueue(@($e.FullName, ($depth + 1)))
+                        continue
+                    }
+                    if (($attr -band $skipFileBits) -ne 0) { $State.Skipped = $State.Skipped + 1; continue }
+                    $State.Files = $State.Files + 1
+                    if ($State.Files -ge $MaxFiles) { $stop = 'file limit'; break }
+                    $name = [string]$e.Name
+                    if ($JunkPattern -and $name -match $JunkPattern) { continue }
+                    $ok = $true
+                    foreach ($w in $wordList) { if ($name.IndexOf($w, [StringComparison]::OrdinalIgnoreCase) -lt 0) { $ok = $false; break } }
+                    if (-not $ok) { continue }
+                    $k = ([string]$e.FullName).ToLower()
+                    if ($seen.ContainsKey($k)) { continue }
+                    $seen[$k] = $true
+                    [void]$cand.Add([pscustomobject]@{ Name = $name; FullName = [string]$e.FullName; Folder = [string]$e.DirectoryName; Modified = $e.LastWriteTime; KB = [math]::Round($e.Length / 1KB) })
+                    if ($cand.Count -gt ($Max * 25 + 200)) {
+                        $sorted = @($cand | Sort-Object Modified -Descending | Select-Object -First ($Max * 5))
+                        $cand.Clear(); foreach ($c in $sorted) { [void]$cand.Add($c) }
+                    }
+                }
+            } catch { $State.Denied = $State.Denied + 1 }
+        }
+    } catch { $stop = 'error: ' + $_.Exception.Message }
+    $State.Reason = $stop
+    $State.Seconds = [math]::Round($sw.Elapsed.TotalSeconds, 1)
+    $State.Result = @($cand | Sort-Object Modified -Descending | Select-Object -First $Max)
+    $State.Done = $true
 }
-# Query empty = recently saved files. Otherwise: files whose NAME contains every word typed.
+$script:FileScanLimits = @{ Depth = 8; Folders = 4000; Files = 30000; Seconds = 15 }
+function New-FixItFileScanState {
+    return [hashtable]::Synchronized(@{ Cancel = $false; Done = $false; Files = 0; Folders = 0; Skipped = 0; Denied = 0; Reason = ''; Seconds = 0; Current = ''; Result = @() })
+}
+function Get-FixItFileScanArgs {
+    param([string]$Query, [int]$Max, $State)
+    $roots = @(Get-FixItUserFolders | ForEach-Object { [string]$_.Path })
+    $L = $script:FileScanLimits
+    return @{ Roots = $roots; Words = $Query; JunkPattern = $script:JunkFileNames; Max = $Max; MaxDepth = $L.Depth; MaxFolders = $L.Folders; MaxFiles = $L.Files; MaxSeconds = $L.Seconds; State = $State }
+}
+function Write-FixItFileScanSummary {
+    param($State, [string]$Query)
+    $why = ''; if ($State.Reason) { $why = (', stopped: {0}' -f $State.Reason) }
+    $lvl = 'INFO'; if ($State.Reason -like 'error*') { $lvl = 'WARN' }
+    Write-FixItLog ('My files: finished in {0}s: {1} files looked at, {2} folders, {3} skipped (cloud-only or links), {4} folders not readable, {5} match(es){6}' -f $State.Seconds, $State.Files, $State.Folders, $State.Skipped, $State.Denied, @($State.Result).Count, $why) $lvl
+}
+# Same scan, run to the end right here (command line, tests). The window uses Start-FixItFileSearch instead.
 function Find-FixItFiles {
     param([string]$Query = '', [int]$Max = 8)
-    $files = @(Get-FixItAllUserFiles)
-    $words = @(($Query -split '\s+') | Where-Object { $_ })
-    foreach ($w in $words) { $ww = $w; $files = @($files | Where-Object { $_.Name.IndexOf($ww, [StringComparison]::OrdinalIgnoreCase) -ge 0 }) }
-    return @($files | Sort-Object Modified -Descending | Select-Object -First $Max)
+    $st = New-FixItFileScanState
+    $a = Get-FixItFileScanArgs -Query $Query -Max $Max -State $st
+    Write-FixItLog ('My files: looking in {0} folder(s) (search: "{1}")' -f @($a.Roots).Count, $Query)
+    & $script:FileScanScript @a
+    Write-FixItFileScanSummary -State $st -Query $Query
+    return @($st.Result)
+}
+# ---- background version for the window: a runspace does the walking; the window polls it from a timer
+function Start-FixItFileSearch {
+    param([string]$Query = '', [int]$Max = 8)
+    $st = New-FixItFileScanState
+    $a = Get-FixItFileScanArgs -Query $Query -Max $Max -State $st
+    Write-FixItLog ('My files: looking in the background in {0} folder(s) (search: "{1}"; limits: depth {2}, {3} folders, {4} files, {5} seconds)' -f @($a.Roots).Count, $Query, $a.MaxDepth, $a.MaxFolders, $a.MaxFiles, $a.MaxSeconds)
+    $job = [pscustomobject]@{ State = $st; Query = $Query; PS = $null; Runspace = $null; Handle = $null; Started = (Get-Date); Abandoned = $false; LastLog = (Get-Date) }
+    try {
+        $rs = [runspacefactory]::CreateRunspace()
+        $rs.Open()
+        $ps = [powershell]::Create()
+        $ps.Runspace = $rs
+        [void]$ps.AddScript($script:FileScanScript.ToString())
+        foreach ($k in $a.Keys) { [void]$ps.AddParameter($k, $a[$k]) }
+        $job.PS = $ps; $job.Runspace = $rs
+        $job.Handle = $ps.BeginInvoke()
+    } catch {
+        Write-FixItLog ('My files: could not start the background search: {0}' -f $_.Exception.Message) 'ERROR'
+        $st.Reason = 'error: could not start'; $st.Done = $true
+    }
+    return $job
+}
+# Called by the window's timer. Returns 'Running' or 'Done'. Never blocks.
+function Get-FixItFileSearchStatus {
+    param($Job)
+    $st = $Job.State
+    if ($st.Done) { return 'Done' }
+    $age = ((Get-Date) - $Job.Started).TotalSeconds
+    if (((Get-Date) - $Job.LastLog).TotalSeconds -ge 5) { $Job.LastLog = Get-Date; Write-FixItLog ('My files: still looking ({0:N0}s): {1} files, {2} folders so far' -f $age, $st.Files, $st.Folders) }
+    # a single stuck disk call cannot be interrupted: give up waiting (the window stays alive) and show what was found
+    if ($age -gt ($script:FileScanLimits.Seconds + 10)) {
+        Write-FixItLog ('My files: the background search did not finish in time; giving up on it ({0} files, {1} folders so far)' -f $st.Files, $st.Folders) 'WARN'
+        $st.Cancel = $true; $st.Reason = 'did not finish'; $Job.Abandoned = $true
+        try { if ($Job.PS) { [void]$Job.PS.BeginStop($null, $null) } } catch { }
+        $st.Done = $true
+    }
+    if ($st.Done) { return 'Done' }
+    return 'Running'
+}
+function Stop-FixItFileSearch {
+    param($Job)
+    if ($Job -and $Job.State) { $Job.State.Cancel = $true; Write-FixItLog 'My files: Cancel clicked' }
+}
+function Close-FixItFileSearch {
+    param($Job)
+    if (-not $Job) { return }
+    if ($Job.Abandoned) { return }       # a stuck one is left to finish on its own; disposing it could freeze the window
+    try { if ($Job.PS) { $Job.PS.Dispose() } } catch { }
+    try { if ($Job.Runspace) { $Job.Runspace.Dispose() } } catch { }
 }
 function Test-FixItUserFilePath {
     param([string]$Path)
@@ -3641,8 +4683,12 @@ function Test-FixItUserFilePath {
     }
     return $false
 }
-function Open-FixItUserFile { param([string]$Path) Start-Process -FilePath $Path | Out-Null }
-function Show-FixItFileInFolder { param([string]$Path) Start-Process -FilePath 'explorer.exe' -ArgumentList ('/select,"{0}"' -f $Path) | Out-Null }
+function Open-FixItUserFile { param([string]$Path)
+    if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Open-FixItUserFile' -Arguments $PSBoundParameters; return }
+ Start-Process -FilePath $Path | Out-Null }
+function Show-FixItFileInFolder { param([string]$Path)
+    if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Show-FixItFileInFolder' -Arguments $PSBoundParameters; return }
+ Start-Process -FilePath 'explorer.exe' -ArgumentList ('/select,"{0}"' -f $Path) | Out-Null }
 function Open-FixItFoundFile {
     param([string]$Path)
     if (-not (Test-FixItUserFilePath $Path)) { return New-FixItResult $false 'Cannot open that' 'I only open files from your Desktop, Documents, Downloads, Pictures and OneDrive folders.' }
@@ -3712,6 +4758,7 @@ function Test-FixItAppInstalled {
 }
 function Install-FixItApp {
     param([string]$Id)
+    if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Install-FixItApp' -Arguments $PSBoundParameters; return 0 }
     $r = Invoke-FixItNative -File 'winget.exe' -Arguments @('install', '--id', $Id, '--exact', '--source', 'winget', '--silent', '--accept-package-agreements', '--accept-source-agreements') -Live
     return $r.ExitCode
 }
@@ -3747,7 +4794,8 @@ $script:GuardianRunName = 'FamilyFixItGuardian'
 $script:GuardianMutexName = 'Local\FamilyFixItGuardian'
 $script:GuardianBrowsers = @('msedge', 'chrome', 'firefox', 'brave', 'opera', 'iexplore')
 $script:GuardianPollMs = 1500
-$script:GuardianQuietMinutes = 30
+$script:GuardianQuietMinutes = 120   # after "I'm fine" (a long video should not ask again)
+$script:GuardianLooksNeeded = 4        # looks in a row (1.5 s apart) a page must stay full screen before the box appears
 $script:GuardianCalmSeconds = 120
 $script:GuardianKeepBackups = 5
 $script:GuardianCalm = "You're safe. Don't call any number that page showed. Trey has been told."
@@ -3789,7 +4837,7 @@ function New-FixItGuardianState {
 }
 
 # Decides what to do after one look at the foreground window: 'Show', 'Hide' or 'None'.
-# A page must stay full screen for two looks in a row before the question appears.
+# A page must stay full screen for several looks in a row (see GuardianLooksNeeded) before the question appears.
 function Get-FixItGuardianDecision {
     param($Fg, $State, [datetime]$Now)
     $full = ($null -ne $Fg) -and (Test-FixItBrowserName $Fg.ProcessName) -and (Test-FixItWindowFullscreen $Fg)
@@ -3809,7 +4857,7 @@ function Get-FixItGuardianDecision {
     if ($null -ne $q -and $Now -lt $q) { return 'None' }
     if ($State.Candidate -ne $h) { $State.Candidate = $h; $State.Streak = 1; return 'None' }
     $State.Streak = [int]$State.Streak + 1
-    if ($State.Streak -lt 2) { return 'None' }
+    if ($State.Streak -lt $script:GuardianLooksNeeded) { return 'None' }
     $State.ToastOpen = $true; $State.ToastMode = 'Ask'; $State.ToastHandle = $h
     return 'Show'
 }
@@ -3875,6 +4923,7 @@ function Close-FixItBrowsers {
     $names = @($procs | ForEach-Object { [string]$_.Name })
     if ($script:DryRun) {
         Write-FixItLog ('Would do: close {0} browser program(s)' -f $procs.Count) 'DRYRUN'
+        if ($script:TestMode) { foreach ($bp in $procs) { $bid = [int]$bp.Id; [void](Invoke-FixItStep ('Close the browser program {0} (process {1})' -f $bp.Name, $bid) { Stop-FixItProcessForce -Id $bid }) } }
         return [pscustomobject]@{ Count = $procs.Count; Names = $names; Failed = 0 }
     }
     $failed = 0
@@ -3892,6 +4941,7 @@ function Get-FixItGuardianBackupRoot { return (Join-Path (Split-Path -Parent (Ge
 # so the browser does not offer to bring the scary page back. Nothing is deleted except backups older than the newest 5.
 function Clear-FixItBrowserSessions {
     param([string]$BackupRoot = '')
+    if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Clear-FixItBrowserSessions' -Arguments $PSBoundParameters; return [pscustomobject]@{ Moved = 0; Patched = 0; Failed = 0; Backup = '' } }
     if (-not $BackupRoot) { $BackupRoot = Get-FixItGuardianBackupRoot }
     $targets = @(Get-FixItSessionTargets)
     $res = [pscustomobject]@{ Moved = 0; Patched = 0; Failed = 0; Backup = '' }
@@ -3937,7 +4987,10 @@ function Invoke-GuardianClose {
     $sess = [pscustomobject]@{ Moved = 0; Patched = 0; Failed = 0; Backup = '' }
     if (-not $Demo) {
         try { $closed = Close-FixItBrowsers } catch { Write-FixItLog ('Closing browsers failed: {0}' -f $_.Exception.Message) 'ERROR' }
-        try { $sess = Clear-FixItBrowserSessions } catch { Write-FixItLog ('Clearing sessions failed: {0}' -f $_.Exception.Message) 'ERROR' }
+        try {
+            if ($script:TestMode) { [void](Invoke-FixItStep 'Back up and move aside the browsers saved-pages files' { [void](Clear-FixItBrowserSessions) }) }
+            else { $sess = Clear-FixItBrowserSessions }
+        } catch { Write-FixItLog ('Clearing sessions failed: {0}' -f $_.Exception.Message) 'ERROR' }
     }
     return [pscustomobject]@{ Details = $details; Closed = $closed; Sessions = $sess; Reason = $Reason; Demo = [bool]$Demo }
 }
@@ -4255,14 +5308,16 @@ function Get-FixItForeground {
 function Get-FixItBrowserProcesses {
     return @(Get-Process -ErrorAction SilentlyContinue | Where-Object { Test-FixItBrowserName $_.ProcessName } | ForEach-Object { [pscustomobject]@{ Name = [string]$_.ProcessName; Id = [int]$_.Id } })
 }
-function Stop-FixItProcessForce { param([int]$Id) Stop-Process -Id $Id -Force -ErrorAction Stop }
+function Stop-FixItProcessForce { param([int]$Id)
+    if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Stop-FixItProcessForce' -Arguments $PSBoundParameters; return }
+ Stop-Process -Id $Id -Force -ErrorAction Stop }
 function Wait-FixItProcessesGone {
     param([int[]]$Ids, [int]$Seconds = 4)
     $end = (Get-Date).AddSeconds($Seconds)
     while ((Get-Date) -lt $end) {
         $left = @($Ids | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
         if ($left.Count -eq 0) { return }
-        Start-Sleep -Milliseconds 200
+        Wait-FixIt -Milliseconds 200
     }
 }
 function Get-FixItProcessCommandLine {
@@ -4357,9 +5412,11 @@ function Test-FixItGuardianRunning {
     return $false
 }
 function Start-FixItGuardianProcess {
+    if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Start-FixItGuardianProcess' -Arguments $PSBoundParameters; return }
     Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-File', ('"{0}"' -f $script:SelfPath), '-Action', 'Guardian') -WindowStyle Hidden | Out-Null
 }
 function Stop-FixItGuardianProcess {
+    if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Stop-FixItGuardianProcess' -Arguments $PSBoundParameters; return }
     $me = $PID
     foreach ($p in @(Get-CimInstance -ClassName Win32_Process -Filter "Name='powershell.exe' OR Name='pwsh.exe'" -ErrorAction SilentlyContinue)) {
         if ($p.ProcessId -ne $me -and [string]$p.CommandLine -match 'FamilyFixIt\.ps1.*-Action\s+Guardian(\s|"|$)') {
@@ -5197,6 +6254,7 @@ function Show-FixItWindowOnce {
     $script:Form = $form
     $form.Text = 'Family Fix-It'
     if ($script:DryRun) { $form.Text = 'Family Fix-It (practice mode - nothing will be changed)' }
+    if ($script:TestMode) { $form.Text = 'Family Fix-It - TEST MODE (nothing will be changed)' }
     $form.StartPosition = 'CenterScreen'
     $form.FormBorderStyle = 'FixedSingle'
     $form.MaximizeBox = $false
@@ -5264,6 +6322,7 @@ function Show-FixItWindowOnce {
     $h2 = New-Object System.Windows.Forms.Label
     $h2.Text = "Pick the closest match and I'll try to fix it for you."
     if ($script:DryRun) { $h2.Text = 'Practice mode: nothing will be changed.' }
+    if ($script:TestMode) { $h2.Text = 'Test mode: steps are only checked.' }
     $h2.Font = New-Object System.Drawing.Font('Segoe UI', [single](13 * $S), [System.Drawing.FontStyle]::Regular, $px)
     $h2.ForeColor = (Get-FixItColor $cMuted); $h2.AutoSize = $false
     $h2.Location = New-Object System.Drawing.Point([int](($MX + 59) * $S), [int](50 * $S)); $h2.Size = New-Object System.Drawing.Size([int](450 * $S), [int](20 * $S))
@@ -5274,6 +6333,23 @@ function Show-FixItWindowOnce {
     $script:PillLabel.Location = New-Object System.Drawing.Point([int](($MX + 392) * $S), [int](20 * $S)); $script:PillLabel.Size = New-Object System.Drawing.Size([int](287 * $S), [int](26 * $S))
     $script:PillLabel.Visible = $false
     $form.Controls.Add($script:PillLabel)
+    if ($script:TestMode) {
+        $h2.Width = [int](330 * $S)
+        $bnr = New-Object System.Windows.Forms.Label
+        $bnr.Text = 'TEST MODE - nothing is changed'
+        $bnr.Font = New-Object System.Drawing.Font('Segoe UI', [single](13 * $S), [System.Drawing.FontStyle]::Bold, $px)
+        $bnr.BackColor = (Get-FixItColor '#F59E0B'); $bnr.ForeColor = (Get-FixItColor '#1A1A1A'); $bnr.AutoSize = $false; $bnr.TextAlign = 'MiddleCenter'
+        $bnr.Location = New-Object System.Drawing.Point([int](($MX + 392) * $S), [int](14 * $S)); $bnr.Size = New-Object System.Drawing.Size([int](287 * $S), [int](30 * $S))
+        $bnr.AccessibleName = 'Test mode is on. Nothing is changed.'
+        $form.Controls.Add($bnr)
+        $tab = New-Object System.Windows.Forms.Button
+        $tab.Text = 'Test all buttons'
+        $tab.Font = New-Object System.Drawing.Font('Segoe UI', [single](12 * $S), [System.Drawing.FontStyle]::Bold, $px)
+        $tab.FlatStyle = 'Flat'; $tab.BackColor = (Get-FixItColor '#FFF4D6'); $tab.ForeColor = (Get-FixItColor '#1A1A1A')
+        $tab.Location = New-Object System.Drawing.Point([int](($MX + 392) * $S), [int](48 * $S)); $tab.Size = New-Object System.Drawing.Size([int](287 * $S), [int](28 * $S))
+        $tab.Add_Click({ Invoke-GuiButton -Which 'TestAll' })
+        $form.Controls.Add($tab); [void]$script:FixButtons.Add($tab)
+    }
 
     $groups = @($lay.Groups)
     foreach ($grp in $groups) {
@@ -5333,7 +6409,7 @@ function Show-FixItWindowOnce {
                 $pl.Visible = $true
             } catch { Write-FixItLog ('Health pill failed: {0}' -f $_.Exception.Message) 'WARN' }
         })
-        $tm.Start()
+        if (-not $script:TestMode) { $tm.Start() }
         if (-not $NoUpdateCheck -and -not $script:DryRun) {
             try { if (Repair-FixItIcon) { Set-FixItFormIcon $s } } catch { Write-FixItLog ('Icon check failed: {0}' -f $_.Exception.Message) 'WARN' }
         }
@@ -5341,6 +6417,8 @@ function Show-FixItWindowOnce {
             try { Show-FixItResult (Invoke-FixItUpdate -Quiet) } catch { Write-FixItLog ('Update check failed: {0}' -f $_.Exception.Message) 'WARN' }
         }
     })
+    # While a fix is running the window keeps responding (it is not frozen), so closing it must wait until the fix is done.
+    $form.Add_FormClosing({ param($fs, $fe) if ($script:ActionBusy) { $fe.Cancel = $true; Write-FixItLog 'The window was asked to close while a fix is running: it stays open until the fix is done.' } })
     [void]$form.ShowDialog()
     if ($showTimer) { try { $showTimer.Stop(); $showTimer.Dispose() } catch { } }
     $form.Dispose()
@@ -5410,7 +6488,8 @@ function Get-FixItGuiInstanceNames {
     }
     $key = ($key -replace '[^A-Za-z0-9\-]', '_')
     $suffix = ''
-    if ($script:DryRun) { $suffix = '-Practice' }   # practice mode (-WhatIf) is its own window, so it never hides a real one
+    if ($script:TestMode) { $suffix = '-Test' }
+    elseif ($script:DryRun) { $suffix = '-Practice' }   # practice mode (-WhatIf) is its own window, so it never hides a real one
     return [pscustomobject]@{ Mutex = ('Local\FamilyFixIt-GUI-' + $key + $suffix); Event = ('Local\FamilyFixIt-GUI-Show-' + $key + $suffix); Key = ($key + $suffix) }
 }
 function Get-FixItGuiInstanceFile {
@@ -5597,6 +6676,7 @@ function Show-FixItWindowMain {
         $first = $false
     } while ($script:RebuildUi)
     $script:GuiActive = $false
+    Stop-FixItOffUiWorkers
 }
 
 # "Did that fix it?" - a friendly two-button question.
@@ -5858,25 +6938,60 @@ function Show-FixItCountdownDialog {
 }
 
 # ---- My files window: search box + a list; every file gets exactly two buttons
+function Set-FixItFilesBusy {
+    param([bool]$Busy)
+    if ($script:FilesGo) { $script:FilesGo.Visible = (-not $Busy) }
+    if ($script:FilesCancel) { $script:FilesCancel.Visible = $Busy }
+    if ($script:FilesTb) { $script:FilesTb.Enabled = (-not $Busy) }
+    if ($script:FilesDialog) { if ($Busy) { $script:FilesDialog.Cursor = [System.Windows.Forms.Cursors]::AppStarting } else { $script:FilesDialog.Cursor = [System.Windows.Forms.Cursors]::Default } }
+}
+# Starts the search in the background and returns at once (the window never waits on the file system).
 function Update-FixItFilesList {
     param([string]$Query)
+    if ($script:FilesJob) { return }
+    $script:FilesPanel.Controls.Clear()
+    $script:FilesMsg.Text = 'Looking... you can click Cancel at any time.'
+    Set-FixItFilesBusy $true
+    $script:FilesQuery = $Query
+    $script:FilesJob = Start-FixItFileSearch -Query $Query -Max 8
+    if ($script:FilesTimer) { $script:FilesTimer.Start() }
+}
+# Timer tick: only reads a few numbers from the background search. Never waits.
+function Invoke-FixItFilesPoll {
+    if (-not $script:FilesJob) { if ($script:FilesTimer) { $script:FilesTimer.Stop() }; return }
+    $job = $script:FilesJob
+    $status = 'Running'
+    try { $status = Get-FixItFileSearchStatus -Job $job } catch { Write-FixItLog ('My files: could not check the search: {0}' -f $_.Exception.Message) 'WARN'; $status = 'Done' }
+    if ($status -eq 'Running') {
+        $script:FilesMsg.Text = ('Looking... {0} files checked so far. You can click Cancel.' -f $job.State.Files)
+        return
+    }
+    if ($script:FilesTimer) { $script:FilesTimer.Stop() }
+    $script:FilesJob = $null
+    $found = @()
+    try { Write-FixItFileScanSummary -State $job.State -Query $script:FilesQuery; $found = @($job.State.Result) } catch { Write-FixItLog ('My files: could not read the result: {0}' -f $_.Exception.Message) 'ERROR' }
+    $reason = [string]$job.State.Reason
+    Close-FixItFileSearch -Job $job
+    Set-FixItFilesBusy $false
+    Show-FixItFilesResults -Found $found -Query $script:FilesQuery -Reason $reason
+}
+function Show-FixItFilesResults {
+    param($Found, [string]$Query, [string]$Reason = '')
     $S = $script:UiScale; $hc = [bool]$script:UiHighContrast
     $cText = '#1A1A1A'; $cMuted = '#555555'; if ($hc) { $cText = '#FFFFFF'; $cMuted = '#FFFFFF' }
     $px = [System.Drawing.GraphicsUnit]::Pixel
     $pn = $script:FilesPanel
     $pn.Controls.Clear()
-    $script:FilesDialog.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
-    $script:FilesMsg.Text = 'Looking... this can take a few seconds.'
-    $script:FilesDialog.Refresh()
-    $found = @()
-    try { $found = @(Find-FixItFiles -Query $Query -Max 8) } catch { Write-FixItLog ('File search failed: {0}' -f $_.Exception.Message) 'ERROR' }
-    $script:FilesDialog.Cursor = [System.Windows.Forms.Cursors]::Default
+    $found = @($Found)
+    $partial = ''
+    if ($Reason -eq 'cancelled') { $partial = ' (You stopped the search, so this may not be everything.)' }
+    elseif ($Reason) { $partial = ' (I looked in the nearest folders only, so this may not be everything.)' }
     if ($found.Count -eq 0) {
-        if ($Query) { $script:FilesMsg.Text = ('No file with "{0}" in its name was found. Try fewer or different words.' -f $Query) }
-        else { $script:FilesMsg.Text = 'No files were found in your Desktop, Documents, Downloads, Pictures or OneDrive folders.' }
+        if ($Query) { $script:FilesMsg.Text = ('No file with "{0}" in its name was found. Try fewer or different words.{1}' -f $Query, $partial) }
+        else { $script:FilesMsg.Text = ('No files were found in your Desktop, Documents, Downloads, Pictures or OneDrive folders.{0}' -f $partial) }
         return
     }
-    if ($Query) { $script:FilesMsg.Text = ('Files with "{0}" in the name (newest first):' -f $Query) } else { $script:FilesMsg.Text = 'Saved most recently (newest first). Type a name above to search.' }
+    if ($Query) { $script:FilesMsg.Text = ('Files with "{0}" in the name (newest first):{1}' -f $Query, $partial) } else { $script:FilesMsg.Text = ('Saved most recently (newest first). Type a name above to search.{0}' -f $partial) }
     $inv = [Globalization.CultureInfo]::InvariantCulture
     $y = 0
     foreach ($x in $found) {
@@ -5921,7 +7036,16 @@ function Show-FixItFilesDialog {
     $f.Controls.Add($tb); $script:FilesTb = $tb
     $go = New-FixItTile -Run '' -Title 'Search' -Sub '' -IconKey '' -Style 'yes' -IconBg '' -X 458 -Y 60 -W 118 -H 38
     $go.Add_Click({ param($s, $e) Update-FixItFilesList -Query $script:FilesTb.Text.Trim() })
-    $f.Controls.Add($go)
+    $f.Controls.Add($go); $script:FilesGo = $go
+    $cn = New-FixItTile -Run '' -Title 'Cancel' -Sub '' -IconKey '' -Style 'btn' -IconBg '' -X 458 -Y 60 -W 118 -H 38
+    $cn.Add_Click({ param($s, $e) Stop-FixItFileSearch -Job $script:FilesJob })
+    $cn.Visible = $false
+    $f.Controls.Add($cn); $script:FilesCancel = $cn
+    $script:FilesJob = $null
+    $tm = New-Object System.Windows.Forms.Timer
+    $tm.Interval = 200
+    $tm.Add_Tick({ Invoke-FixItFilesPoll })
+    $script:FilesTimer = $tm
     $msg = New-Object System.Windows.Forms.Label
     $msg.AutoSize = $false; $msg.Font = New-Object System.Drawing.Font('Segoe UI', [single](12.5 * $S), [System.Drawing.FontStyle]::Bold, $px)
     $msg.ForeColor = (Get-FixItColor $cMuted)
@@ -5933,7 +7057,13 @@ function Show-FixItFilesDialog {
     $f.Controls.Add($pn); $script:FilesPanel = $pn
     $f.AcceptButton = $go
     $f.Add_Shown({ param($s, $e) $script:FilesTb.Focus(); Update-FixItFilesList -Query '' })
+    $f.Add_FormClosing({ param($s, $e)
+        if ($script:FilesJob) { Write-FixItLog 'My files: window closed while looking; stopping the search'; $script:FilesJob.State.Cancel = $true; Close-FixItFileSearch -Job $script:FilesJob; $script:FilesJob = $null }
+        if ($script:FilesTimer) { $script:FilesTimer.Stop() }
+    })
+    Write-FixItLog 'My files: window opened'
     [void]$f.ShowDialog($script:Form)
+    if ($script:FilesTimer) { $script:FilesTimer.Dispose(); $script:FilesTimer = $null }
     $f.Dispose()
 }
 
@@ -6165,19 +7295,117 @@ function Send-FixItGuideNote {
     finally { $script:Form.Cursor = [System.Windows.Forms.Cursors]::Default }
 }
 
+# ----- Test mode windows -----
+# A plain read-only text window (used for the per-button checklist and the "Test all buttons" summary).
+function Show-FixItTextDialog {
+    param([string]$Title, [string[]]$Lines, [string]$Status = 'PASS', [string]$Heading = '')
+    if (-not $script:GuiActive) { foreach ($l in $Lines) { Write-Host $l }; return }
+    $S = $script:UiScale; if (-not $S) { $S = 1.0 }
+    $px = [System.Drawing.GraphicsUnit]::Pixel
+    $f = New-Object System.Windows.Forms.Form
+    Set-FixItFormIcon $f
+    $f.Text = $Title
+    $f.StartPosition = 'CenterParent'
+    $f.FormBorderStyle = 'Sizable'
+    $f.MinimizeBox = $false
+    $f.BackColor = [System.Drawing.Color]::White
+    $f.ClientSize = New-Object System.Drawing.Size([int](760 * $S), [int](560 * $S))
+    $f.Font = New-Object System.Drawing.Font('Segoe UI', [single](13 * $S), [System.Drawing.FontStyle]::Regular, $px)
+    $bn = New-Object System.Windows.Forms.Label
+    $bn.Text = $Heading
+    $bn.Dock = 'Top'; $bn.Height = [int](40 * $S); $bn.TextAlign = 'MiddleCenter'
+    $bn.Font = New-Object System.Drawing.Font('Segoe UI', [single](16 * $S), [System.Drawing.FontStyle]::Bold, $px)
+    $bn.ForeColor = [System.Drawing.Color]::Black
+    if ($Status -eq 'FAIL') { $bn.BackColor = (Get-FixItColor '#F4B6B0') } elseif ($Status -eq 'WARN') { $bn.BackColor = (Get-FixItColor '#FFE08A') } else { $bn.BackColor = (Get-FixItColor '#BFE6C8') }
+    $tb = New-Object System.Windows.Forms.TextBox
+    $tb.Multiline = $true; $tb.ReadOnly = $true; $tb.ScrollBars = 'Vertical'; $tb.WordWrap = $true
+    $tb.Font = New-Object System.Drawing.Font('Consolas', [single](13 * $S), [System.Drawing.FontStyle]::Regular, $px)
+    $tb.Dock = 'Fill'
+    $tb.Text = ($Lines -join "`r`n")
+    $tb.Select(0, 0)
+    $bar = New-Object System.Windows.Forms.Panel
+    $bar.Dock = 'Bottom'; $bar.Height = [int](52 * $S)
+    $ok = New-Object System.Windows.Forms.Button
+    $ok.Text = 'Close'; $ok.Size = New-Object System.Drawing.Size([int](120 * $S), [int](36 * $S))
+    $ok.Location = New-Object System.Drawing.Point([int](620 * $S), [int](8 * $S)); $ok.Anchor = 'Top,Right'
+    $ok.DialogResult = 'OK'
+    $bar.Controls.Add($ok)
+    $f.Controls.Add($tb); $f.Controls.Add($bar); $f.Controls.Add($bn)
+    $f.AcceptButton = $ok
+    [void]$f.ShowDialog()
+    $f.Dispose()
+}
+
+# The checklist at the end of one button.
+function Show-FixItTestChecklist {
+    param([string]$Title, $Records, [string]$Said = '')
+    $recs = @($Records)
+    $lines = @(Format-FixItTestChecklist -Title $Title -Records $recs -Said $Said)
+    $st = Get-FixItWorstStatus -Statuses @($recs | ForEach-Object { $_.Status })
+    Write-FixItLog ('Test mode checklist - {0}: {1} ({2})' -f $Title, $st, (Get-FixItTestSummaryLine -Records $recs)) 'TEST'
+    Show-FixItTextDialog -Title ('Family Fix-It (Test mode) - {0}' -f $Title) -Lines $lines -Status $st -Heading ('{0}: {1}' -f $st, $Title)
+}
+
+function Show-FixItTestOutcome {
+    param([string]$Title, $Result = $null)
+    if (@(Get-FixItTestRecords).Count -eq 0 -and $null -eq $Result) { return }
+    Complete-FixItTestRecords -Result $Result
+    $recs = @(Get-FixItTestRecords)
+    $said = Get-FixItTestSaid -Result $Result
+    Show-FixItTestChecklist -Title $Title -Records $recs -Said $said
+}
+
+function Invoke-GuiTestAll {
+    $q = "Test all buttons?`r`n`r`nThis checks every fix one after the other, answering Yes to each question. Nothing is changed, closed, restarted or sent. The results are saved on your Desktop."
+    $a = [System.Windows.Forms.MessageBox]::Show($q, 'Family Fix-It (Test mode)', 'YesNo', 'Question')
+    if ($a -ne 'Yes') { return }
+    foreach ($x in $script:FixButtons) { $x.Enabled = $false; $x.Invalidate() }
+    $script:Form.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
+    $script:ActionBusy = $true
+    try {
+        $res = @(Invoke-FixItTestAll -Progress { param($i, $n, $t) $script:StatusLabel.Text = ('Testing {0} of {1}: {2}' -f $i, $n, $t); $script:Form.Refresh(); try { [System.Windows.Forms.Application]::DoEvents() } catch { } })
+        $path = ''
+        try { $path = Save-FixItTestResults -Results $res } catch { Write-FixItLog ('Could not save the test results: {0}' -f $_.Exception.Message) 'ERROR' }
+        $lines = @()
+        foreach ($r in $res) { $lines += ('[{0}] {1}' -f $r.Status, $r.Title) }
+        $lines += ''
+        if ($path) { $lines += ('The full results are saved here:'); $lines += $path } else { $lines += 'The results file could not be saved.' }
+        $st = Get-FixItWorstStatus -Statuses @($res | ForEach-Object { $_.Status })
+        $script:StatusLabel.Text = (Get-FixItIdleStatus)
+        Show-FixItTextDialog -Title 'Family Fix-It (Test mode) - all buttons' -Lines $lines -Status $st -Heading ('{0}: all buttons tested' -f $st)
+    } catch {
+        Write-FixItLog ('Test all failed: {0}' -f $_.Exception.Message) 'ERROR'
+        [void][System.Windows.Forms.MessageBox]::Show(('Test all stopped: {0}' -f $_.Exception.Message), 'Family Fix-It (Test mode)', 'OK', 'Warning')
+    } finally {
+        $script:ActionBusy = $false
+        $script:Form.Cursor = [System.Windows.Forms.Cursors]::Default
+        foreach ($x in $script:FixButtons) { $x.Enabled = $true; $x.Invalidate() }
+    }
+}
+
 function Invoke-GuiButton {
     param([string]$Which)
     if (-not $Which) { return }
+    # Always say what was clicked (never the file or search text), so a freeze can be traced in the log.
+    $clickName = $Which; $ci = $Which.IndexOf(':'); if ($ci -gt 0) { $clickName = $Which.Substring(0, $ci + 1) }
+    Write-FixItLog ('Button clicked: {0}' -f $clickName)
+    if ($script:ActionBusy) { Write-FixItLog ('Ignored a click on {0}: another action is still running' -f $clickName) 'INFO'; return }
+    if ($Which -eq 'TestAll') { if ($script:TestMode) { Invoke-GuiTestAll }; return }
+    if ($script:TestMode) { Start-FixItTestButton }
     if ($Which -like 'OpenFile:*' -or $Which -like 'ShowFile:*') {
         $p = $Which.Substring(9)
         $r = $null
         if ($Which -like 'OpenFile:*') { $r = Open-FixItFoundFile -Path $p } else { $r = Show-FixItFoundFile -Path $p }
-        if ($r -and -not $r.Ok) { Show-FixItResult $r }
+        if ($script:TestMode) { Show-FixItTestOutcome -Title 'Open a file' -Result $r }
+        elseif ($r -and -not $r.Ok) { Show-FixItResult $r }
         return
     }
     if ($Which -like 'InstallApp:*') {
         $script:Form.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
-        try { Show-FixItResult (Invoke-InstallApp -AppName $Which.Substring(11)) } catch { Write-FixItLog ('Install failed: {0}' -f $_.Exception.Message) 'ERROR'; Show-FixItResult (New-FixItResult $false 'Could not install it' 'Something went wrong. Please click "Send Trey a report".') }
+        try {
+            $ir = Invoke-InstallApp -AppName $Which.Substring(11)
+            if ($script:TestMode) { Show-FixItTestOutcome -Title 'Install an app safely' -Result $ir } else { Show-FixItResult $ir }
+        } catch { Write-FixItLog ('Install failed: {0}' -f $_.Exception.Message) 'ERROR'; Show-FixItResult (New-FixItResult $false 'Could not install it' 'Something went wrong. Please click "Send Trey a report".') }
         finally { $script:Form.Cursor = [System.Windows.Forms.Cursors]::Default }
         return
     }
@@ -6220,12 +7448,14 @@ function Invoke-GuiButton {
     $script:Form.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
     $script:Form.Refresh()
     try {
-        $r = Invoke-FixItAction -Which $Which -SkipPlan
+        $script:ActionBusy = $true
+        try { $r = Invoke-FixItAction -Which $Which -SkipPlan } finally { $script:ActionBusy = $false }
         if ($r) { $script:StatusLabel.Text = $r.Title } else { $script:StatusLabel.Text = (Get-FixItIdleStatus) }
-        Show-FixItResult $r
+        if (-not $script:TestMode) { Show-FixItResult $r }
         $script:StatusLabel.Text = (Get-FixItIdleStatus)
         $f = Invoke-FixItFollowUp -Which $Which -Result $r
-        if ($f) { Show-FixItResult $f }
+        if ($script:TestMode) { Show-FixItTestOutcome -Title ([string](Get-FixItActionTable)[$Which].Title) -Result $r }
+        elseif ($f) { Show-FixItResult $f }
         if ($Which -eq 'CheckIn' -or $Which -eq 'Guardian') { $script:RebuildUi = $true; $script:Form.Close() }
     } catch {
         Write-FixItLog ('Unexpected problem: {0}' -f $_.Exception.Message) 'ERROR'
@@ -6242,6 +7472,7 @@ function Invoke-GuiButton {
 # ---------------------------------------------------------------------------
 function Write-AdminResult {
     param($Result)
+    if ($script:TestMode) { return }
     if ($script:UndoCur) {
         $Result | Add-Member -NotePropertyName UndoSteps -NotePropertyValue @($script:UndoCur.Steps) -Force
         $Result | Add-Member -NotePropertyName UndoCannot -NotePropertyValue @($script:UndoCur.Cannot) -Force
@@ -6259,10 +7490,26 @@ function Start-FamilyFixIt {
     $script:EchoLog = ($Action -ne 'Gui' -and $Action -ne 'Guardian' -and $Action -notlike '*Admin')
     Write-FixItLog ('--- Family Fix-It {0} started: action={1} dryRun={2} background={5} yes={6} user={3} admin={4}' -f $script:FixItVersion, $Action, $script:DryRun, $env:USERNAME, $(try { Test-FixItAdmin } catch { 'unknown' }), $script:Background, $script:AssumeYes)
     $exit = 0
+    if ($script:TestMode) { Write-FixItLog 'TEST MODE is on: every change step is only checked. Nothing will be changed, closed, restarted or sent.' 'TEST' }
+    if ($script:TestMode -and ($Action -eq 'Guardian' -or $Action -eq 'GuardianDemo' -or $Action -like '*Admin')) {
+        # the watcher, its demo and the administrator parts are helpers that other buttons start; Test mode checks them through those buttons
+        Write-Host ('Test mode does not run "{0}" on its own. It is checked through the buttons that start it (try -Action TestAll).' -f $Action)
+        Write-FixItLog ('Test mode: "{0}" was not run on its own' -f $Action) 'TEST'
+        return 0
+    }
     if ($Action -like '*Admin' -and $Action -ne 'UndoAdmin') { Start-FixItUndoRecord -Fix $Action -Title $Action }
     try {
         switch ($Action) {
             'Gui'                { Show-FixItWindow }
+            'TestAll'            {
+                $res = @(Invoke-FixItTestAll)
+                $path = ''
+                try { $path = Save-FixItTestResults -Results $res } catch { Write-FixItLog ('Could not save the test results: {0}' -f $_.Exception.Message) 'ERROR' }
+                Write-Host 'TEST MODE - every button was checked. Nothing was changed.'
+                foreach ($r in $res) { Write-Host ('  [{0}] {1}' -f $r.Status, $r.Title) }
+                if ($path) { Write-Host ('Results saved: {0}' -f $path) }
+                if (@($res | Where-Object { $_.Status -eq 'FAIL' }).Count -gt 0) { $exit = 1 }
+            }
             'Printer'           { [void](Invoke-FixItAndShow -Which 'Printer') }
             'Acrobat'           { [void](Invoke-FixItAndShow -Which 'Acrobat') }
             'AcrobatRepair'     { [void](Invoke-FixItAndShow -Which 'AcrobatRepair') }

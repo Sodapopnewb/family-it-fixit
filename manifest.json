@@ -1,11 +1,11 @@
 {
   "name": "family-it-fixit",
-  "version": "2.3.3",
+  "version": "2.3.4",
   "files": [
     {
       "path": "FamilyFixIt.ps1",
-      "sha256": "396ccb1321bf9a6e8485d87826a39b545227bfd5bd12500c47f9049a826f46f0",
-      "size": 467312
+      "sha256": "17e6301b6c07bab5014d961b0bf27e4cfa351d2d41dd79aab958a5a39abd6c82",
+      "size": 539610
     },
     {
       "path": "Start-FixIt.cmd",
@@ -14,8 +14,8 @@
     },
     {
       "path": "README.md",
-      "sha256": "2b54745b09fa932aefceccc760bfd57c6f74910b535344ef6db74cb4df5c21b9",
-      "size": 33064
+      "sha256": "99965e085db003e54df0937ce0c4a4e9cc9f57f837b71ef75b45be8b4ef7d9aa",
+      "size": 37441
     },
     {
       "path": "guides.json",

@@ -32,6 +32,7 @@ $script:InstallerRequired = @('FamilyFixIt.ps1', 'Start-FixIt.cmd')   # the icon
 $script:InstallDry = [bool]$WhatIf
 $script:InstallLog = ''
 $script:ShortcutName = 'Family Fix-It'
+$script:TestShortcutName = 'Family Fix-It (Test mode)'   # Start menu only; the same program with -Test (it only checks the fixes)
 $script:ShortcutIcon = 'shell32.dll,22'   # only used if the program icon file is missing
 $script:IconFileName = 'FamilyFixIt.ico'
 
@@ -245,6 +246,21 @@ function Set-InstallShortcuts {
             $made++
         } catch { Write-InstallLog ('Could not make shortcut {0}: {1}' -f $lnk, $_.Exception.Message) 'WARN' }
     }
+    # The Test mode shortcut (Start menu only). Best effort: it is not counted above, so a problem here never fails the install.
+    try {
+        $tf = Get-InstallFolderPath 'Programs'
+        if ($tf) {
+            $tl = Join-Path $tf ($script:TestShortcutName + '.lnk')
+            $targs = $args2 + ' -Test'
+            $tc = Get-InstallShortcut $tl
+            if ($null -ne $tc -and $tc.Target -eq $ps -and $tc.Arguments -eq $targs -and (Test-InstallSameIcon $tc.Icon $icon)) { Write-InstallLog ('Shortcut already correct: ' + $tl) }
+            else {
+                if (-not (Test-Path -LiteralPath $tf)) { New-Item -ItemType Directory -Path $tf -Force | Out-Null }
+                New-InstallShortcut -Path $tl -Target $ps -Arguments $targs -WorkDir $Dir -Icon $icon -Description 'Family Fix-It in Test mode: checks that each fix could work, and changes nothing'
+                Write-InstallLog ('Shortcut written: ' + $tl)
+            }
+        }
+    } catch { Write-InstallLog ('Could not make the Test mode shortcut: ' + $_.Exception.Message) 'WARN' }
     return $made
 }
 
@@ -281,6 +297,7 @@ function Install-FamilyFixIt {
         Say 'Practice run only - nothing was changed. This is what would happen:' 'Yellow'
         Say ('   - download and check {0} files into {1}' -f @($manifest.Files).Count, $Dir)
         Say ('   - make a "{0}" shortcut on the Desktop and in the Start menu' -f $script:ShortcutName)
+        Say ('   - make a "{0}" shortcut in the Start menu (it only checks the fixes and changes nothing)' -f $script:TestShortcutName)
         Say '   - turn on the pop-up watcher (Guardian) and the weekly check-in'
         if ($Launch) { Say '   - open Family Fix-It' }
         return (New-InstallResult $true 'Practice run' 'Practice run only - nothing was changed.' $manifest.Version $false)
