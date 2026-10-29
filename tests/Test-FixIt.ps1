@@ -225,6 +225,64 @@ Assert ($src -notmatch '(?i)Send-MailMessage|SmtpClient|MailMessage|Outlook\.App
 Assert (-not ($src -match '\s\?\?\s|&&|\|\|')) 'no PowerShell 7-only operators (??, &&, ||)'
 Assert ((Get-Content (Join-Path $root 'Start-FixIt.cmd') -Raw) -match 'FamilyFixIt\.ps1') 'launcher points at the script'
 
+# Windows PowerShell 5.1 cannot parse some things that PowerShell 7 accepts (a real PC hit this). Check every script's syntax tree.
+Section 'Static checks: Windows PowerShell 5.1 compatible syntax'
+$ast51 = [Management.Automation.Language.Ast]
+foreach ($f in @('FamilyFixIt.ps1', 'Install-FixIt.ps1', 'tools/Publish-FixIt.ps1', 'tests/Test-FixIt.ps1')) {
+    $e = $null; $t = $null
+    $tree = [Management.Automation.Language.Parser]::ParseFile((Join-Path $root $f), [ref]$t, [ref]$e)
+    Assert ($e.Count -eq 0) "parses cleanly: $f"
+    $bad = New-Object System.Collections.ArrayList
+    foreach ($n in $tree.FindAll({ param($x) $true }, $true)) {
+        $kind = $n.GetType().Name
+        if ($kind -in @('TernaryExpressionAst', 'PipelineChainAst', 'UsingStatementAst')) {
+            if ($kind -eq 'UsingStatementAst' -and $n.UsingStatementKind -eq 'Namespace') { [void]$bad.Add("using namespace at line $($n.Extent.StartLineNumber)") }
+            elseif ($kind -ne 'UsingStatementAst') { [void]$bad.Add("$kind at line $($n.Extent.StartLineNumber)") }
+        }
+        if ($kind -eq 'IndexExpressionAst' -and $n.Index -is [Management.Automation.Language.ArrayLiteralAst]) {
+            [void]$bad.Add("comma (multi) index at line $($n.Extent.StartLineNumber): $($n.Extent.Text)")
+        }
+        if ($kind -eq 'MemberExpressionAst' -and $n.NullConditional) { [void]$bad.Add("?. at line $($n.Extent.StartLineNumber)") }
+        if ($kind -eq 'IndexExpressionAst' -and $n.NullConditional) { [void]$bad.Add("?[] at line $($n.Extent.StartLineNumber)") }
+        if ($kind -eq 'ForEachStatementAst' -and ($n.Flags.ToString() -match 'Parallel')) { [void]$bad.Add("foreach -Parallel at line $($n.Extent.StartLineNumber)") }
+        if ($kind -eq 'AssignmentStatementAst' -and $n.Operator.ToString() -match 'NullCoalescing') { [void]$bad.Add("??= at line $($n.Extent.StartLineNumber)") }
+        if ($kind -eq 'BinaryExpressionAst' -and $n.Operator.ToString() -match 'NullCoalesc') { [void]$bad.Add("?? at line $($n.Extent.StartLineNumber)") }
+        if ($kind -eq 'InvokeMemberExpressionAst' -and $n.Static -and $n.Member.Extent.Text -eq 'new' -and $n.Expression.Extent.Text -match '\[[^\]]*\[') { [void]$bad.Add("::new on a generic type at line $($n.Extent.StartLineNumber)") }
+        if ($kind -eq 'CommandAst') {
+            foreach ($el in $n.CommandElements) { if ($el -is [Management.Automation.Language.CommandParameterAst] -and $el.ParameterName -eq 'Parallel') { [void]$bad.Add("-Parallel at line $($el.Extent.StartLineNumber)") } }
+        }
+    }
+    Assert ($bad.Count -eq 0) ("no PowerShell-7-only or 5.1-unsafe syntax in $f" + $(if ($bad.Count) { ': ' + ($bad -join '; ') } else { '' }))
+}
+# the same check, but on the text of every script, for the easy-to-miss spellings
+foreach ($f in @('FamilyFixIt.ps1', 'Install-FixIt.ps1', 'tools/Publish-FixIt.ps1')) {
+    $lines = [IO.File]::ReadAllLines((Join-Path $root $f))
+    $hits = @(); $ln = 0
+    foreach ($line in $lines) {
+        $ln++
+        if ($line -match '^\s*#') { continue }
+        if ($line -match '\$\w+\[[^\]\r\n]*\)\s*,|\$\w+\[[^\]\r\n]*,\s*\(' -and $line -match '\[math\]::|\.Substring\(|\(\$\w+\[') { $hits += "line ${ln}: comma index near a method call" }
+        if ($line -match '\?\.\w|\?\[|\s\?\?=?\s') { $hits += "line ${ln}: null-conditional / null-coalescing" }
+    }
+    Assert ($hits.Count -eq 0) ("no multi-index or null operators in text of $f" + $(if ($hits.Count) { ': ' + ($hits -join '; ') } else { '' }))
+}
+# PSScriptAnalyzer's compatibility rule for 5.1, when it is installed on the machine running the tests
+if (Get-Module -ListAvailable -Name PSScriptAnalyzer) {
+    Import-Module PSScriptAnalyzer
+    $psaSettings = @{ Rules = @{ PSUseCompatibleSyntax = @{ Enable = $true; TargetVersions = @('5.1') } } }
+    foreach ($f in @('FamilyFixIt.ps1', 'Install-FixIt.ps1', 'tools/Publish-FixIt.ps1')) {
+        $r = @(Invoke-ScriptAnalyzer -Path (Join-Path $root $f) -Settings $psaSettings -IncludeRule PSUseCompatibleSyntax)
+        Assert ($r.Count -eq 0) ("PSScriptAnalyzer PSUseCompatibleSyntax (5.1): $f" + $(if ($r.Count) { ': ' + (($r | ForEach-Object { "line $($_.Line) $($_.Message)" }) -join '; ') } else { '' }))
+    }
+} else { Write-Host '  (PSScriptAnalyzer not installed here: using the built-in syntax-tree checks only)' }
+# edit distance gives the right answers
+Assert ((Get-FixItEditDistance -A 'printer' -B 'printer') -eq 0) 'edit distance: same word is 0'
+Assert ((Get-FixItEditDistance -A 'printer' -B 'pritner') -eq 1) 'edit distance: swapped letters are 1'
+Assert ((Get-FixItEditDistance -A 'printer' -B 'printr') -eq 1) 'edit distance: one letter missing is 1'
+Assert ((Get-FixItEditDistance -A 'wifi' -B 'wiffi') -eq 1) 'edit distance: one extra letter is 1'
+Assert ((Get-FixItEditDistance -A 'cat' -B 'dog' -Max 3) -eq 3) 'edit distance: three different letters is 3'
+Assert ((Get-FixItEditDistance -A 'cat' -B 'elephant' -Max 2) -eq 3) 'edit distance: gives up on very different lengths'
+
 # ---------------------------------------------------------------- printer
 Section 'Printer: spooler + spool folder'
 Reset-All; $d = New-Spool
@@ -1048,7 +1106,7 @@ $pub = Join-Path $root 'tools/Publish-FixIt.ps1'
 $dist = Join-Path $tmp 'dist1'
 & $pub -Owner 'octo-test' -OutDir $dist -WarningAction SilentlyContinue | Out-Null
 $man = Get-Content (Join-Path $dist 'manifest.json') -Raw | ConvertFrom-Json
-Assert ($man.version -eq '2.2.1' -and @($man.files).Count -eq 4) 'manifest has version and 4 runtime files'
+Assert ($man.version -eq '2.2.2' -and @($man.files).Count -eq 4) 'manifest has version and 4 runtime files'
 Assert (@($man.apps).Count -eq 4 -and $man.apps[0].id -eq 'Google.Chrome') 'manifest carries the approved app list'
 $badApps = Join-Path $tmp 'badapps'; Copy-Item -LiteralPath $root -Destination $badApps -Recurse
 Set-Content (Join-Path $badApps 'apps.json') '[{"id":"calc; evil","name":"x"}]'
@@ -1074,7 +1132,7 @@ Assert (-not (Select-String -Path (Join-Path $dist '*') -Pattern '(?i)treyb|@gma
 # a newer version 1.0.1 to update to
 $newSrc = Join-Path $tmp 'newsrc'; Copy-Item -LiteralPath $root -Destination $newSrc -Recurse
 $ps = Join-Path $newSrc 'FamilyFixIt.ps1'
-[IO.File]::WriteAllText($ps, ([IO.File]::ReadAllText($ps).Replace("FixItVersion = '2.2.1'", "FixItVersion = '2.2.2'")))
+[IO.File]::WriteAllText($ps, ([IO.File]::ReadAllText($ps).Replace("FixItVersion = '2.2.2'", "FixItVersion = '2.2.3'")))
 $dist2 = Join-Path $tmp 'dist2'
 & (Join-Path $newSrc 'tools/Publish-FixIt.ps1') -SourceDir $newSrc -Owner 'octo-test' -OutDir $dist2 | Out-Null
 $base = 'https://raw.githubusercontent.com/octo-test/family-it-fixit/main/'
@@ -1085,7 +1143,7 @@ $script:ManifestUrl = $base + 'manifest.json'
 Reset-All; Set-Web $dist2; $script:InstallDir = New-Install
 $res = Invoke-FixItUpdate
 Assert ($res.Ok -and $res.Title -eq 'Updated') 'newer version installs after asking'
-Assert ([IO.File]::ReadAllText((Join-Path $script:InstallDir 'FamilyFixIt.ps1')) -match "FixItVersion = '2.2.2'") 'installed script is the new one'
+Assert ([IO.File]::ReadAllText((Join-Path $script:InstallDir 'FamilyFixIt.ps1')) -match "FixItVersion = '2.2.3'") 'installed script is the new one'
 Assert (Test-Path (Join-Path $script:InstallDir 'previous/FamilyFixIt.ps1')) 'old version kept in previous/'
 Assert (@($script:Asked).Count -eq 1) 'asked before updating'
 
@@ -1422,7 +1480,7 @@ $relDir = Join-Path $tmp 'release1'
 $distI = Join-Path $tmp 'dist-i1'
 $newSrcI = Join-Path $tmp 'newsrc-i'; Copy-Item -LiteralPath $root -Destination $newSrcI -Recurse
 $psI = Join-Path $newSrcI 'FamilyFixIt.ps1'
-[IO.File]::WriteAllText($psI, ([IO.File]::ReadAllText($psI).Replace("FixItVersion = '2.2.1'", "FixItVersion = '2.2.2'")))
+[IO.File]::WriteAllText($psI, ([IO.File]::ReadAllText($psI).Replace("FixItVersion = '2.2.2'", "FixItVersion = '2.2.3'")))
 $distI2 = Join-Path $tmp 'dist-i2'
 & (Join-Path $newSrcI 'tools/Publish-FixIt.ps1') -SourceDir $newSrcI -Owner 'octo-test' -OutDir $distI2 -ReleaseDir (Join-Path $tmp 'release2') -WarningAction SilentlyContinue | Out-Null
 
@@ -1477,7 +1535,7 @@ Assert ($rd -match 'releases/latest/download/Install-FamilyFixIt\.zip' -and $rd 
 
     Reset-Inst; Serve $distI
     $r = Install-FamilyFixIt -Base $base -Dir $dir
-    Assert ($r.Ok -and $r.Title -eq 'Installed' -and $r.Version -eq '2.2.1' -and $r.Changed) 'fresh install works'
+    Assert ($r.Ok -and $r.Title -eq 'Installed' -and $r.Version -eq '2.2.2' -and $r.Changed) 'fresh install works'
     $same = $true; foreach ($f in @('FamilyFixIt.ps1', 'Start-FixIt.cmd', 'README.md')) { if ((Get-FileSha256 (Join-Path $dir $f)) -ne (Get-FileSha256 (Join-Path $distI $f))) { $same = $false } }
     Assert $same 'the three files are installed and match the published fingerprints'
     Assert (-not (Test-Path (Join-Path $dir '.staging')) -and -not (Test-Path (Join-Path $dir 'previous'))) 'no leftover staging folder; nothing to keep from a previous version'
@@ -1502,10 +1560,10 @@ Assert ($rd -match 'releases/latest/download/Install-FamilyFixIt\.zip' -and $rd 
 
     Clear-I; Serve $distI2; $script:I.Lnk.Remove($dl)
     $r = Install-FamilyFixIt -Base $base -Dir $dir
-    Assert ($r.Ok -and $r.Version -eq '2.2.2' -and (Get-InstalledVersion $dir) -eq '2.2.2') 'a newer version in the list updates the install'
+    Assert ($r.Ok -and $r.Version -eq '2.2.3' -and (Get-InstalledVersion $dir) -eq '2.2.3') 'a newer version in the list updates the install'
     Assert (($script:I.Actions -join ',') -eq 'GuardianOff,GuardianOn,CheckInOn') 'update restarts the watcher so it runs the new program'
     Assert ($script:I.LnkWrites -eq 1 -and $script:I.Lnk.ContainsKey($dl)) 'a missing shortcut is put back'
-    Assert ((Get-InstalledVersion (Join-Path $dir 'previous')) -eq '2.2.1') 'the old program is kept in previous/'
+    Assert ((Get-InstalledVersion (Join-Path $dir 'previous')) -eq '2.2.2') 'the old program is kept in previous/'
 
     # a download that does not match the fingerprint
     Reset-Inst; Serve $distI; $script:I.Tamper['/FamilyFixIt.ps1'] = $true
@@ -1515,7 +1573,7 @@ Assert ($rd -match 'releases/latest/download/Install-FamilyFixIt\.zip' -and $rd 
     Assert ((Get-Content $script:InstallLog -Raw) -match 'CHECKSUM MISMATCH') 'tampered download: logged'
     Reset-Inst; Serve $distI; $null = Install-FamilyFixIt -Base $base -Dir $dir; Clear-I; Serve $distI2; $script:I.Tamper['/FamilyFixIt.ps1'] = $true
     $r = Install-FamilyFixIt -Base $base -Dir $dir
-    Assert (-not $r.Ok -and (Get-InstalledVersion $dir) -eq '2.2.1') 'tampered update: the working old copy is left exactly as it was'
+    Assert (-not $r.Ok -and (Get-InstalledVersion $dir) -eq '2.2.2') 'tampered update: the working old copy is left exactly as it was'
 
     # network problems
     Reset-Inst; Serve $distI; $script:I.WebFail = $true

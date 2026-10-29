@@ -34,7 +34,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 # Settings
 # ---------------------------------------------------------------------------
-$script:FixItVersion = '2.2.1'
+$script:FixItVersion = '2.2.2'
 $script:DefaultManifestUrl = 'https://raw.githubusercontent.com/Sodapopnewb/family-it-fixit/main/manifest.json'
 $script:OwnerPlaceholder = ('<' + 'OWNER>')   # the guards compare with this; Publish never rewrites it
 # Where reports are sent (a small Cloudflare Worker that Trey runs). The app header is NOT a secret.
@@ -4006,18 +4006,29 @@ function Get-FixItEditDistance {
     param([string]$A, [string]$B, [int]$Max = 2)
     if ([math]::Abs($A.Length - $B.Length) -gt $Max) { return ($Max + 1) }
     $n = $A.Length; $m = $B.Length
-    $d = New-Object 'int[,]' ($n + 1), ($m + 1)
-    for ($i = 0; $i -le $n; $i++) { $d[$i, 0] = $i }
-    for ($j = 0; $j -le $m; $j++) { $d[0, $j] = $j }
+    # One flat array (row i, column j lives at i * w + j) and plain temp variables: Windows PowerShell 5.1 cannot parse
+    # a comma index like $d[($i - 1), $j] inside a method call.
+    $w = $m + 1
+    $d = New-Object 'int[]' (($n + 1) * $w)
+    for ($i = 0; $i -le $n; $i++) { $d[$i * $w] = $i }
+    for ($j = 0; $j -le $m; $j++) { $d[$j] = $j }
     for ($i = 1; $i -le $n; $i++) {
         for ($j = 1; $j -le $m; $j++) {
             $cost = 1; if ($A[$i - 1] -eq $B[$j - 1]) { $cost = 0 }
-            $v = [math]::Min([math]::Min($d[($i - 1), $j] + 1, $d[$i, ($j - 1)] + 1), $d[($i - 1), ($j - 1)] + $cost)
-            if ($i -gt 1 -and $j -gt 1 -and $A[$i - 1] -eq $B[$j - 2] -and $A[$i - 2] -eq $B[$j - 1]) { $v = [math]::Min($v, $d[($i - 2), ($j - 2)] + 1) }
-            $d[$i, $j] = $v
+            $up = $d[($i - 1) * $w + $j] + 1
+            $left = $d[$i * $w + ($j - 1)] + 1
+            $diag = $d[($i - 1) * $w + ($j - 1)] + $cost
+            $v = $up
+            if ($left -lt $v) { $v = $left }
+            if ($diag -lt $v) { $v = $diag }
+            if ($i -gt 1 -and $j -gt 1 -and $A[$i - 1] -eq $B[$j - 2] -and $A[$i - 2] -eq $B[$j - 1]) {
+                $swap = $d[($i - 2) * $w + ($j - 2)] + 1
+                if ($swap -lt $v) { $v = $swap }
+            }
+            $d[$i * $w + $j] = $v
         }
     }
-    return $d[$n, $m]
+    return $d[$n * $w + $m]
 }
 # How well a typed word matches a word in a guide: 3 same word, 2 starts the same way, 1 probably a typing slip, 0 no.
 function Get-FixItWordMatch {
