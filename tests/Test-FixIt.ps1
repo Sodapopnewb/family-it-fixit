@@ -2204,8 +2204,8 @@ $gj = [IO.File]::ReadAllText((Join-Path $root 'guides.json'))
 $gBytes = [IO.File]::ReadAllBytes((Join-Path $root 'guides.json'))
 Assert (@($gBytes | Where-Object { $_ -gt 127 }).Count -eq 0) 'guides.json is plain ASCII'
 $starter = @(ConvertTo-FixItGuides ($gj | ConvertFrom-Json))
-Assert ($starter.Count -eq 10) 'guides.json: 10 starter guides, all valid'
-foreach ($id in @('print', 'scan', 'attach-photo', 'screenshot', 'wifi', 'video-call', 'save-photo', 'bigger-text', 'find-download', 'spot-scam')) { Assert (@($starter | Where-Object { $_.Id -eq $id }).Count -eq 1) "starter guide: $id" }
+Assert ($starter.Count -eq 11) 'guides.json: 11 starter guides, all valid'
+foreach ($id in @('print', 'scan', 'attach-photo', 'screenshot', 'wifi', 'video-call', 'teams-call', 'save-photo', 'bigger-text', 'find-download', 'spot-scam')) { Assert (@($starter | Where-Object { $_.Id -eq $id }).Count -eq 1) "starter guide: $id" }
 foreach ($g in $starter) { Assert (@($g.Keywords).Count -ge 5) ("guide has search words: " + $g.Id); Assert (@($g.Steps).Count -ge 3 -and @($g.Steps).Count -le 15) ("guide has a sensible number of steps: " + $g.Id) }
 Assert (-not ($gj -match '(?i)@[a-z0-9-]+\.(com|net|org)|https?://')) 'guides.json holds no email addresses or web links'
 $bad = @(
@@ -2239,7 +2239,7 @@ $g = @(Get-FixItGuides)
 Assert ($g.Count -eq 1 -and $g[0].Id -eq 'live-one') 'guides: the live list wins when it can be read'
 $script:WebFail = $true
 $g = @(Get-FixItGuides)
-Assert ($g.Count -eq 10) 'guides: offline, the saved guides.json is used'
+Assert ($g.Count -eq 11) 'guides: offline, the saved guides.json is used'
 Remove-Item (Join-Path $localDir 'guides.json')
 $g = @(Get-FixItGuides)
 Assert ($g.Count -ge 1 -and $g[0].Id -eq 'screenshot') 'guides: offline and no file, the small built-in guide is used'
@@ -2249,9 +2249,9 @@ Assert ($g.Count -ge 1 -and $g[0].Id -eq 'screenshot') 'guides: a damaged guides
 $script:WebFail = $false
 ([pscustomobject]@{ version = '9.9.9'; guides = @() } | ConvertTo-Json -Depth 6) | Set-Content $mf -Encoding ASCII
 Copy-Item (Join-Path $root 'guides.json') (Join-Path $localDir 'guides.json') -Force
-Assert (@(Get-FixItGuides).Count -eq 10) 'guides: an empty live list is ignored in favour of guides.json'
+Assert (@(Get-FixItGuides).Count -eq 11) 'guides: an empty live list is ignored in favour of guides.json'
 '{ "version": "9.9.9" }' | Set-Content $mf -Encoding ASCII
-Assert (@(Get-FixItGuides).Count -eq 10) 'guides: a manifest with no guides at all is fine'
+Assert (@(Get-FixItGuides).Count -eq 11) 'guides: a manifest with no guides at all is fine'
 $script:ManifestUrl = 'https://raw.githubusercontent.com/<OWNER>/family-it-fixit/main/manifest.json'
 $script:Calls.Clear(); $null = Get-FixItGuides
 Assert ((CallsLike 'web*') -eq 0) 'guides: with the <OWNER> placeholder nothing is fetched'
@@ -2271,6 +2271,11 @@ Assert ((FirstHit 'photos') -in @('attach-photo', 'save-photo')) '"photos" finds
 Assert ((FirstHit 'wifi') -eq 'wifi' -and (FirstHit 'wi-fi') -eq 'wifi' -and (FirstHit 'wireless') -eq 'wifi') '"wifi", "wi-fi" and "wireless" find the Wi-Fi guide'
 Assert ((FirstHit 'internet') -eq 'wifi') '"internet" finds the Wi-Fi guide'
 Assert ((FirstHit 'zoom') -eq 'video-call') '"zoom" finds the video call guide'
+Assert ((FirstHit 'teams') -eq 'teams-call' -and (FirstHit 'microsoft teams') -eq 'teams-call' -and (FirstHit 'join teams meeting') -eq 'teams-call') '"teams", "microsoft teams" and "join teams meeting" find the Teams guide first'
+Assert ((FirstHit 'teams call') -eq 'teams-call' -and (FirstHit 'join meeting') -in @('teams-call', 'video-call') -and (Hits 'video call') -contains 'teams-call' -and (Hits 'lobby') -contains 'teams-call' -and (Hits 'waiting room') -contains 'teams-call') 'Teams guide: call, meeting, video call, lobby and waiting room words find it'
+Assert ((FirstHit 'temas') -eq 'teams-call' -and (FirstHit 'tems meeting') -eq 'teams-call') 'Teams guide: typos like "temas" and "tems" still find it'
+$tg = @($starter | Where-Object { $_.Id -eq 'teams-call' })[0]; $tgText = ($tg.Steps -join ' ')
+Assert ($tgText -match 'Continue on this browser' -and $tgText -match 'Open your Teams app' -and $tgText -match 'Join now' -and $tgText -match '(?i)lobby' -and $tgText -match 'Leave' -and $tgText -match 'Fix sound/mic/camera') 'Teams guide covers the browser/app choice, Join now, the lobby, Leave and points to the sound/mic/camera fix'
 Assert ((FirstHit 'make text bigger') -eq 'bigger-text') '"make text bigger" finds the text size guide'
 Assert ((FirstHit 'cant read it') -eq 'bigger-text' -or (Hits 'cant read it').Count -eq 0 -or (Hits 'hard to read') -contains 'bigger-text') 'reading trouble words lead to the text size guide'
 Assert ((FirstHit 'lost file') -eq 'find-download' -and (FirstHit 'where is my download') -eq 'find-download') 'file-hunting phrases find the downloads guide'
@@ -2287,11 +2292,11 @@ Assert ((Hits 'pictre') -contains 'attach-photo') 'typo: "pictre"'
 # fillers, capitals, symbols
 Assert ((FirstHit 'How do I print?') -eq 'print' -and (FirstHit 'PRINT') -eq 'print' -and (FirstHit '  print!!  ') -eq 'print') 'capitals, punctuation and spaces do not matter'
 Assert ((FirstHit 'help me with wifi') -eq 'wifi') 'filler words like "help me with" are ignored'
-Assert ((Hits '').Count -eq 10 -and (Hits '   ').Count -eq 10 -and (Hits 'help me with').Count -eq 10) 'an empty search (or only filler words) shows every guide'
+Assert ((Hits '').Count -eq 11 -and (Hits '   ').Count -eq 11 -and (Hits 'help me with').Count -eq 11) 'an empty search (or only filler words) shows every guide'
 Assert ((Hits '') -join ',' -eq (($starter | ForEach-Object { $_.Id }) -join ',')) 'an empty search keeps the order of guides.json'
 # nothing found
 Assert ((Hits 'xyzzy').Count -eq 0 -and (Hits 'qqqqqq').Count -eq 0 -and (Hits 'refrigerator warranty').Count -eq 0) 'nonsense gives no hits'
-Assert ((Hits 'a').Count -eq 10) 'one letter is too short to search on (shows everything)'
+Assert ((Hits 'a').Count -eq 11) 'one letter is too short to search on (shows everything)'
 # ranking: title beats a passing mention in the steps
 $rank = @([pscustomobject]@{ Id = 'a-mention'; Title = 'Something else'; Keywords = @(); Steps = @('Then you can print it.') }, [pscustomobject]@{ Id = 'b-title'; Title = 'How to print'; Keywords = @(); Steps = @('Do it.') })
 Assert ((@(Search-FixItGuides -Guides $rank -Query 'print' | ForEach-Object { $_.Guide.Id })[0]) -eq 'b-title') 'a title match ranks above a mention in the steps'
@@ -2302,7 +2307,7 @@ Assert (@(Search-FixItGuides -Guides $stepOnly -Query 'gadget').Count -eq 1) 'wo
 Assert ((Hits 'print zebra').Count -ge 1 -and (Hits 'print zebra')[0] -eq 'print') 'two words: one match out of two still finds the best guide'
 Assert ((Hits 'zebra giraffe lion').Count -eq 0) 'three unknown words find nothing'
 # does not fall over on odd input
-Assert ((Hits ('x' * 500)).Count -eq 0 -and (Hits '!@#$%^&*()').Count -eq 10) 'very long or symbol-only searches do not crash'
+Assert ((Hits ('x' * 500)).Count -eq 0 -and (Hits '!@#$%^&*()').Count -eq 11) 'very long or symbol-only searches do not crash'
 $t0 = Get-Date; 1..3 | ForEach-Object { $null = Hits 'how do i print a picture' }; $ms = ((Get-Date) - $t0).TotalMilliseconds / 3
 Assert ($ms -lt 1500) ('a search is fast enough to run as you type (' + [int]$ms + ' ms)')
 Assert ((Get-FixItEditDistance 'print' 'pritn') -eq 1 -and (Get-FixItEditDistance 'scan' 'scam') -eq 1 -and (Get-FixItEditDistance 'abc' 'xyz') -eq 3) 'edit distance counts a swap as one slip'
@@ -2315,7 +2320,7 @@ Assert ($r.Ok -and $r.Title -match '(?i)scan' -and $r.Message -match '(?m)^1\. '
 $r = Invoke-GuidesHelper -Search 'zebra giraffe lion'
 Assert ($r.Ok -and $r.NoMatch -and $r.Message -eq 'No guide for that yet - Send Trey a report?') 'helper: no match gives the friendly "Send Trey a report?" message'
 $r = Invoke-GuidesHelper
-Assert ($r.Ok -and @($r.Guides).Count -eq 10) 'helper: no search lists every guide'
+Assert ($r.Ok -and @($r.Guides).Count -eq 11) 'helper: no search lists every guide'
 $n = Get-FixItNoGuideNote 'my   cat' 
 Assert ($n -match 'my cat' -and $n -match 'no guide') 'the "no guide" note for the report says what was searched'
 Assert ((Get-FixItNoGuideNote ('z' * 500)).Length -lt 300) 'the "no guide" note keeps a long search short'
@@ -2371,7 +2376,7 @@ Assert ($out -match '(?i)scan') 'command line: -Action Guides -Query scanner pri
 $out = & $pw -NoProfile -File (Join-Path $root 'FamilyFixIt.ps1') -Action Guides -Query 'zebra giraffe lion' -LogPath (Join-Path $tmp 'cli-g3.log') 2>&1 | Out-String
 Assert ($out -match 'No guide for that yet') 'command line: a search with no match says so'
 $mfx = Get-Content (Join-Path $dist 'manifest.json') -Raw | ConvertFrom-Json
-Assert (@($mfx.guides).Count -eq 10 -and @($mfx.guides | Where-Object { @($_.keywords).Count -ge 5 -and @($_.steps).Count -ge 3 }).Count -eq 10) 'the published list carries all 10 guides with their search words'
+Assert (@($mfx.guides).Count -eq 11 -and @($mfx.guides | Where-Object { @($_.keywords).Count -ge 5 -and @($_.steps).Count -ge 3 }).Count -eq 11) 'the published list carries all 11 guides with their search words'
 Assert (@($mfx.files | Where-Object { $_.path -eq 'guides.json' }).Count -eq 1) 'guides.json is in the published list with a fingerprint'
 $gi = @($mfx.files | Where-Object { $_.path -eq 'guides.json' })[0]
 Assert ($gi.sha256 -eq (Get-FileSha256 (Join-Path $dist 'guides.json'))) 'the guides.json fingerprint matches the file'
