@@ -1428,14 +1428,14 @@ $outPin = & (Get-Command pwsh).Source -NoProfile -File (Join-Path $root 'FamilyF
 Assert ($LASTEXITCODE -eq 0 -and $outPin -match 'Pin to taskbar') 'command line: -Action Pin prints the steps'
 
 Section 'Version'
-Assert ($script:FixItVersion -eq '2.3.2') 'the program is version 2.3.2'
+Assert ($script:FixItVersion -eq '2.3.3') 'the program is version 2.3.3'
 
 Section 'Publish + update'
 $pub = Join-Path $root 'tools/Publish-FixIt.ps1'
 $dist = Join-Path $tmp 'dist1'
 & $pub -Owner 'octo-test' -OutDir $dist -WarningAction SilentlyContinue | Out-Null
 $man = Get-Content (Join-Path $dist 'manifest.json') -Raw | ConvertFrom-Json
-Assert ($man.version -eq '2.3.2' -and @($man.files).Count -eq 4) 'manifest has version and 4 runtime files'
+Assert ($man.version -eq '2.3.3' -and @($man.files).Count -eq 4) 'manifest has version and 4 runtime files'
 Assert (@($man.apps).Count -eq 4 -and $man.apps[0].id -eq 'Google.Chrome') 'manifest carries the approved app list'
 Assert (@($man.assets).Count -eq 1 -and $man.assets[0].path -eq 'FamilyFixIt.ico' -and $man.assets[0].sha256 -match '^[0-9a-f]{64}$' -and [int]$man.assets[0].size -gt 1000) 'manifest lists the program icon under assets, with its SHA-256 and size'
 Assert (@($man.files | Where-Object { $_.path -like '*.ico' }).Count -eq 0) 'the icon is NOT in "files" (versions up to 2.3.1 refuse unknown names there, which would break their update)'
@@ -1464,7 +1464,7 @@ Assert (-not (Select-String -Path (Join-Path $dist '*') -Pattern '(?i)treyb|@gma
 # a newer version 1.0.1 to update to
 $newSrc = Join-Path $tmp 'newsrc'; Copy-Item -LiteralPath $root -Destination $newSrc -Recurse
 $ps = Join-Path $newSrc 'FamilyFixIt.ps1'
-[IO.File]::WriteAllText($ps, ([IO.File]::ReadAllText($ps).Replace("FixItVersion = '2.3.2'", "FixItVersion = '2.3.3'")))
+[IO.File]::WriteAllText($ps, ([IO.File]::ReadAllText($ps).Replace("FixItVersion = '2.3.3'", "FixItVersion = '2.3.4'")))
 $dist2 = Join-Path $tmp 'dist2'
 & (Join-Path $newSrc 'tools/Publish-FixIt.ps1') -SourceDir $newSrc -Owner 'octo-test' -OutDir $dist2 | Out-Null
 $base = 'https://raw.githubusercontent.com/octo-test/family-it-fixit/main/'
@@ -1475,7 +1475,7 @@ $script:ManifestUrl = $base + 'manifest.json'
 Reset-All; Set-Web $dist2; $script:InstallDir = New-Install
 $res = Invoke-FixItUpdate
 Assert ($res.Ok -and $res.Title -eq 'Updated') 'newer version installs after asking'
-Assert ([IO.File]::ReadAllText((Join-Path $script:InstallDir 'FamilyFixIt.ps1')) -match "FixItVersion = '2.3.3'") 'installed script is the new one'
+Assert ([IO.File]::ReadAllText((Join-Path $script:InstallDir 'FamilyFixIt.ps1')) -match "FixItVersion = '2.3.4'") 'installed script is the new one'
 Assert (Test-Path (Join-Path $script:InstallDir 'previous/FamilyFixIt.ps1')) 'old version kept in previous/'
 Assert (@($script:Asked).Count -eq 1) 'asked before updating'
 
@@ -1953,7 +1953,7 @@ $relDir = Join-Path $tmp 'release1'
 $distI = Join-Path $tmp 'dist-i1'
 $newSrcI = Join-Path $tmp 'newsrc-i'; Copy-Item -LiteralPath $root -Destination $newSrcI -Recurse
 $psI = Join-Path $newSrcI 'FamilyFixIt.ps1'
-[IO.File]::WriteAllText($psI, ([IO.File]::ReadAllText($psI).Replace("FixItVersion = '2.3.2'", "FixItVersion = '2.3.3'")))
+[IO.File]::WriteAllText($psI, ([IO.File]::ReadAllText($psI).Replace("FixItVersion = '2.3.3'", "FixItVersion = '2.3.4'")))
 $distI2 = Join-Path $tmp 'dist-i2'
 & (Join-Path $newSrcI 'tools/Publish-FixIt.ps1') -SourceDir $newSrcI -Owner 'octo-test' -OutDir $distI2 -ReleaseDir (Join-Path $tmp 'release2') -WarningAction SilentlyContinue | Out-Null
 
@@ -2008,7 +2008,7 @@ Assert ($rd -match 'releases/latest/download/Install-FamilyFixIt\.zip' -and $rd 
 
     Reset-Inst; Serve $distI
     $r = Install-FamilyFixIt -Base $base -Dir $dir
-    Assert ($r.Ok -and $r.Title -eq 'Installed' -and $r.Version -eq '2.3.2' -and $r.Changed) 'fresh install works'
+    Assert ($r.Ok -and $r.Title -eq 'Installed' -and $r.Version -eq '2.3.3' -and $r.Changed) 'fresh install works'
     $same = $true; foreach ($f in @('FamilyFixIt.ps1', 'Start-FixIt.cmd', 'README.md')) { if ((Get-FileSha256 (Join-Path $dir $f)) -ne (Get-FileSha256 (Join-Path $distI $f))) { $same = $false } }
     Assert $same 'the three files are installed and match the published fingerprints'
     Assert (-not (Test-Path (Join-Path $dir '.staging')) -and -not (Test-Path (Join-Path $dir 'previous'))) 'no leftover staging folder; nothing to keep from a previous version'
@@ -2055,10 +2055,10 @@ Assert ($rd -match 'releases/latest/download/Install-FamilyFixIt\.zip' -and $rd 
 
     Clear-I; Serve $distI2; $script:I.Lnk.Remove($dl)
     $r = Install-FamilyFixIt -Base $base -Dir $dir
-    Assert ($r.Ok -and $r.Version -eq '2.3.3' -and (Get-InstalledVersion $dir) -eq '2.3.3') 'a newer version in the list updates the install'
+    Assert ($r.Ok -and $r.Version -eq '2.3.4' -and (Get-InstalledVersion $dir) -eq '2.3.4') 'a newer version in the list updates the install'
     Assert (($script:I.Actions -join ',') -eq 'GuardianOff,GuardianOn,CheckInOn') 'update restarts the watcher so it runs the new program'
     Assert ($script:I.LnkWrites -eq 1 -and $script:I.Lnk.ContainsKey($dl)) 'a missing shortcut is put back'
-    Assert ((Get-InstalledVersion (Join-Path $dir 'previous')) -eq '2.3.2') 'the old program is kept in previous/'
+    Assert ((Get-InstalledVersion (Join-Path $dir 'previous')) -eq '2.3.3') 'the old program is kept in previous/'
 
     # a download that does not match the fingerprint
     Reset-Inst; Serve $distI; $script:I.Tamper['/FamilyFixIt.ps1'] = $true
@@ -2068,7 +2068,7 @@ Assert ($rd -match 'releases/latest/download/Install-FamilyFixIt\.zip' -and $rd 
     Assert ((Get-Content $script:InstallLog -Raw) -match 'CHECKSUM MISMATCH') 'tampered download: logged'
     Reset-Inst; Serve $distI; $null = Install-FamilyFixIt -Base $base -Dir $dir; Clear-I; Serve $distI2; $script:I.Tamper['/FamilyFixIt.ps1'] = $true
     $r = Install-FamilyFixIt -Base $base -Dir $dir
-    Assert (-not $r.Ok -and (Get-InstalledVersion $dir) -eq '2.3.2') 'tampered update: the working old copy is left exactly as it was'
+    Assert (-not $r.Ok -and (Get-InstalledVersion $dir) -eq '2.3.3') 'tampered update: the working old copy is left exactly as it was'
 
     # network problems
     Reset-Inst; Serve $distI; $script:I.WebFail = $true
@@ -2521,7 +2521,7 @@ Assert ($rm.State -eq 'Ok' -and @($rm.Assets).Count -eq 0) 'a list with no asset
 Reset-All; Set-Web $distI3; $script:ManifestUrl = $base + 'manifest.json'
 $script:InstallDir = New-Install; Reset-Lnks
 Copy-Item (Join-Path $distI3 'FamilyFixIt.ps1') $script:InstallDir -Force
-$script:FixItVersion = '2.3.3'   # pretend we are the newest program, so only the icon is missing
+$script:FixItVersion = '2.3.4'   # pretend we are the newest program, so only the icon is missing
 $fixed = Repair-FixItIcon
 $ico2 = Join-Path $script:InstallDir 'FamilyFixIt.ico'
 Assert ($fixed -and (Test-Path $ico2) -and (Get-FileSha256 $ico2) -eq (Get-FileSha256 $icoSrc) -and $script:Lnks[$lnkDesk].Icon -eq ($ico2 + ',0')) 'missing icon: fetched from the update list, verified, shortcuts pointed at it'
@@ -2537,7 +2537,7 @@ Assert ((Repair-FixItIcon) -eq $false -and -not (Test-Path $ico2)) 'practice run
 $script:DryRun = $false
 $script:ManifestUrl = 'https://raw.githubusercontent.com/<' + 'OWNER>/family-it-fixit/main/manifest.json'
 Assert ((Repair-FixItIcon) -eq $false) 'update address not set up: does nothing'
-$script:FixItVersion = '2.3.2'
+$script:FixItVersion = '2.3.3'
 
 # window / taskbar icon
 Assert (@([regex]::Matches($src, 'New-Object System\.Windows\.Forms\.Form')).Count -eq @([regex]::Matches($src, '(?m)^\s*(\$\w+) = New-Object System\.Windows\.Forms\.Form\r?\n\s*Set-FixItFormIcon \1')).Count) 'every window (main, confirm, pickers, guides ...) gets the program icon right after it is created'
@@ -2560,6 +2560,183 @@ $threw = $false; try { & $pub -SourceDir $noIco -OutDir (Join-Path $tmp 'noico-o
 Assert $threw 'publish stops when the icon file is missing'
 $pi2 = [IO.File]::ReadAllText((Join-Path $dist 'Install-FixIt.ps1'))
 Assert ($pi2 -match "FamilyFixIt\.ico" -and $pi2 -match 'Get-InstallIconLocation') 'the published installer knows the icon'
+
+Section 'One window only (single instance)'
+$pwx = (Get-Command pwsh).Source
+$origAction = $Action; $origAdmin = $script:Admin; $origBg = $script:Background; $origDry = $script:DryRun; $origLocal = $env:LOCALAPPDATA
+$env:LOCALAPPDATA = Join-Path $tmp 'si-local'; New-Item -ItemType Directory -Path $env:LOCALAPPDATA -Force | Out-Null
+$script:GuiInstanceKeyOverride = 'S-1-5-21-test-' + [guid]::NewGuid().ToString('N')
+$script:Admin = $false; $script:Background = $false; $script:DryRun = $false
+
+# names: per user, never the same as the Guardian's
+$gn = Get-FixItGuiInstanceNames
+Assert ($gn.Mutex -like 'Local\FamilyFixIt-GUI-S-1-5-21-test-*' -and $gn.Event -like 'Local\FamilyFixIt-GUI-Show-S-1-5-21-test-*') 'mutex and event are named Local\FamilyFixIt-GUI-... with the user key'
+Assert ($gn.Mutex -ne $script:GuardianMutexName -and $gn.Mutex -notlike '*Guardian*') 'the window mutex is not the Guardian mutex'
+$script:GuiInstanceKeyOverride = 'S-1-5-21-other'
+Assert ((Get-FixItGuiInstanceNames).Mutex -ne $gn.Mutex) 'a different user gets a different mutex'
+$script:GuiInstanceKeyOverride = $gn.Key
+$script:DryRun = $true
+Assert ((Get-FixItGuiInstanceNames).Mutex -like '*-Practice') 'practice mode (-WhatIf) has its own mutex, so it never hides a real window'
+$script:DryRun = $false
+$script:GuiInstanceKeyOverride = $null
+$realNames = Get-FixItGuiInstanceNames
+Assert ($realNames.Mutex -match '^Local\\FamilyFixIt-GUI-[A-Za-z0-9\-_]+$') 'without an override the name is built from the real user (SID or user name)'
+$script:GuiInstanceKeyOverride = $gn.Key
+
+# which starts take part: only the plain, visible, not-elevated window
+$tree51 = [Management.Automation.Language.Parser]::ParseFile((Join-Path $root 'FamilyFixIt.ps1'), [ref]$null, [ref]$null)
+$actionParam = @($tree51.ParamBlock.Parameters | Where-Object { $_.Name.VariablePath.UserPath -eq 'Action' })[0]
+$allActions = @($actionParam.Attributes | Where-Object { $_.TypeName.Name -eq 'ValidateSet' })[0].PositionalArguments | ForEach-Object { [string]$_.Value }
+Assert (@($allActions).Count -gt 40 -and $allActions -contains 'Gui') 'read the list of actions from the script itself'
+$takePart = @(); foreach ($a in $allActions) { $script:Background = ($script:BackgroundActions -contains $a); Set-Variable -Name Action -Value $a -Scope 0 -ErrorAction SilentlyContinue; $Action = $a; if (Test-FixItGuiSingleInstanceApplies) { $takePart += $a } }
+Assert ($takePart.Count -eq 1 -and $takePart[0] -eq 'Gui') ('only -Action Gui takes part (Guardian, CheckIn, HealthCheck, *Admin, Printer ... never do); took part: ' + ($takePart -join ','))
+foreach ($a in @('Guardian', 'GuardianOn', 'GuardianOff', 'GuardianDemo', 'CheckIn', 'CheckInOn', 'CheckInOff', 'HealthCheck', 'PrinterAdmin', 'OutlookAdmin', 'UndoAdmin', 'WinUpdateDeepAdmin')) {
+    $Action = $a; $script:Background = ($script:BackgroundActions -contains $a)
+    Assert (-not (Test-FixItGuiSingleInstanceApplies)) "$a never uses the one-window rule"
+}
+$Action = 'Gui'; $script:Background = $false; $script:Admin = $false
+Assert (Test-FixItGuiSingleInstanceApplies) 'the plain window takes part'
+$script:Admin = $true
+Assert (-not (Test-FixItGuiSingleInstanceApplies)) 'an elevated (administrator) run does not take part'
+$script:Admin = $false; $script:Background = $true
+Assert (-not (Test-FixItGuiSingleInstanceApplies)) 'a background run does not take part'
+$script:Background = $false
+
+# the real mutex, between real processes
+$childLib = Join-Path $tmp 'si-child.ps1'
+@"
+param([string]`$Mode, [string]`$Key)
+`$ErrorActionPreference = 'Stop'
+`$env:LOCALAPPDATA = '$($env:LOCALAPPDATA)'
+. '$((Join-Path $root 'FamilyFixIt.ps1'))' -LibraryOnly -LogPath '$((Join-Path $tmp 'si-child.log'))'
+`$script:GuiInstanceKeyOverride = `$Key
+Initialize-FixItLog
+if (`$Mode -eq 'try') { `$i = Enter-FixItGuiInstance; Write-Output ('ACQUIRED=' + `$i.Acquired + ' FAILED=' + `$i.Failed); if (`$i.Acquired) { Exit-FixItGuiInstance `$i } }
+if (`$mode -eq 'hold-and-die') { `$i = Enter-FixItGuiInstance; Write-Output ('ACQUIRED=' + `$i.Acquired); [Environment]::Exit(0) }
+if (`$mode -eq 'second') { `$r = Invoke-FixItGuiShowExisting -Instance `$null; Write-Output ('ASKED=' + `$r) }
+"@ | Set-Content -LiteralPath $childLib
+function ChildRun { param([string]$Mode) return (& $pwx -NoProfile -File $childLib -Mode $Mode -Key $script:GuiInstanceKeyOverride 2>&1 | Out-String) }
+
+$first = Enter-FixItGuiInstance
+Assert ($first.Acquired -and -not $first.Failed -and $first.Mutex) 'the first window takes the lock'
+$hasEvents = ($IsWindows -eq $true)   # named events only exist on Windows; the lock itself works everywhere
+Assert (($null -ne $first.Event) -eq $hasEvents) 'the come-forward event is made on Windows; elsewhere the lock still works without it'
+$o = ChildRun 'try'
+Assert ($o -match 'ACQUIRED=False') 'a second start (another process) sees the window is already open and does not get the lock'
+# the second start asks the open window to come forward (event) and the open window sees the request
+if ($hasEvents) {
+    Assert (-not $first.Event.WaitOne(0)) 'no request is waiting yet'
+    $o = ChildRun 'second'
+    Assert ($o -match 'ASKED=True') 'the second start finds the open window and asks it to come forward'
+    Assert ($first.Event.WaitOne(0)) 'the open window receives the request (the event is signalled)'
+    Assert (-not $first.Event.WaitOne(0)) 'one request is one wake-up (the event resets itself)'
+} else {
+    $o = ChildRun 'second'
+    Assert ($o -match 'ASKED=False') 'no event and no saved window: the second start reports it could not reach the window, and ends quietly'
+}
+Initialize-FixItGuiFocus
+Assert (([FixItGuiFocus]::IsValid([IntPtr]::Zero)) -eq $false -and ([FixItGuiFocus]::Bring([IntPtr]::Zero)) -eq $false -and ([FixItGuiFocus]::OwnerPid([IntPtr]::Zero)) -eq 0) 'focus helper compiles and refuses an empty window handle (no Windows call is made)'
+# the open window writes where it is; the second start reads it
+Save-FixItGuiInstanceInfo -Instance $first -Handle ([IntPtr]12345)
+$infoFile = Get-FixItGuiInstanceFile -Key $first.Names.Key
+$info = Get-Content -LiteralPath $infoFile -Raw | ConvertFrom-Json
+Assert ([int]$info.pid -eq $PID -and [int64]$info.hwnd -eq 12345) 'the window handle and process id are saved for the second start'
+Assert ((Split-Path -Parent $infoFile) -eq (Split-Path -Parent (Get-FixItStateFile)) -and ((Get-Content -LiteralPath $infoFile -Raw) -notmatch 'S-1-5-21')) 'the info file sits next to state.json in the FamilyFixIt folder and holds no account identifiers'
+# a second Enter on the same thread must not be confused with another window (the second start is always another process)
+Exit-FixItGuiInstance $first
+Assert (-not (Test-Path -LiteralPath $infoFile)) 'closing the window removes the handle file'
+$o = ChildRun 'try'
+Assert ($o -match 'ACQUIRED=True') 'after the window closes the lock is free again'
+Assert ($null -eq $script:GuiInstance) 'the open-window record is cleared on close'
+
+# a stale file from another process is left alone on close
+$other = Enter-FixItGuiInstance
+[IO.File]::WriteAllText($infoFile, '{"pid": 1, "hwnd": 5}')
+Exit-FixItGuiInstance $other
+Assert (Test-Path -LiteralPath $infoFile) 'a handle file that belongs to another process is not deleted'
+Remove-Item -LiteralPath $infoFile -Force
+
+# crash: a process that dies while holding the lock must not lock everybody out
+$o = ChildRun 'hold-and-die'
+Assert ($o -match 'ACQUIRED=True') 'a window process took the lock and then died without releasing it'
+$afterCrash = Enter-FixItGuiInstance
+Assert ($afterCrash.Acquired -and -not $afterCrash.Failed) ('after a crash the next start gets the lock (abandoned: ' + $afterCrash.Abandoned + ')')
+Exit-FixItGuiInstance $afterCrash
+
+# an abandoned mutex (owner thread ended without releasing, handle still open) is taken over
+$abName = 'Local\FamilyFixIt-GUI-' + $script:GuiInstanceKeyOverride
+$absrc = 'public static class FixItAbandonTest { public static System.Threading.Mutex Hold(string n) { System.Threading.Mutex m = null; System.Threading.Thread t = new System.Threading.Thread(delegate() { m = new System.Threading.Mutex(false, n); m.WaitOne(); }); t.Start(); t.Join(); return m; } }'
+if (-not ('FixItAbandonTest' -as [type])) { Add-Type -TypeDefinition $absrc }
+$script:GuiInstanceKeyOverride = 'abandon-' + [guid]::NewGuid().ToString('N')
+$abHandle = [FixItAbandonTest]::Hold((Get-FixItGuiInstanceNames).Mutex)
+$taken = Enter-FixItGuiInstance
+Assert ($taken.Acquired -and $taken.Abandoned -and -not $taken.Failed) 'an abandoned mutex (owner ended without releasing) is taken over'
+Assert ((Get-Content -LiteralPath $script:LogFile -Raw) -match 'ended without closing properly') 'taking over an abandoned lock is logged'
+Exit-FixItGuiInstance $taken
+$abHandle.Dispose()
+$script:GuiInstanceKeyOverride = $gn.Key
+
+# if the lock cannot be made at all, the window still opens (never block the family)
+$script:GuiInstanceKeyOverride = ('x' * 400)
+$failOpen = Enter-FixItGuiInstance
+Assert ($failOpen.Acquired -and $failOpen.Failed) 'if the lock cannot be created, the window opens anyway'
+Exit-FixItGuiInstance $failOpen
+$script:GuiInstanceKeyOverride = $gn.Key
+
+# the flow in Show-FixItWindow, with the window itself pretended
+$origMain = ${function:Show-FixItWindowMain}; $origEnter = ${function:Enter-FixItGuiInstance}; $origExit = ${function:Exit-FixItGuiInstance}; $origShowEx = ${function:Invoke-FixItGuiShowExisting}
+function Show-FixItWindowMain { param($Instance) Rec 'MAIN WINDOW'; if ($script:MainThrows) { throw 'pretend crash' } }
+function Exit-FixItGuiInstance { param($Instance) Rec 'release' }
+function Invoke-FixItGuiShowExisting { param($Instance) Rec 'bring existing forward'; return $script:ShowExResult }
+$script:ShowExResult = $true; $script:MainThrows = $false
+$Action = 'Gui'; $script:Admin = $false; $script:Background = $false
+function Enter-FixItGuiInstance { Rec 'enter'; return [pscustomobject]@{ Acquired = $false; Failed = $false; Abandoned = $false; Mutex = $null; Event = $null; Names = (Get-FixItGuiInstanceNames) } }
+$script:Calls.Clear(); Show-FixItWindow
+Assert ((CallsLike 'MAIN WINDOW') -eq 0 -and (CallsLike 'bring existing forward') -eq 1 -and (CallsLike 'release') -eq 0) 'already open: no second window; the open one is brought forward; this start just ends'
+$script:ShowExResult = $false; $script:Calls.Clear(); Show-FixItWindow
+Assert ((CallsLike 'MAIN WINDOW') -eq 0) 'already open but unreachable: still no second window, no error'
+function Enter-FixItGuiInstance { Rec 'enter'; return [pscustomobject]@{ Acquired = $true; Failed = $false; Abandoned = $false; Mutex = $null; Event = $null; Names = (Get-FixItGuiInstanceNames) } }
+$script:Calls.Clear(); Show-FixItWindow
+Assert ((CallsLike 'MAIN WINDOW') -eq 1 -and (CallsLike 'release') -eq 1 -and (CallsLike 'bring*') -eq 0) 'nothing open: the window opens once and the lock is released when it closes'
+$script:MainThrows = $true; $script:Calls.Clear(); $threwMain = $false
+try { Show-FixItWindow } catch { $threwMain = $true }
+Assert ($threwMain -and (CallsLike 'release') -eq 1) 'if the window crashes, the lock is still released'
+$script:MainThrows = $false
+foreach ($a in @('Guardian', 'CheckInOn', 'HealthCheck', 'PrinterAdmin')) {
+    $Action = $a; $script:Background = ($script:BackgroundActions -contains $a); $script:Calls.Clear(); Show-FixItWindow
+    Assert ((CallsLike 'enter') -eq 0 -and (CallsLike 'MAIN WINDOW') -eq 1 -and (CallsLike 'bring*') -eq 0) "$a never takes or checks the window lock"
+}
+$Action = 'Gui'; $script:Background = $false; $script:Admin = $true; $script:Calls.Clear(); Show-FixItWindow
+Assert ((CallsLike 'enter') -eq 0 -and (CallsLike 'MAIN WINDOW') -eq 1) 'an elevated run never takes or checks the window lock'
+${function:Show-FixItWindowMain} = $origMain; ${function:Enter-FixItGuiInstance} = $origEnter; ${function:Exit-FixItGuiInstance} = $origExit; ${function:Invoke-FixItGuiShowExisting} = $origShowEx
+
+# the code itself: only the window uses the lock, and the pieces are in place
+$siSrc = [IO.File]::ReadAllText((Join-Path $root 'FamilyFixIt.ps1'))
+$siTree = [Management.Automation.Language.Parser]::ParseInput($siSrc, [ref]$null, [ref]$null)
+$siFns = @($siTree.FindAll({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] }, $true))
+function SiFn { param($Name) return (@($siFns | Where-Object { $_.Name -eq $Name } | ForEach-Object { $_.Extent.Text }) -join "`n") }
+$users = @($siFns | Where-Object { $_.Name -ne 'Show-FixItWindow' -and $_.Extent.Text -match 'Enter-FixItGuiInstance' } | ForEach-Object { $_.Name })
+Assert ($users.Count -eq 1 -and $users[0] -eq 'Enter-FixItGuiInstance' -or $users.Count -eq 0) ('Enter-FixItGuiInstance is called from Show-FixItWindow only (found in: ' + ($users -join ',') + ')')
+Assert ((SiFn 'Show-FixItWindow') -match 'Test-FixItGuiSingleInstanceApplies' -and (SiFn 'Show-FixItWindow') -match 'finally' -and (SiFn 'Show-FixItWindow') -match 'Exit-FixItGuiInstance') 'the window checks the rule first and always releases in a finally block'
+$mainStarts = @([regex]::Matches($siSrc, "(?m)^\s*'Gui'\s*\{ Show-FixItWindow \}")).Count
+Assert ($mainStarts -eq 1) 'only the Gui action opens the main window'
+foreach ($fn in @('Invoke-GuardianRun', 'Enter-FixItGuardianMutex', 'Invoke-HealthCheck', 'Invoke-CheckInToggle', 'Invoke-AdminPart', 'Start-FixItGuardianProcess')) {
+    Assert ((SiFn $fn) -notmatch 'GuiInstance|FamilyFixIt-GUI') "$fn does not touch the window lock"
+}
+$onceT = SiFn 'Show-FixItWindowOnce'
+Assert ($onceT -match 'Start-FixItGuiShowWatcher' -and $onceT -match 'Add_HandleCreated' -and $onceT -match 'Save-FixItGuiInstanceInfo' -and $onceT -match '\$showTimer\.Dispose') 'the window listens for "come forward" requests, saves its handle, and stops listening when it closes'
+$watchT = SiFn 'Start-FixItGuiShowWatcher'
+Assert ($watchT -match 'WaitOne\(0\)' -and $watchT -match 'FixItGuiFocus\]::Bring' -and $watchT -match 'Get-FixItGuiFrontTarget') 'the watcher brings the window (or a question box on top of it) forward'
+$showT = SiFn 'Invoke-FixItGuiShowExisting'
+Assert ($showT -match 'AllowSetForegroundWindow|\]::Allow\(' -and $showT -match 'TryOpenExisting' -and $showT -match 'OwnerPid') 'the second start allows the focus change, signals the event, and only uses a handle that belongs to that process'
+Assert ($script:GuiFocusCs -match 'SW_RESTORE|ShowWindow\(h, 9\)' -and $script:GuiFocusCs -match 'IsIconic' -and $script:GuiFocusCs -match 'SetForegroundWindow' -and $script:GuiFocusCs -match 'AllowSetForegroundWindow' -and $script:GuiFocusCs -match 'AttachThreadInput') 'the focus helper restores a minimized window and brings it to the front with the usual workaround'
+Assert ($script:GuiFocusCs -notmatch '\?\.' -and $script:GuiFocusCs -notmatch '\$"' -and $script:GuiFocusCs -notmatch 'out var|=>') 'focus helper C# kept to the old C# 5 style that Windows PowerShell 5.1 accepts'
+Assert ((SiFn 'Enter-FixItGuiInstance') -match 'AbandonedMutexException' -and (SiFn 'Exit-FixItGuiInstance') -match 'ReleaseMutex') 'abandoned locks are handled and the lock is released on close'
+Assert ((Get-Content -LiteralPath (Join-Path $root 'Start-FixIt.cmd') -Raw) -notmatch 'Action') 'the shortcut launcher opens the plain window (no action), which is the one that is single-instance'
+
+$Action = $origAction; $script:Admin = $origAdmin; $script:Background = $origBg; $script:DryRun = $origDry; $env:LOCALAPPDATA = $origLocal
+if ($null -eq $origLocal) { Remove-Item Env:LOCALAPPDATA -ErrorAction SilentlyContinue }
+$script:GuiInstanceKeyOverride = $null
 
 Section 'Logging'
 $log = Get-Content $logFile -Raw

@@ -35,7 +35,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 # Settings
 # ---------------------------------------------------------------------------
-$script:FixItVersion = '2.3.2'
+$script:FixItVersion = '2.3.3'
 $script:DefaultManifestUrl = 'https://raw.githubusercontent.com/Sodapopnewb/family-it-fixit/main/manifest.json'
 $script:OwnerPlaceholder = ('<' + 'OWNER>')   # the guards compare with this; Publish never rewrites it
 # Where reports are sent (a small Cloudflare Worker that Trey runs). The app header is NOT a secret.
@@ -5312,6 +5312,8 @@ function Show-FixItWindowOnce {
     $form.Controls.Add($ver)
 
     $form.Tag = $FirstTime
+    $form.Add_HandleCreated({ param($hs, $he) Save-FixItGuiInstanceInfo -Instance $script:GuiInstance -Handle $hs.Handle })   # so a second start can find this window
+    $showTimer = Start-FixItGuiShowWatcher -Form $form -Instance $script:GuiInstance
     $form.Add_Shown({ param($s, $e)
         $tm = New-Object System.Windows.Forms.Timer
         $tm.Interval = 300
@@ -5340,10 +5342,233 @@ function Show-FixItWindowOnce {
         }
     })
     [void]$form.ShowDialog()
+    if ($showTimer) { try { $showTimer.Stop(); $showTimer.Dispose() } catch { } }
     $form.Dispose()
 }
 
+# ---------------------------------------------------------------------------
+# One window only (v2.3.3): double-clicking the shortcut again must bring the open window forward, not open a second one.
+# Only the main window (-Action Gui, not elevated) takes part. The sign-in watcher, the weekly check-in, the health check
+# and the administrator parts never touch this mutex, so they can always run.
+#   - a named per-user mutex (Local\FamilyFixIt-GUI-<user SID>) says "a window is open"
+#   - a named per-user event (Local\FamilyFixIt-GUI-Show-<user SID>) is how the second start asks the open window to come forward
+#   - gui-instance.json (process id + window handle) lets the second start also bring the window forward itself
+# ---------------------------------------------------------------------------
+$script:GuiInstanceKeyOverride = $null   # tests only
+$script:GuiInstance = $null
+$script:GuiFocusCs = @'
+using System;
+using System.Runtime.InteropServices;
+public static class FixItGuiFocus {
+    [DllImport("user32.dll")] static extern bool IsWindow(IntPtr h);
+    [DllImport("user32.dll")] static extern bool IsIconic(IntPtr h);
+    [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr h, int cmd);
+    [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr h);
+    [DllImport("user32.dll")] static extern bool BringWindowToTop(IntPtr h);
+    [DllImport("user32.dll")] static extern bool AllowSetForegroundWindow(int pid);
+    [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+    [DllImport("user32.dll")] static extern bool AttachThreadInput(uint a, uint b, bool attach);
+    [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
+    [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
+    public static bool IsValid(IntPtr h) { if (h == IntPtr.Zero) return false; return IsWindow(h); }
+    public static int OwnerPid(IntPtr h) {
+        if (!IsValid(h)) return 0;
+        uint pid; GetWindowThreadProcessId(h, out pid); return (int)pid;
+    }
+    public static bool Allow(int pid) { return AllowSetForegroundWindow(pid); }
+    // Restore (only when minimized) and bring to the front. Uses the usual focus workaround: share input with the
+    // window that has the focus now, and flip "always on top" on and off.
+    public static bool Bring(IntPtr h) {
+        if (!IsValid(h)) return false;
+        if (IsIconic(h)) ShowWindow(h, 9);   // SW_RESTORE
+        uint dummy;
+        IntPtr fg = GetForegroundWindow();
+        uint fgThread = fg == IntPtr.Zero ? 0 : GetWindowThreadProcessId(fg, out dummy);
+        uint me = GetCurrentThreadId();
+        bool attached = false;
+        if (fgThread != 0) { if (fgThread != me) attached = AttachThreadInput(me, fgThread, true); }
+        try {
+            SetWindowPos(h, new IntPtr(-1), 0, 0, 0, 0, 0x0043);   // TOPMOST, no move, no size, show
+            SetWindowPos(h, new IntPtr(-2), 0, 0, 0, 0, 0x0043);   // back to not-topmost (stays in front)
+            BringWindowToTop(h);
+            SetForegroundWindow(h);
+        } finally {
+            if (attached) AttachThreadInput(me, fgThread, false);
+        }
+        return GetForegroundWindow() == h;
+    }
+}
+'@
+
+function Get-FixItGuiInstanceNames {
+    $key = $script:GuiInstanceKeyOverride
+    if (-not $key) {
+        try { $key = [string][Security.Principal.WindowsIdentity]::GetCurrent().User.Value } catch { $key = '' }
+        if (-not $key) { $key = [string]$env:USERNAME }
+        if (-not $key) { $key = 'user' }
+    }
+    $key = ($key -replace '[^A-Za-z0-9\-]', '_')
+    $suffix = ''
+    if ($script:DryRun) { $suffix = '-Practice' }   # practice mode (-WhatIf) is its own window, so it never hides a real one
+    return [pscustomobject]@{ Mutex = ('Local\FamilyFixIt-GUI-' + $key + $suffix); Event = ('Local\FamilyFixIt-GUI-Show-' + $key + $suffix); Key = ($key + $suffix) }
+}
+function Get-FixItGuiInstanceFile {
+    param([string]$Key)
+    return (Join-Path (Split-Path -Parent (Get-FixItStateFile)) ('gui-instance-' + $Key + '.json'))
+}
+
+# Does the one-window rule apply to this start? Only the plain, visible, not-elevated window.
+function Test-FixItGuiSingleInstanceApplies {
+    if ($Action -ne 'Gui') { return $false }
+    if ($script:Background) { return $false }
+    $elevated = $false
+    try { $elevated = [bool](Test-FixItAdmin) } catch { $elevated = $false }
+    if ($elevated) { return $false }
+    return $true
+}
+
+# Takes the "a window is open" mutex. Returns Acquired = $true (this process is the window) or $false (another one is).
+# An abandoned mutex (the earlier window crashed) is taken over. Any other trouble: carry on without the rule (never block the window).
+function Enter-FixItGuiInstance {
+    $n = Get-FixItGuiInstanceNames
+    $m = $null; $ev = $null
+    try {
+        $m = New-Object System.Threading.Mutex($false, $n.Mutex)
+        $got = $false; $abandoned = $false
+        try { $got = $m.WaitOne(0) } catch [System.Threading.AbandonedMutexException] { $got = $true; $abandoned = $true }
+        if (-not $got) { $m.Dispose(); return [pscustomobject]@{ Acquired = $false; Failed = $false; Abandoned = $false; Mutex = $null; Event = $null; Names = $n } }
+        if ($abandoned) { Write-FixItLog 'The earlier Family Fix-It window ended without closing properly; taking over.' 'WARN' }
+        # The event is the polite way to ask this window to come forward. If it cannot be made, the lock still works (the window handle file is the other way).
+        try { $ev = New-Object System.Threading.EventWaitHandle($false, [System.Threading.EventResetMode]::AutoReset, $n.Event) } catch { $ev = $null; Write-FixItLog ('Could not make the come-forward signal ({0}); the window handle will be used instead.' -f $_.Exception.Message) 'WARN' }
+        $inst = [pscustomobject]@{ Acquired = $true; Failed = $false; Abandoned = $abandoned; Mutex = $m; Event = $ev; Names = $n }
+        $script:GuiInstance = $inst
+        return $inst
+    } catch {
+        Write-FixItLog ('Could not set up the one-window rule ({0}); opening the window anyway.' -f $_.Exception.Message) 'WARN'
+        try { if ($m) { $m.Dispose() } } catch { }
+        return [pscustomobject]@{ Acquired = $true; Failed = $true; Abandoned = $false; Mutex = $null; Event = $null; Names = $n }
+    }
+}
+
+# Gives the mutex back when the window closes.
+function Exit-FixItGuiInstance {
+    param($Instance)
+    if ($null -eq $Instance) { return }
+    try {
+        $f = Get-FixItGuiInstanceFile -Key $Instance.Names.Key
+        if (Test-Path -LiteralPath $f) {
+            $j = $null; try { $j = Get-Content -LiteralPath $f -Raw | ConvertFrom-Json } catch { }
+            if ($null -eq $j -or [int]$j.pid -eq $PID) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue }
+        }
+    } catch { }
+    if ($Instance.Mutex) { try { $Instance.Mutex.ReleaseMutex() } catch { }; try { $Instance.Mutex.Dispose() } catch { } }
+    if ($Instance.Event) { try { $Instance.Event.Dispose() } catch { } }
+    if ($script:GuiInstance -and [object]::ReferenceEquals($script:GuiInstance, $Instance)) { $script:GuiInstance = $null }
+    Write-FixItLog 'Window closed; one-window lock released.'
+}
+
+# The open window tells the world where it is (process id + window handle).
+function Save-FixItGuiInstanceInfo {
+    param($Instance, [IntPtr]$Handle)
+    if ($null -eq $Instance -or $null -eq $Instance.Mutex) { return }
+    try {
+        $f = Get-FixItGuiInstanceFile -Key $Instance.Names.Key
+        $d = Split-Path -Parent $f
+        if (-not (Test-Path -LiteralPath $d)) { New-Item -ItemType Directory -Path $d -Force | Out-Null }
+        $json = [ordered]@{ pid = $PID; hwnd = $Handle.ToInt64(); version = $script:FixItVersion } | ConvertTo-Json
+        [IO.File]::WriteAllText($f, $json, (New-Object Text.UTF8Encoding($false)))
+    } catch { Write-FixItLog ('Could not save the window handle: {0}' -f $_.Exception.Message) 'WARN' }
+}
+
+# In the open window: which window should come forward? A question box that is open on top of it if there is one, else the main window.
+function Get-FixItGuiFrontTarget {
+    param($Main)
+    $target = $Main
+    try {
+        foreach ($of in @([System.Windows.Forms.Application]::OpenForms)) {
+            if ($of.Visible -and -not [object]::ReferenceEquals($of, $Main)) { $target = $of }
+        }
+    } catch { }
+    return $target
+}
+
+function Initialize-FixItGuiFocus {
+    if (-not ('FixItGuiFocus' -as [type])) { Add-Type -TypeDefinition $script:GuiFocusCs -ErrorAction Stop }
+}
+
+# In the open window, on the screen's own thread: check whether a second start asked for the window, and bring it forward.
+function Start-FixItGuiShowWatcher {
+    param($Form, $Instance)
+    if ($null -eq $Instance -or $null -eq $Instance.Event) { return $null }
+    $script:GuiShowEvent = $Instance.Event
+    $script:GuiShowMain = $Form
+    $t = New-Object System.Windows.Forms.Timer
+    $t.Interval = 400
+    $t.Add_Tick({
+        param($ts, $te)
+        try {
+            if ($script:GuiShowEvent -and $script:GuiShowEvent.WaitOne(0)) {
+                Write-FixItLog 'Another start asked for this window: bringing it to the front.'
+                Initialize-FixItGuiFocus
+                $tg = Get-FixItGuiFrontTarget -Main $script:GuiShowMain
+                [void][FixItGuiFocus]::Bring($tg.Handle)
+            }
+        } catch { Write-FixItLog ('Bring-to-front failed: {0}' -f $_.Exception.Message) 'WARN' }
+    })
+    $t.Start()
+    return $t
+}
+
+# The second start: find the open window and bring it forward. Returns $true when the window was asked (event or direct).
+function Invoke-FixItGuiShowExisting {
+    param($Instance)
+    $n = Get-FixItGuiInstanceNames
+    $asked = $false; $pid2 = 0; $hwnd = [IntPtr]::Zero
+    try {
+        $f = Get-FixItGuiInstanceFile -Key $n.Key
+        if (Test-Path -LiteralPath $f) {
+            $j = Get-Content -LiteralPath $f -Raw | ConvertFrom-Json
+            $pid2 = [int]$j.pid; $hwnd = [IntPtr]([int64]$j.hwnd)
+        }
+    } catch { Write-FixItLog ('Could not read the window handle: {0}' -f $_.Exception.Message) 'WARN' }
+    try { Initialize-FixItGuiFocus } catch { Write-FixItLog ('Could not prepare the focus helper: {0}' -f $_.Exception.Message) 'WARN' }
+    # This start was just launched by a double-click, so it may hand the right to take the focus to the open window.
+    if ($pid2 -gt 0) { try { [void][FixItGuiFocus]::Allow($pid2) } catch { } }
+    $ev = $null
+    try {
+        if ([System.Threading.EventWaitHandle]::TryOpenExisting($n.Event, [ref]$ev)) { [void]$ev.Set(); $asked = $true; $ev.Dispose() }
+    } catch { Write-FixItLog ('Could not signal the open window: {0}' -f $_.Exception.Message) 'WARN' }
+    # Direct route as well, only for a window that really belongs to that process (a stale or reused handle is ignored).
+    try {
+        if ($pid2 -gt 0 -and $hwnd -ne [IntPtr]::Zero -and [FixItGuiFocus]::OwnerPid($hwnd) -eq $pid2) {
+            [void][FixItGuiFocus]::Bring($hwnd); $asked = $true
+        }
+    } catch { Write-FixItLog ('Direct bring-to-front failed: {0}' -f $_.Exception.Message) 'WARN' }
+    return $asked
+}
+
 function Show-FixItWindow {
+    $instance = $null
+    if (Test-FixItGuiSingleInstanceApplies) {
+        $instance = Enter-FixItGuiInstance
+        if (-not $instance.Acquired) {
+            Write-FixItLog 'Family Fix-It is already open: bringing that window forward and closing this start.'
+            $ok = $false
+            try { $ok = Invoke-FixItGuiShowExisting -Instance $instance } catch { Write-FixItLog ('Could not reach the open window: {0}' -f $_.Exception.Message) 'WARN' }
+            if (-not $ok) { Write-FixItLog 'The open window could not be reached; it may be busy. Nothing else was opened.' 'WARN' }
+            return
+        }
+    }
+    try {
+        Show-FixItWindowMain -Instance $instance
+    } finally {
+        Exit-FixItGuiInstance $instance
+    }
+}
+
+function Show-FixItWindowMain {
+    param($Instance)
     try {
         Add-Type -Namespace FixIt -Name Dpi -MemberDefinition '[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool SetProcessDPIAware();' -ErrorAction Stop
         [void][FixIt.Dpi]::SetProcessDPIAware()
