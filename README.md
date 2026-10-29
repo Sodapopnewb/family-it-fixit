@@ -1,4 +1,4 @@
-# Family Fix-It (v2.2)
+# Family Fix-It (v2.3)
 
 A Windows tool for family. Big plain-language buttons fix the common problems by themselves, ask "Did that fix it?", and send Trey a report when they cannot.
 Two small things can run in the background, and both have an on/off switch in the side bar: the **pop-up watcher** (on by default) and the optional **weekly check-in**.
@@ -8,19 +8,23 @@ Two small things can run in the background, and both have an on/off switch in th
 
 **Using it:**
 1. Double-click the **Family Fix-It** shortcut (or **Start-FixIt.cmd**). A window opens.
-2. Click the button that matches the problem. Windows may ask "Do you want to allow this app to make changes?" - click **Yes**.
-3. After a fix the tool asks **"Did that fix it?"**. If you click **No**, it sends Trey a report automatically.
+2. Click the button that matches the problem. A window first explains, in plain words, **what the tool is about to do**, how long it takes, and whether you may need to **restart the computer** or **sign back in** to anything afterwards. Click **Proceed** to go ahead, or **Go Back** to change your mind. Go Back does nothing at all.
+3. Windows may ask "Do you want to allow this app to make changes?" - click **Yes**.
+4. After a fix the tool asks **"Did that fix it?"**. If you click **No**, it sends Trey a report automatically.
 
 The main buttons:
-- **Fix my printer**, **Fix Acrobat in Outlook**, **Fix Outlook**
-- **Fix my internet**, **My computer is slow**, **Fix sound, mic and camera**
+- **Fix my printer** - first asks *"Do you know which printer you're trying to use?"*. **Yes**: you pick it from a list and it becomes your main (default) printer. **No**: the tool tests every printer, picks one that is available, makes it your main printer and tells you which one it chose. Then it clears stuck print jobs.
+- **Fix Acrobat in Outlook**, **Fix Outlook** - these **never remove your email accounts, passwords, sign-ins or Outlook profiles, so you do not have to sign in again.** They close Outlook completely (including the parts hiding in the background) and open it again, then ask whether it works. Only if it still does not will they ask to go further (switch an add-in back on, rebuild search, safe mode, or - for Acrobat - repair it).
+- **Fix my internet** - runs the checks and repairs. If the internet is still down it says: *"Unplug the router, wait 30 seconds, then plug it back in."* and asks *"Is that done?"*. When you click **Yes** it waits about 2 minutes with a friendly countdown, tests again and says clearly whether it works. If not, it tells you to call Trey and sends him the report on its own.
+- **My computer is slow** - before it clears your web browser's saved website files it asks, and warns that you may need to sign back in to websites. Choose **No** and only that step is skipped.
+- **Fix sound, mic and camera** - a muted or silent speaker is turned back on at a quiet **25%** (so nothing blasts out; turn it up yourself). A muted microphone is turned on at 70%. Undo is unchanged.
 - **Clean up my browser**, **Fix Windows Update**, **Fix OneDrive**
 - **I see a scary pop-up** (red) - tells you not to call the number, to turn off Wi-Fi, to click nothing and to call Trey, and sends Trey an alert report. Trey never asks for codes or remote tools unless *you* called him.
 - **If a web page takes over your whole screen** you do not have to find a button. A small box appears in the bottom right corner: *"Are you OK? Is a website scaring you?"* Click **Get me out of here** (or press **Ctrl + Shift + F** at any time). The browser is closed, you see *"You're safe. Don't call any number that page showed. Trey has been told."*, and Trey gets an alert. Click **I'm fine** if it is just a video you chose to watch full screen. When you open the browser again, do not click **Restore** if it asks.
 - **Let Trey see my screen** - opens Zoho's page. Trey gives you a code; type it in and click Join. Only do this if YOU called Trey.
 - **Send Trey a report** - saves a report on the Desktop and sends it to Trey ("Report sent to Trey"). If sending fails it says to send the Desktop file to Trey yourself.
 
-The left side bar:
+The left side bar (the last item is always at the bottom):
 - **Restart the right way** - a full restart (not the half-restart Windows does by default).
 - **Is it just me?** - checks Microsoft 365 / Outlook status and basic internet reachability.
 - **Undo last fix** - puts back what the last fix changed. It says clearly when something cannot be undone (for example deleted temporary files).
@@ -31,15 +35,17 @@ The left side bar:
 - **Help me with...** - step-by-step guides with big numbered steps (print a PDF or web page, scan, attach a photo to an email, take a screenshot and send it to Trey, connect to Wi-Fi, join a video call, save a photo from an email, make text bigger, find something you downloaded, spot a scam email or text). Type a few words in the big box at the top and the list narrows as you type: *scan* finds the scanning guide, *picture* finds the photo guides, and small typing slips are forgiven (*scaner*). If nothing fits it says **"No guide for that yet - Send Trey a report?"** and the button sends Trey a short report saying what was searched. Every guide ends with **This didn't help - tell Trey**.
 - **Simple mode** - a switch that shrinks the window to just six big buttons: **Fix my printer**, **Fix my internet**, **My computer is slow**, the red scary pop-up button, **Let Trey see my screen** and **Send Trey a report**. Switch it off in the same place to see everything again. The tool remembers the choice for each person.
 - **Big text** and **High contrast** switches, the **Watch for scary pop-ups** switch (on by default) and the **weekly check-in** switch. The tool remembers them. (Simple mode hides the pop-up watcher and check-in switches; they keep running as they were.)
+- **Pin me to the taskbar** (bottom of the list) - Windows does not let a program pin itself, so this opens a short step-by-step guide: click Start, type *Family Fix-It*, right-click it, click **Pin to taskbar**. It changes nothing by itself.
 
 ## For Trey
 Files: `FamilyFixIt.ps1` (everything), `Start-FixIt.cmd` (launcher), `guides.json` (the help guides), `Install-FixIt.ps1` + `Install-FamilyFixIt.cmd` (installer), `apps.json` (approved apps), `tools/Publish-FixIt.ps1`, `tests/Test-FixIt.ps1`, `worker/` (the report receiver; it is in Trey's working folder and is not published to GitHub).
 
 ### Command line and practice mode
 - **Practice mode (changes nothing):** `powershell -File FamilyFixIt.ps1 -Action Printer -WhatIf` (`-DryRun` is the same). It writes "Would do: ..." lines to the log and the screen.
-- **One action without the window:** `-Action Printer|Acrobat|AcrobatRepair|Outlook|Network|Slow|Sound|Browser|WinUpdate|OneDrive|Scam|Screen|Report|Update|Restart|Status|Undo|History|Files|Install|PCInfo|Guides|Simple|HealthCheck|CheckInOn|CheckInOff|GuardianOn|GuardianOff|GuardianDemo|Guardian`.
+- **One action without the window:** `-Action Printer|Acrobat|AcrobatRepair|Outlook|Network|Slow|Sound|Browser|WinUpdate|OneDrive|Scam|Screen|Report|Pin|Update|Restart|Status|Undo|History|Files|Install|PCInfo|Guides|Simple|HealthCheck|CheckInOn|CheckInOff|GuardianOn|GuardianOff|GuardianDemo|Guardian`.
   `-Action Guides -Query scanner` prints the best matching guide (and `-Action Guides` alone lists them all). `-Action Simple` flips Simple mode. `-Action PCInfo` shows the card.
   `-Action Files -Query budget` lists matching files. `-Action Install -App "VLC media player"` installs one approved app (without `-App` it lists them).
+- **The "what I will do" window:** every main button shows it before anything happens. On the command line the same text is printed and you type **P** to proceed or **G** to go back; practice mode (`-WhatIf`) writes the text to the log and carries on. The text for every button lives in one table (`Get-FixItActionTable`, the `Plan` entries), so the window, the log and the tests always agree. A test checks the claims against the code (for example that only the slow fix clears browser files, and that Outlook and Acrobat never touch accounts).
 - **Log:** `%LOCALAPPDATA%\FamilyFixIt\logs\fixit-YYYY-MM-DD.log`. The history list is read from it, so please do not rename those files.
 - **Undo journal:** `%LOCALAPPDATA%\FamilyFixIt\undo.json` (last 30 fixes). Browser backups are kept next to it.
 - **Admin rights:** only the steps that need them ask Windows for permission. Per-user fixes never do.
@@ -102,6 +108,8 @@ Mock tests cover all the decisions (what counts as full screen, when to ask, wha
 12. **Help me with...**: the search box has focus when the window opens; the list filters smoothly as you type on an older/slow PC (no stutter); *scan*, *picture*, *wifi*, *scaner* and nonsense behave as described; Enter opens the first guide; Back returns with the search kept; **No guide for that yet** sends a report that arrives in KV; the guides read well with Big text and High contrast.
 13. **Simple mode**: switch on and off; the window shrinks to six buttons with no gaps; it is still right at 150% and 200% scaling, with Big text and with High contrast; it is remembered after closing and reopening; the Guardian keeps running.
 14. A change to `guides.json` published to GitHub appears in **Help me with...** on a PC that is online (no update prompt) and the saved copy is used offline.
+
+15. **What is new in 2.3 - check on a real PC:** (a) every main button's **Proceed / Go Back** window (looks right at 100%, 150%, 200%, with Big text; Esc and the X mean Go Back; Go Back changes nothing); (b) **Printer**: the question, the pick list (a shared printer, a USB one, a PDF printer that must be hidden), that the chosen printer really becomes the default and **stays** the default after printing to another one (`LegacyDefaultPrinterMode`), the *No* path with one printer unplugged and one network printer switched off (the port test), and **Undo** putting the old default back; (c) **Outlook and Acrobat**: classic Outlook and new Outlook both close fully (Task Manager shows no OUTLOOK.EXE or olk.exe) and reopen with the same account, **no sign-in prompt**, the "force close" second question when a window will not close; (d) **Internet**: the router prompt, the countdown window, recovery after a real router restart, `ipconfig /renew`, and the call-Trey ending with a report arriving in KV; (e) **Slow**: the cache question and the sign-in warning, and that *No* skips only that step; (f) **Sound**: a muted speaker comes back at 25%, the microphone at 70%; (g) the **Pin me to the taskbar** item and guide at 100% to 200% scaling, in both normal and Simple mode; (h) the whole thing parses and runs in real **Windows PowerShell 5.1**.
 
 ### Reports (Cloudflare Worker + KV)
 - The tool POSTs JSON `{pcName, version, kind, report}` with the header `X-FixIt-App: family-it-fixit` to `https://fixit-report.hg-fixit.workers.dev/report` (change with `-ReportUrl`). No secret is stored on family PCs.

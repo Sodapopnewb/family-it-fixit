@@ -41,7 +41,7 @@ function Get-FixItPrinters { return $script:Printers }
 function Test-HostReachable { param([string]$ComputerName) Rec "ping $ComputerName"; return [bool]$script:Reachable[$ComputerName] }
 function Remove-FixItPrinter { param([string]$Name) Rec "printer remove $Name" }
 function Add-FixItPrinterConnection { param([string]$Name) Rec "printer add $Name"; if ($script:AddFails[$Name]) { throw 'pretend add failure' } }
-function Set-FixItDefaultPrinter { param([string]$Name) Rec "printer default $Name" }
+function Set-FixItDefaultPrinter { param([string]$Name) Rec "printer default $Name"; foreach ($pp in @($script:Printers)) { $pp.IsDefault = ([string]$pp.Name -eq $Name) } }
 $script:Running = @()
 function Get-RunningApp { param([string[]]$ProcessNames) return @($script:Running | Where-Object { $ProcessNames -contains $_ }) }
 $script:CloseWorks = $true
@@ -81,7 +81,6 @@ function Set-FixItStateValue { param([string]$Name, [string]$Value) $script:Stat
 function Set-RegDword { param([string]$Path, [string]$Name, [int]$Value) Register-FixItRegUndo -Path $Path -Name $Name; Rec "regset $Path $Name=$Value"; if (-not $script:Reg.ContainsKey($Path)) { $script:Reg[$Path] = @{} }; $script:Reg[$Path][$Name] = $Value }
 function Set-RegString { param([string]$Path, [string]$Name, [string]$Value) Register-FixItRegUndo -Path $Path -Name $Name; Rec "regsets $Path $Name=$Value"; if (-not $script:Reg.ContainsKey($Path)) { $script:Reg[$Path] = @{} }; $script:Reg[$Path][$Name] = $Value }
 function Remove-RegValue { param([string]$Path, [string]$Name) Register-FixItRegUndo -Path $Path -Name $Name; Rec "regdel $Path $Name"; $script:Reg[$Path].Remove($Name) }
-function Remove-RegKeyTree { param([string]$Path) Rec "regtree-remove $Path"; $script:Reg.Remove($Path) }
 function Restore-FixItRegValue {
     param([string]$Path, [string]$Name, [bool]$Existed, [string]$Type, [string]$Value)
     Rec "regrestore $Path $Name"
@@ -126,12 +125,15 @@ function Set-FixItAudioDevice { param([string]$Kind, [int]$Volume, [bool]$Muted 
 function Get-FixItCameras { return @($script:Cams) }
 function Open-FixItSettings { param([string]$Uri) Rec "settings $Uri" }
 function Open-FixItUrl { param([string]$Url) Rec "url $Url" }
-$script:Addins = @(); $script:Creds = @(); $script:OfficeCaches = @()
+$script:Addins = @()
 function Get-FixItOutlookAddins { return @($script:Addins) }
 function Start-FixItOutlookSafe { Rec 'outlook safe' }
-function Get-FixItOfficeCredentialTargets { return @($script:Creds) }
-function Remove-FixItCredential { param([string]$Target) Rec "cred remove $Target" }
-function Get-FixItOfficeCacheFolders { return @($script:OfficeCaches) }
+function Start-FixItOutlook { Rec 'outlook open' }
+function Stop-FixItAppsByName { param([string[]]$ProcessNames) Rec "force end $($ProcessNames -join ',')"; if ($script:ForceWorks) { $script:Running = @($script:Running | Where-Object { $ProcessNames -notcontains $_ }) } }
+function Test-FixItPortOpen { param([string]$Address, [int[]]$Ports) Rec "port $Address"; return [bool]$script:OpenPorts[$Address] }
+function Select-FixItPrinter { param([string[]]$Names, [string]$Current = '') Rec "printer pick-list $($Names -join '|')"; if ($script:PickPrinter -eq '<none>') { return '' }; if ($script:PickPrinter) { return $script:PickPrinter }; return [string]$Names[0] }
+function Show-FixItCountdown { param([int]$Seconds, [string]$Title = '', [string]$Message = '') Rec "countdown $Seconds"; if ($script:Heal) { $script:Conn.Router = $true; $script:Conn.Net = $true; $script:Conn.Dns = $true; $script:Conn.Web = $true } }
+function Read-FixItPlanChoice { param($Plan) $script:PlanSeen += , $Plan; return [bool]$script:PlanAnswer }
 $script:BProfiles = @(); $script:BSettings = $null; $script:BExts = @()
 function Get-FixItBrowserProfiles { return @($script:BProfiles) }
 function Get-FixItBrowserSettings { param([string]$Dir) return $script:BSettings }
@@ -170,7 +172,7 @@ function New-V2Defaults {
     $script:Spk = [pscustomobject]@{ Name = 'Speakers (Realtek)'; Volume = 50; Muted = $false }
     $script:Mic = [pscustomobject]@{ Name = 'Microphone (USB)'; Volume = 60; Muted = $false }
     $script:Cams = @([pscustomobject]@{ Name = 'Integrated Camera'; Status = 'OK' })
-    $script:Addins = @(); $script:Creds = @(); $script:OfficeCaches = @()
+    $script:Addins = @(); $script:ForceWorks = $true; $script:OpenPorts = @{}; $script:PickPrinter = ''; $script:PlanAnswer = $true; $script:PlanSeen = @(); $script:Heal = $false
     $script:BProfiles = @(); $script:BSettings = $null; $script:BExts = @()
     $script:OD = [pscustomobject]@{ Exe = 'C:\OneDrive\OneDrive.exe'; Installed = $true; Running = $true; Accounts = @([pscustomobject]@{ Kind = 'Personal'; Email = 'a@b.test'; Folder = 'C:\Users\tester\OneDrive' }) }
     $script:ODState = 'UpToDate'; $script:ODLast = (Get-Date).AddHours(-3)
@@ -346,7 +348,18 @@ $res = Invoke-PrinterFix
 Assert ($res.Ok -and $res.Title -eq 'Practice run' -and $script:Calls.Count -eq 0) 'dry-run flow: no elevation, no changes'
 
 Section 'Acrobat in Outlook'
+# Acrobat now starts gently: close Outlook completely, reopen, ask. Only "no" goes on to the settings fix.
+# AcroNo = "Is Acrobat showing?" -> No, "Continue?" -> Yes
+function AcroNo { $script:Answers.Enqueue($false); $script:Answers.Enqueue($true) }
 Reset-All; Seed-BrokenAcrobat
+$snap0 = RegSnapshot
+$res = Invoke-AcrobatFix
+Assert ($res.Ok -and $res.Title -eq 'Acrobat fixed' -and (RegSnapshot) -eq $snap0) 'Acrobat showing after a plain close and reopen: stops, changes no settings'
+Assert ((CallsLike 'outlook open') -eq 1 -and $res.SkipFollowUp) 'stopped after step 1: Outlook reopened once, no extra question'
+Reset-All; Seed-BrokenAcrobat; $script:Answers.Enqueue($false); $script:Answers.Enqueue($false); $snap0 = RegSnapshot
+$res = Invoke-AcrobatFix
+Assert (-not $res.Ok -and (RegSnapshot) -eq $snap0 -and $res.Message -match 'call Trey') 'still missing and does not want the next step: stops, nothing changed'
+Reset-All; Seed-BrokenAcrobat; AcroNo
 $res = Invoke-AcrobatFix
 Assert ($res.Ok) 'fix succeeds'
 Assert ((Get-RegValue $hkcuAddin 'LoadBehavior') -eq 3 -and (Get-RegValue $hklmAddin 'LoadBehavior') -eq 3) 'LoadBehavior=3 in HKCU and HKLM'
@@ -355,7 +368,7 @@ Assert (@(Get-RegValueNames "$resil\DisabledItems") -join ',' -eq '2') 'Acrobat 
 Assert (@(Get-RegValueNames "$resil\CrashingAddinList") -join ',' -eq 'Other.Addin') 'Acrobat entry removed from CrashingAddinList, other kept'
 Assert ((Get-RegValue "$resil\DoNotDisableAddinList" 'PDFMaker.OfficeAddin') -eq 1) 'added to DoNotDisableAddinList'
 Assert ($res.Message -match 'Acrobat') 'plain success message'
-$snap = RegSnapshot; $script:Calls.Clear(); $script:Answers.Clear()
+$snap = RegSnapshot; $script:Calls.Clear(); $script:Answers.Clear(); AcroNo
 $res = Invoke-AcrobatFix
 Assert ($res.Ok -and (RegSnapshot) -eq $snap -and (CallsLike 'reg*') -eq 0) 'idempotent: second run changes nothing'
 Assert ((@($script:Asked) -join ' ') -match 'already') 'second run says it was already on'
@@ -366,36 +379,41 @@ Assert ((RegSnapshot) -eq $snap -and $script:Calls.Count -eq 0) 'dry-run: regist
 Assert ($res.Title -eq 'Practice run') 'dry-run says it was practice'
 Assert ((Get-Content $logFile -Raw) -match 'Would do: Set LoadBehavior=3 at HKLM:') 'dry-run logs the HKLM change it would make'
 
-Reset-All; Seed-BrokenAcrobat; $script:Admin = $false
+Reset-All; Seed-BrokenAcrobat; $script:Admin = $false; AcroNo
 function Start-FixItElevated { param([string]$Part, [string]$ResultPath) Rec "elevate $Part"; $r = Invoke-AcrobatAdmin; [IO.File]::WriteAllText($ResultPath, ($r | ConvertTo-Json -Depth 4)); return 0 }
 $res = Invoke-AcrobatFix
 Assert ($res.Ok -and (CallsLike 'elevate AcrobatAdmin') -eq 1 -and (Get-RegValue $hklmAddin 'LoadBehavior') -eq 3) 'HKLM change goes through the elevated step'
 Assert ((CallsLike 'regset HKCU*') -ge 1) 'HKCU changes done without elevation'
-Reset-All; Seed-BrokenAcrobat; $script:Admin = $false
+Reset-All; Seed-BrokenAcrobat; $script:Admin = $false; AcroNo
 Add-RegPretend $hklmAddin @{ LoadBehavior = 3 }
 $res = Invoke-AcrobatFix
 Assert ($res.Ok -and (CallsLike 'elevate*') -eq 0) 'no admin needed (and none asked) when only HKCU needs fixing'
 
-Reset-All; Seed-BrokenAcrobat; $script:Running = @('OUTLOOK')
+Reset-All; Seed-BrokenAcrobat; $script:Running = @('OUTLOOK', 'olk'); $script:Answers.Enqueue($true); AcroNo
 $res = Invoke-AcrobatFix
-Assert ((CallsLike 'close OUTLOOK') -eq 1 -and $res.Ok) 'Outlook open: asked, closed politely, then fixed'
+Assert ((CallsLike 'close OUTLOOK*') -ge 1 -and (CallsLike 'force end*') -eq 0 -and $res.Ok) 'Outlook open: asked, closed politely (classic and new Outlook), then fixed'
+Assert ((@($script:Asked) -join ' ') -match 'close Outlook completely') 'asked in plain words before closing Outlook'
+Reset-All; Seed-BrokenAcrobat; $script:Running = @('OUTLOOK'); $script:CloseWorks = $false; $script:ForceWorks = $false; $snap = RegSnapshot
+$res = Invoke-AcrobatFix
+Assert (-not $res.Ok -and (RegSnapshot) -eq $snap -and $res.Title -eq 'Outlook would not close' -and $res.Message -match 'call Trey') 'Outlook will not close even by force: stops with plain message, nothing changed'
 Reset-All; Seed-BrokenAcrobat; $script:Running = @('OUTLOOK'); $script:CloseWorks = $false; $snap = RegSnapshot
+$script:Answers.Enqueue($true); $script:Answers.Enqueue($false)
 $res = Invoke-AcrobatFix
-Assert (-not $res.Ok -and (RegSnapshot) -eq $snap -and $res.Message -match 'close Outlook') 'Outlook will not close: stops with plain message, nothing changed'
+Assert ($res.Ok -and $res.Title -eq 'Nothing changed' -and (CallsLike 'force end*') -eq 0 -and (RegSnapshot) -eq $snap) 'will not close by itself and force is refused: Outlook is left alone'
 
 Reset-All; Seed-BrokenAcrobat
-$script:Answers.Enqueue($false); $script:Answers.Enqueue($true)
+AcroNo; $script:Answers.Enqueue($false); $script:Answers.Enqueue($true)
 $res = Invoke-AcrobatFix
 Assert ((CallsLike 'msi /fa {AC76BA86-1033-FFFF-BA7E-000000000001}') -eq 1) 'still broken -> offers and runs msiexec /fa repair'
 Assert ($res.Ok -and $res.Title -eq 'Acrobat repaired') 'repair success message'
 Reset-All; Seed-BrokenAcrobat
-$script:Answers.Enqueue($false); $script:Answers.Enqueue($false)
+AcroNo; $script:Answers.Enqueue($false); $script:Answers.Enqueue($false)
 $res = Invoke-AcrobatFix
 Assert ((CallsLike 'msi*') -eq 0 -and -not $res.Ok) 'repair declined: not run'
-Reset-All; Seed-BrokenAcrobat; $script:MsiCode = 1603; $script:Answers.Enqueue($false); $script:Answers.Enqueue($true)
+Reset-All; Seed-BrokenAcrobat; $script:MsiCode = 1603; AcroNo; $script:Answers.Enqueue($false); $script:Answers.Enqueue($true)
 $res = Invoke-AcrobatFix
 Assert (-not $res.Ok -and $res.Message -match 'Repair Installation') 'repair fails: tells the person the manual step'
-Reset-All; $script:Products = @($acro); Add-RegPretend 'HKCU:\Software\Microsoft\Office\16.0\Outlook' @{}
+Reset-All; $script:Products = @($acro); Add-RegPretend 'HKCU:\Software\Microsoft\Office\16.0\Outlook' @{}; AcroNo
 $res = Invoke-AcrobatFix
 Assert ((@($script:Asked) -join ' ') -match 'not set up correctly') 'add-in missing entirely: goes straight to offering repair'
 Reset-All; $script:Products = @([pscustomobject]@{ DisplayName = 'Adobe Acrobat Reader (64-bit)'; DisplayVersion = '1'; ProductCode = ''; WindowsInstaller = $false })
@@ -472,10 +490,31 @@ $r = Invoke-NetworkFix
 Assert ($r.Ok -and $r.Title -eq 'Internet looks fine' -and (CallsLike 'tool*') -eq 0) 'internet already fine: reported, nothing changed'
 Reset-All; $script:Conn.Router = $false; $script:Conn.Net = $false; $script:Conn.Dns = $false; $script:Conn.Web = $false
 $r = Invoke-NetworkFix
-Assert (-not $r.Ok -and $r.Title -eq 'Restart your router' -and $r.Message -match 'Unplug your router') 'router down: plain "restart your router" steps'
-Assert ((CallsLike 'tool ipconfig.exe /flushdns') -eq 1 -and (CallsLike 'tool ipconfig.exe /release') -eq 1 -and (CallsLike 'tool ipconfig.exe /renew') -eq 1) 'flush DNS and renew the address'
+Assert (-not $r.Ok -and $r.Title -eq 'Please call Trey' -and $r.Message -match 'call Trey') 'router down and still down after the router restart: tells them to call Trey'
+Assert ((CallsLike 'tool ipconfig.exe /flushdns') -eq 1 -and (CallsLike 'tool ipconfig.exe /release') -eq 1 -and (CallsLike 'tool ipconfig.exe /renew') -ge 1) 'flush DNS and renew the address'
 Assert ((CallsLike 'tool netsh.exe winsock reset') -eq 1 -and (CallsLike 'adapter restart Wi-Fi') -eq 1) 'deeper reset + adapter restart when still broken'
-Assert ($r.Message -notmatch '(?i)winsock|dns|exception') 'router message is jargon free'
+Assert ($r.Message -notmatch '(?i)winsock|dns|exception|ipconfig') 'router message is jargon free'
+# --- router step: exact words, "Is that done?", countdown, retest, report
+$routerWords = 'Unplug the router, wait 30 seconds, then plug it back in.'
+Assert ($script:RouterRestartText -ceq $routerWords) 'the router instruction is exactly: Unplug the router, wait 30 seconds, then plug it back in.'
+$q = @($script:Asked | Where-Object { $_ -like '*Is that done?*' })
+Assert ($q.Count -eq 1 -and $q[0].Contains($routerWords)) 'asks "Is that done?" together with the exact router instruction'
+Assert ((CallsLike 'countdown 120') -eq 1) 'answered Yes: waits about 2 minutes (120 s) with the countdown'
+Assert ((CallsLike 'countdown 30') -eq 1) 'only one short extra wait when the router is still starting up'
+Assert ($script:Posts.Count -eq 1 -and $r.ReportSent -and ($r.Message -match 'sent Trey a report')) 'still failing: the report is sent to Trey automatically, and the person is told'
+Assert ($script:Posts.Count -eq 1 -and $script:Posts[0].Json -match 'did NOT work, even after the router was unplugged') 'the report explains the router was already restarted'
+Reset-All; $script:Conn.Router = $false; $script:Conn.Net = $false; $script:Conn.Dns = $false; $script:Conn.Web = $false; $script:Heal = $true
+$r = Invoke-NetworkFix
+Assert ($r.Ok -and $r.Title -eq 'Internet fixed' -and $r.Message -match 'Restarting the router did it') 'router restart worked: clear "fixed" message'
+Assert ((CallsLike 'countdown 120') -eq 1 -and (CallsLike 'countdown 30') -eq 0 -and $script:Posts.Count -eq 0) 'worked after 2 minutes: no extra wait, no report sent'
+Assert ($r.SkipFollowUp) 'worked: no second "Did that fix it?" question'
+Reset-All; $script:Conn.Router = $false; $script:Conn.Net = $false; $script:Conn.Dns = $false; $script:Conn.Web = $false; $script:Answers.Enqueue($false)
+$r = Invoke-NetworkFix
+Assert (-not $r.Ok -and $r.Title -eq 'Router not restarted' -and (CallsLike 'countdown*') -eq 0 -and $script:Posts.Count -eq 0) 'answered No to "Is that done?": no waiting, no report'
+Assert ($r.Message.Contains($routerWords)) 'No: the instruction is repeated for when they are ready'
+Reset-All; $script:Conn.Router = $false; $script:Conn.Net = $false; $script:Conn.Dns = $false; $script:Conn.Web = $false; $script:PostFail = $true
+$r = Invoke-NetworkFix
+Assert (-not $r.Ok -and -not $r.ReportSent -and $r.Message -match 'saved on your Desktop' -and $r.Message -match 'call Trey') 'report cannot be sent (no internet): says so and points to the saved copy'
 Reset-All; $script:Conn.Dns = $false; $script:Conn.Web = $false; $script:ConnHeal = 'ipconfig.exe /flushdns'
 $r = Invoke-NetworkFix
 Assert ($r.Ok -and $r.Title -eq 'Internet fixed' -and (CallsLike 'tool netsh*') -eq 0) 'fixed by the simple steps: the deeper (admin) reset is NOT run'
@@ -508,6 +547,16 @@ Assert (((CallsLike 'clear *Documents*') + (CallsLike 'clear *Desktop*') + (Call
 Assert (($r.Details -join ' ') -match 'freed' -and ($r.Details -join ' ') -match 'chrome' -and ($r.Details -join ' ') -match '12 day') 'shows free space, uptime and top memory apps'
 Assert ($r.Message -match 'restart') 'uptime over 7 days: suggests a restart'
 Assert ((CallsLike 'svc stop wuauserv') -eq 1 -and (CallsLike 'svc start wuauserv') -eq 1) 'Windows Update service stopped for its cache and started again'
+Reset-All; $script:Answers.Enqueue($true)
+$r = Invoke-SlowFix
+$cq = @($script:Asked | Where-Object { $_ -like '*cache*' })
+Assert ($cq.Count -eq 1 -and $cq[0] -match 'sign back in to websites' -and $cq[0] -match 'Warning') 'browser cache: asks first, with a warning about signing back in to websites'
+Assert ((CallsLike 'clear *Edge*Cache') -eq 1 -and ($r.Details -join ' ') -match 'sign back in') 'cache answer Yes: browser cache cleared and the sign-in note is shown'
+Reset-All; $script:Answers.Enqueue($false)
+$r = Invoke-SlowFix
+Assert ((CallsLike 'clear *Edge*Cache') -eq 0 -and $r.Ok) 'cache answer No: browser cache left alone'
+Assert ((CallsLike 'clear C:\Users\tester\AppData\Local\Temp') -eq 1 -and (CallsLike 'recyclebin') -eq 1 -and (CallsLike 'clear C:\Windows\Temp') -eq 1 -and (CallsLike 'clear C:\Windows\SoftwareDistribution\Download') -eq 1) 'cache answer No: ONLY the cache step is skipped, every other clean-up still runs'
+Assert (($r.Details -join ' ') -match 'will not need to sign in') 'cache answer No: says nothing to sign in to'
 Reset-All; $script:Hung = @([pscustomobject]@{ Name = 'WINWORD'; Id = 77; Title = 'Report.docx' })
 $r = Invoke-SlowFix
 Assert ((CallsLike 'killapp 77') -eq 1 -and ($script:Asked -join ' ') -match 'frozen') 'frozen app: asked first, then closed'
@@ -526,7 +575,9 @@ Assert ($r2.Ok) 'second run is fine (idempotent)'
 Section 'Sound, microphone and camera'
 Reset-All; $script:Spk.Muted = $true; $script:Spk.Volume = 0; $script:Mic.Muted = $true
 $r = Invoke-SoundFix
-Assert ((CallsLike 'audio Speakers 40 muted=False') -eq 1 -and (CallsLike 'audio Microphone 70 muted=False') -eq 1) 'muted speakers and microphone switched on'
+Assert ((CallsLike 'audio Speakers 25 muted=False') -eq 1 -and (CallsLike 'audio Microphone 70 muted=False') -eq 1) 'muted speakers switched on at 25% (not 40) and microphone at 70%'
+Assert ($script:SpeakerRestoreVolume -eq 25 -and $script:MicRestoreVolume -eq 70) 'restore volumes: speakers 25, microphone 70'
+Assert ((CallsLike 'audio Speakers 40*') -eq 0) 'speakers are never set to 40 any more'
 Assert ((CallsLike 'settings ms-settings:sound') -eq 1 -and $r.Ok) 'opens the right Settings page'
 Reset-All
 $r = Invoke-SoundFix
@@ -573,34 +624,122 @@ $good = [pscustomobject]@{ ProgId = 'Zoom.Addin'; Description = 'Zoom'; LoadBeha
 function Seed-Outlook {
     $script:Addins = @($bad, $badM, $pdf, $good)
     Add-RegPretend $bad.Path @{ LoadBehavior = 3 }
-    $script:Creds = @('MicrosoftOffice16_Data:live:abc')
+    # Things that hold the person's accounts and sign-ins. The fix must never change any of them.
     Add-RegPretend 'HKCU:\Software\Microsoft\Office\16.0\Common\Identity\Identities' @{ x = 1 }
-    $script:OfficeCaches = @('C:\Users\tester\AppData\Local\Microsoft\OneAuth')
+    Add-RegPretend 'HKCU:\Software\Microsoft\Office\16.0\Common\Identity' @{ Signed = 'in' }
+    Add-RegPretend 'HKCU:\Software\Microsoft\Office\16.0\Outlook\Profiles\Outlook' @{ a = 1 }
+    Add-RegPretend 'HKCU:\Software\Microsoft\Office\16.0\Outlook\Profiles\Outlook\9375CFF0413111d3B88A00104B2A6676' @{ 'Account Name' = 'trey@example.test' }
 }
-Reset-All; Seed-Outlook
+# OlNo = "Is Outlook working properly now?" -> No, "Continue with the next steps?" -> Yes
+function OlNo { $script:Answers.Enqueue($false); $script:Answers.Enqueue($true) }
+$protectedKeys = @('HKCU:\Software\Microsoft\Office\16.0\Common\Identity\Identities', 'HKCU:\Software\Microsoft\Office\16.0\Common\Identity', 'HKCU:\Software\Microsoft\Office\16.0\Outlook\Profiles\Outlook', 'HKCU:\Software\Microsoft\Office\16.0\Outlook\Profiles\Outlook\9375CFF0413111d3B88A00104B2A6676')
+function ProtectedSnapshot { return (($protectedKeys | ForEach-Object { $k = $_; if (Test-RegKey $k) { ($script:Reg[$k].Keys | Sort-Object | ForEach-Object { '{0}|{1}|{2}' -f $k, $_, $script:Reg[$k][$_] }) -join ';' } else { 'MISSING ' + $k } }) -join "`n") }
+
+# --- Step 1: a full shutdown of every Outlook program, then open it again. Often that is all.
+Reset-All; Seed-Outlook; $script:Running = @('OUTLOOK', 'olk'); $script:Answers.Enqueue($true); $script:Answers.Enqueue($true); $snap = RegSnapshot
+$r = Invoke-OutlookFix
+Assert ($r.Ok -and $r.Title -eq 'Outlook fixed' -and $r.SkipFollowUp) 'Outlook working after a close and reopen: done, "Outlook fixed"'
+Assert ((CallsLike 'close OUTLOOK,olk') -eq 1 -and (CallsLike 'outlook open') -eq 1) 'closes the classic AND the new Outlook (OUTLOOK and olk), then opens Outlook once'
+Assert ((RegSnapshot) -eq $snap -and (CallsLike 'reg*') -eq 0 -and (CallsLike 'svc*') -eq 0 -and (CallsLike 'outlook safe') -eq 0) 'stopped after step 1: no further fixes were applied'
+Assert (($r.Message + ' ' + ($r.Details -join ' ')) -match 'passwords, sign-ins') 'tells them their accounts and sign-ins were not touched'
+Reset-All; Seed-Outlook; $script:Running = @('OUTLOOK'); $script:Answers.Enqueue($false); $snap = RegSnapshot
+$r = Invoke-OutlookFix
+Assert ($r.Ok -and $r.Title -eq 'Nothing changed' -and (CallsLike 'close*') -eq 0 -and (CallsLike 'force end*') -eq 0 -and (RegSnapshot) -eq $snap) 'does not want Outlook closed: left alone, nothing changed'
+Reset-All; Seed-Outlook; $script:Running = @('OUTLOOK'); $script:CloseWorks = $false; $script:Answers.Enqueue($true); $script:Answers.Enqueue($true)
+$r = Invoke-OutlookFix
+Assert ((CallsLike 'force end OUTLOOK,olk') -eq 1 -and $r.Title -eq 'Outlook fixed') 'will not close politely: asks again, then ends every Outlook program, reopens, and it works'
+Assert (@($script:Asked | Where-Object { $_ -like '*close it by force*' -or $_ -like '*Close it by force*' }).Count -eq 1) 'a second, plain question comes before closing Outlook by force'
+Reset-All; Seed-Outlook; $script:Running = @('OUTLOOK'); $script:CloseWorks = $false; $script:Answers.Enqueue($true); $script:Answers.Enqueue($false)
+$r = Invoke-OutlookFix
+Assert ($r.Title -eq 'Nothing changed' -and (CallsLike 'force end*') -eq 0 -and (CallsLike 'outlook open') -eq 0) 'force-close refused: Outlook is left running, nothing changed'
+Reset-All; Seed-Outlook; $script:Running = @('OUTLOOK'); $script:CloseWorks = $false; $script:ForceWorks = $false
+$r = Invoke-OutlookFix
+Assert (-not $r.Ok -and $r.Title -eq 'Outlook would not close' -and $r.Message -match 'restart your computer' -and (CallsLike 'reg*') -eq 0) 'Outlook cannot be closed at all: plain message, no further fixes'
+Reset-All; Seed-Outlook; $script:Answers.Enqueue($false); $script:Answers.Enqueue($false); $snap = RegSnapshot
+$r = Invoke-OutlookFix
+Assert (-not $r.Ok -and $r.Title -eq 'Outlook still needs help' -and $r.Message -match 'call Trey' -and (RegSnapshot) -eq $snap -and (CallsLike 'outlook open') -eq 1) 'not working but does not want the next steps: stops, says call Trey, nothing changed'
+
+# --- Step 2: only because Outlook is still not working
+Reset-All; Seed-Outlook; OlNo
 $r = Invoke-OutlookFix
 Assert ((Get-RegValue $bad.Path 'LoadBehavior') -eq 0) 'unwanted per-user add-in turned off (after asking)'
 Assert ((CallsLike 'regset HKCU:\x*') -eq 0 -and (CallsLike 'regset HKLM:\SOFTWARE\Microsoft\Office*') -eq 0) 'PDFMaker, good add-ins and machine-wide add-ins left alone'
 Assert (($r.Details -join ' ') -match 'Conduit.Addin' -and ($r.Details -join ' ') -match 'Trey needs to turn it off') 'machine-wide bad add-in explained'
-Assert ((CallsLike 'cred remove MicrosoftOffice16_Data:live:abc') -eq 1 -and (CallsLike 'regtree-remove*Identities') -eq 1 -and (CallsLike 'clear *OneAuth') -eq 1) 'Office sign-in cache cleared'
 Assert ((CallsLike 'regset HKLM:\SOFTWARE\Microsoft\Windows Search SetupCompletedSuccessfully=0') -eq 1 -and (CallsLike 'svc stop WSearch') -eq 1 -and (CallsLike 'svc start WSearch') -eq 1) 'search index rebuilt (admin part)'
 Assert ((CallsLike 'outlook safe') -eq 1) 'safe mode start offered and done'
+Assert ((CallsLike 'outlook open') -eq 1) 'step 1 reopened Outlook; safe mode replaced the second reopen'
+Assert ($r.Title -eq 'Outlook check done') 'ends with a plain message'
 Assert ((CallsLike '*.pst*') + (CallsLike '*.ost*') + (CallsLike '*Profiles*') -eq 0) 'never touches PST/OST files or Outlook profiles'
-Reset-All; Seed-Outlook; foreach ($i in 1..4) { $script:Answers.Enqueue($false) }
+Reset-All; Seed-Outlook; OlNo; foreach ($i in 1..3) { $script:Answers.Enqueue($false) }
 $r = Invoke-OutlookFix
-Assert ((Get-RegValue $bad.Path 'LoadBehavior') -eq 3 -and (CallsLike 'cred*') -eq 0 -and (CallsLike 'regset*') -eq 0 -and (CallsLike 'outlook*') -eq 0) 'every question answered no: nothing changed'
-Reset-All; Seed-Outlook; $script:Running = @('OUTLOOK'); $script:CloseWorks = $false
+Assert ((Get-RegValue $bad.Path 'LoadBehavior') -eq 3 -and (CallsLike 'regset*') -eq 0 -and (CallsLike 'outlook safe') -eq 0 -and (CallsLike 'svc*') -eq 0) 'every step-2 question answered no: nothing changed'
+Assert ((CallsLike 'outlook open') -eq 2) 'Outlook is opened normally again at the end'
+Reset-All; Seed-Outlook; $script:Running = @('OUTLOOK', 'olk'); $script:Answers.Enqueue($true); $script:Answers.Enqueue($false); $script:Answers.Enqueue($true)
 $r = Invoke-OutlookFix
-Assert ((CallsLike 'cred*') -eq 0 -and ($r.Details -join ' ') -match 'still open') 'Outlook will not close: sign-in/search steps skipped and explained'
+Assert ((CallsLike 'close OUTLOOK,olk') -eq 1 -or (CallsLike 'close OUTLOOK,olk') -eq 2) 'Outlook is closed again before the extra steps (and nothing is running to be closed twice)'
 Reset-All; Seed-Outlook; $script:DryRun = $true
 $r = Invoke-OutlookFix
-Assert ($r.Title -eq 'Practice run' -and (CallsLike 'cred*') -eq 0 -and (CallsLike 'reg*') -eq 0 -and (CallsLike 'outlook*') -eq 0 -and (Get-RegValue $bad.Path 'LoadBehavior') -eq 3) 'dry-run: nothing changed'
-Reset-All; Seed-Outlook; $script:Admin = $false; $script:UacDeny = $true
+Assert ($r.Title -eq 'Practice run' -and (CallsLike 'reg*') -eq 0 -and (CallsLike 'outlook*') -eq 0 -and (CallsLike 'close*') -eq 0 -and (Get-RegValue $bad.Path 'LoadBehavior') -eq 3) 'dry-run: nothing changed'
+Reset-All; Seed-Outlook; $script:Admin = $false; $script:UacDeny = $true; OlNo
 $r = Invoke-OutlookFix
 Assert (($r.Details -join ' ') -match 'permission was not given') 'UAC declined for the index rebuild: explained'
-Reset-All
+Reset-All; OlNo
 $r = Invoke-OutlookFix
 Assert (($r.Details -join ' ') -match 'No troublesome add-ins') 'no add-ins: no crash'
+
+# ---------------------------------------------------------------- accounts and sign-ins are never touched
+Section 'Outlook and Acrobat: never touch accounts, sign-ins or profiles'
+$astAll = [Management.Automation.Language.Parser]::ParseInput($src, [ref]$null, [ref]$null)
+$fnAsts = @{}
+foreach ($fa in $astAll.FindAll({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] }, $true)) { $fnAsts[$fa.Name] = $fa }
+$entry = @('Invoke-OutlookFix', 'Invoke-AcrobatFix', 'Invoke-AcrobatRepair', 'Invoke-OutlookAdmin', 'Invoke-AcrobatAdmin', 'Invoke-AcrobatUser')
+$seen = @{}; $queue = New-Object System.Collections.Queue
+foreach ($e in $entry) { $queue.Enqueue($e) }
+while ($queue.Count -gt 0) {
+    $fnName = [string]$queue.Dequeue()
+    if ($seen.ContainsKey($fnName) -or -not $fnAsts.ContainsKey($fnName)) { continue }
+    $seen[$fnName] = $true
+    foreach ($ca in $fnAsts[$fnName].FindAll({ param($n) $n -is [Management.Automation.Language.CommandAst] }, $true)) { $cn = $ca.GetCommandName(); if ($cn) { $queue.Enqueue($cn) } }
+    # a script block that is run later (Invoke-AdminPart -Part 'OutlookAdmin') names its function by text
+    foreach ($sa in $fnAsts[$fnName].FindAll({ param($n) $n -is [Management.Automation.Language.StringConstantExpressionAst] }, $true)) { if ($sa.Value -match '^(\w+)Admin$') { $queue.Enqueue('Invoke-' + $Matches[1] + 'Admin') } }
+}
+Assert ($seen.Count -ge 12 -and $seen.ContainsKey('Close-FixItOutlookFully') -and $seen.ContainsKey('Invoke-OutlookAdmin') -and $seen.ContainsKey('Find-FixItBadAddins')) 'the Outlook/Acrobat call graph was found (so the checks below really cover the code)'
+$bannedCmd = '(?i)^(cmdkey(\.exe)?|Remove-FixItCredential|Remove-RegKeyTree|Get-FixItOffice\w+|Get-StoredCredential|Clear-FixItFolder|Remove-FixItPrinter)$'
+$bannedText = '(?i)\\Common\\Identity|OneAuth|IdentityCache|\\Profiles\b|\.pst\b|\.ost\b|\.nst\b|cmdkey|CredDelete|CredEnumerate|MicrosoftOffice\d+_Data|Credential|\\Office\\16\.0\\Common\\ServicesManagerCache|AAD\.Broker|TokenBroker|WebAccountManager'
+$badHits = @()
+foreach ($fnName in $seen.Keys) {
+    foreach ($ca in $fnAsts[$fnName].FindAll({ param($n) $n -is [Management.Automation.Language.CommandAst] }, $true)) {
+        $cn = $ca.GetCommandName()
+        if ($cn -and $cn -match $bannedCmd) { $badHits += ('{0} calls {1}' -f $fnName, $cn) }
+    }
+    foreach ($sa in $fnAsts[$fnName].FindAll({ param($n) $n -is [Management.Automation.Language.StringConstantExpressionAst] -or $n -is [Management.Automation.Language.ExpandableStringExpressionAst] }, $true)) {
+        $tv = if ($sa -is [Management.Automation.Language.StringConstantExpressionAst]) { $sa.Value } else { $sa.Value }
+        if ($tv -match $bannedText) { $badHits += ('{0} mentions "{1}"' -f $fnName, $tv.Substring(0, [math]::Min(60, $tv.Length))) }
+    }
+}
+if ($badHits.Count -gt 0) { $badHits | ForEach-Object { Write-Host ('    ' + $_) } }
+Assert ($badHits.Count -eq 0) 'no Outlook or Acrobat action (nor anything it calls) can clear credentials, accounts, sign-in caches, profiles or mail files'
+Assert ($src -notmatch '(?i)Remove-FixItCredential|Remove-RegKeyTree|Get-FixItOfficeCredentialTargets|Get-FixItOfficeIdentityKeys|Get-FixItOfficeCacheFolders|CredDelete|CredEnumerate|cmdkey') 'the old credential-clearing code is gone from the whole program'
+# the allow-list: the only registry places those actions are ever allowed to change
+$allowReg = '(?i)\\Outlook\\Addins\\|\\Outlook\\Resiliency\\|\\Windows Search'
+function Test-OnlyAllowedChanges {
+    $changes = @($script:Calls | Where-Object { $_ -match '^(regset|regsets|regdel|regrestore|regtree-remove|cred )' })
+    $outside = @($changes | Where-Object { $_ -notmatch $allowReg })
+    return @{ Changes = $changes.Count; Outside = $outside }
+}
+foreach ($mode in @('Outlook step 2 with every yes', 'Acrobat step 2 with every yes')) {
+    Reset-All; Seed-Outlook; Seed-BrokenAcrobat; $script:Running = @('OUTLOOK', 'olk'); $before = ProtectedSnapshot
+    if ($mode -like 'Outlook*') { $script:Answers.Enqueue($true); OlNo; $r = Invoke-OutlookFix } else { $script:Answers.Enqueue($true); AcroNo; $r = Invoke-AcrobatFix }
+    $chk = Test-OnlyAllowedChanges
+    Assert ($chk.Changes -ge 1) ('{0}: some real changes were made, so the check below is meaningful' -f $mode)
+    Assert ($chk.Outside.Count -eq 0) ('{0}: every registry change is in an add-in / resiliency / search setting' -f $mode)
+    Assert ((ProtectedSnapshot) -eq $before) ('{0}: account, sign-in and profile settings are exactly as they were' -f $mode)
+    Assert ((CallsLike 'cred*') -eq 0 -and (CallsLike 'clear *Office*') -eq 0 -and (CallsLike 'clear *Outlook*') -eq 0 -and (CallsLike 'clear *OneAuth*') -eq 0 -and (CallsLike '*.pst*') -eq 0 -and (CallsLike '*.ost*') -eq 0) ('{0}: no sign-in cache or mail file was cleared' -f $mode)
+}
+Reset-All; Seed-Outlook; Seed-BrokenAcrobat; $before = ProtectedSnapshot; $script:Running = @('OUTLOOK'); $script:CloseWorks = $false; $script:Answers.Enqueue($true); $script:Answers.Enqueue($true)
+$r = Invoke-AcrobatRepair
+Assert ((ProtectedSnapshot) -eq $before -and (CallsLike 'cred*') -eq 0 -and (CallsLike 'msi /fa*') -eq 1) 'Acrobat repair (Outlook closed first, even by force): sign-ins untouched'
+Assert ($script:Posts.Count -eq 0) 'nothing was sent anywhere by those fixes'
 
 Section 'Browser clean-up'
 $edgeDir = Join-Path $tmp 'Edge-User-Data-Default'
@@ -757,7 +896,7 @@ Section 'Undo last fix'
 function Journal { $f = Get-FixItUndoFile; if (Test-Path $f) { return @(Get-Content $f -Raw | ConvertFrom-Json) } return @() }
 $ad = 'HKCU:\Software\Microsoft\Office\16.0\Outlook\Addins\PDFMaker.OfficeAddin'
 Reset-All; Seed-BrokenAcrobat
-$before = RegSnapshot
+$before = RegSnapshot; AcroNo
 $r = Invoke-FixItAction -Which 'Acrobat'
 $j = @(Journal)
 Assert ($j.Count -ge 1 -and @($j[-1].Steps).Count -ge 1 -and -not $j[-1].Undone) 'a fix leaves an undo record with steps'
@@ -786,7 +925,7 @@ Reset-All; Seed-Browser
 [void](Invoke-FixItAction -Which 'Browser'); $script:Calls.Clear()
 $u = Invoke-UndoLast
 Assert ((CallsLike 'filerestore*') -eq 4 -and $u.Ok) 'browser backups copied back'
-Reset-All; $script:Admin = $false; Seed-BrokenAcrobat
+Reset-All; $script:Admin = $false; Seed-BrokenAcrobat; AcroNo
 [void](Invoke-FixItAction -Which 'Acrobat'); $script:UacDeny = $true; $script:Calls.Clear()
 $u = Invoke-UndoLast
 Assert (-not $u.Ok -and $u.Message -match 'permission') 'undo needing admin, UAC declined: friendly message'
@@ -961,7 +1100,7 @@ Assert (@(Get-FixItHistory -Max 2).Count -eq 2) 'history respects the maximum'
 $r = Invoke-HistoryShow
 Assert ($r.Ok -and $r.Details.Count -eq 4 -and $r.Title -eq 'What I fixed') 'result lists every fix'
 # pairs with Undo
-Reset-All; Seed-BrokenAcrobat; $script:LogFile = Join-Path $hd 'fixit-2026-10-29.log'
+Reset-All; Seed-BrokenAcrobat; $script:LogFile = Join-Path $hd 'fixit-2026-10-29.log'; AcroNo
 [void](Invoke-FixItAction -Which 'Acrobat')
 $r = Invoke-HistoryShow
 Assert ($r.Message -match "Undo last fix.*Fix Acrobat in Outlook") 'history points at Undo for the newest fix'
@@ -1101,12 +1240,200 @@ Assert ($sb -match "'History', 'Files', 'Install'") 'command-line actions Histor
 $ap = Get-Content (Join-Path $root 'apps.json') -Raw | ConvertFrom-Json
 Assert (@($ap).Count -eq 4 -and (@($ap.id) -join ',') -eq 'Google.Chrome,Zoom.Zoom,Adobe.Acrobat.Reader.64-bit,VideoLAN.VLC') 'apps.json: default four apps'
 
+Section 'Printer: asks which printer, then sets the default'
+function Pr { param($Name, $Default = $false, $Status = 'Normal', $Port = 'USB001') [pscustomobject]@{ Name = $Name; IsNetwork = $false; Server = ''; PortName = $Port; StatusText = $Status; WorkOffline = ($Status -eq 'Offline'); IsDefault = $Default } }
+$ask = "Do you know which printer you're trying to use?"
+$ntKey = $script:WindowsNtKey
+# Yes: pick from a list, that printer becomes the default
+Reset-All; $d = New-Spool
+$script:Printers = @((Pr 'Office Printer' $true), (Pr 'Kitchen Printer'), (Pr 'Microsoft Print to PDF'))
+$script:PickPrinter = 'Kitchen Printer'
+$res = Invoke-PrinterFix
+Assert (@($script:Asked)[0] -eq $ask) 'the first thing asked is: Do you know which printer you are trying to use?'
+Assert ((CallsLike 'printer pick-list Office Printer|Kitchen Printer') -eq 1) 'Yes: the list shows the real printers (the PDF one is left out)'
+Assert ((CallsLike 'printer default Kitchen Printer') -eq 1 -and ($script:Printers | Where-Object { $_.IsDefault }).Name -eq 'Kitchen Printer') 'Yes: the printer they picked becomes the default'
+Assert ((CallsLike "regset $ntKey LegacyDefaultPrinterMode=1") -eq 1) 'Yes: Windows is told to keep the default (it will not switch by itself)'
+Assert ($res.Ok -and $res.Title -eq 'Printer fixed' -and $res.DefaultPrinter -eq 'Kitchen Printer' -and $res.Message -match 'Kitchen Printer.*default') 'Yes: the message names the new default printer'
+Assert ($script:Calls.IndexOf('printer pick-list Office Printer|Kitchen Printer') -lt $script:Calls.IndexOf('spooler stop')) 'the question comes before anything is changed'
+Assert ((CallsLike 'port *') -eq 0) 'Yes: no tests are run (the person already knows)'
+Assert (($res.Message + ($res.Details -join ' ')) -notmatch '(?i)spooler|registry|exception|LegacyDefault|tcp|port ') 'printer messages are jargon free'
+# undo puts the old default back
+Reset-All; $d = New-Spool; Remove-Item (Get-FixItUndoFile) -ErrorAction SilentlyContinue
+$script:Printers = @((Pr 'Office Printer' $true), (Pr 'Kitchen Printer')); $script:PickPrinter = 'Kitchen Printer'
+[void](Invoke-FixItAction -Which 'Printer')
+$script:Calls.Clear()
+$u = Invoke-UndoLast
+Assert ((CallsLike 'printer default Office Printer') -eq 1 -and ($script:Printers | Where-Object { $_.IsDefault }).Name -eq 'Office Printer') 'Undo: the old default printer is put back'
+Assert ((CallsLike "regrestore $ntKey LegacyDefaultPrinterMode") -eq 1) 'Undo: the "keep my default" setting is put back too'
+# No: test all, choose one that works
+Reset-All; $d = New-Spool
+$script:Answers.Enqueue($false)
+$script:Printers = @((Pr 'Office Printer' $true 'Offline'), (Pr 'Hallway Laser' $false 'Normal' 'IP_192.168.1.30'), (Pr 'Den Printer' $false 'Normal' 'USB002'), (Pr 'Microsoft Print to PDF'))
+$script:OpenPorts = @{ '192.168.1.30' = $false }
+$res = Invoke-PrinterFix
+Assert (@($script:Asked)[0] -eq $ask) 'No: the same first question is asked'
+Assert ((CallsLike 'printer pick-list*') -eq 0) 'No: no list is shown'
+Assert ((CallsLike 'port 192.168.1.30') -eq 1) 'No: a network printer is really tested'
+Assert ((CallsLike 'printer default Den Printer') -eq 1 -and ($script:Printers | Where-Object { $_.IsDefault }).Name -eq 'Den Printer') 'No: the first printer that works becomes the default'
+Assert ($res.Ok -and $res.Message -match 'Den Printer.*working.*default printer') 'No: the message says which printer was picked'
+$det = $res.Details -join ' | '
+Assert ($det -match 'Tested "Office Printer": not available \(Windows says it is offline\)' -and $det -match 'Tested "Hallway Laser": not available \(it does not answer on the network\)' -and $det -match 'Tested "Den Printer": ready') 'No: each printer tested is listed with a plain reason'
+Assert ($det -notmatch 'PDF') 'No: the PDF printer is never tested or chosen'
+# No: the current default already works -> keep it
+Reset-All; $d = New-Spool; $script:Answers.Enqueue($false)
+$script:Printers = @((Pr 'Office Printer' $true), (Pr 'Den Printer'))
+$res = Invoke-PrinterFix
+Assert ((CallsLike 'printer default*') -eq 0 -and $res.Ok -and $res.Message -match 'Office Printer.*already your default') 'No: a default that already works is kept and the person is told'
+# No: nothing is available
+Reset-All; $d = New-Spool; $script:Answers.Enqueue($false)
+$script:Printers = @((Pr 'Office Printer' $true 'Offline'), (Pr 'Den Printer' $false 'Offline'))
+$res = Invoke-PrinterFix
+Assert (-not $res.Ok -and $res.Message -match 'none of them is available' -and $res.Message -match 'call Trey' -and (CallsLike 'printer default*') -eq 0) 'No: none available is said plainly, nothing is changed, and the person is told to call Trey'
+# Yes but the printer is not answering
+Reset-All; $d = New-Spool; $script:PickPrinter = 'Den Printer'
+$script:Printers = @((Pr 'Office Printer' $true), (Pr 'Den Printer' $false 'Offline'))
+$res = Invoke-PrinterFix
+Assert (-not $res.Ok -and $res.Message -match 'Den Printer.*not answering' -and (CallsLike 'printer default Den Printer') -eq 1) 'Yes + printer not answering: it is still made the default, and the problem is explained'
+# Yes then go back from the list
+Reset-All; $d = New-Spool; $script:PickPrinter = '<none>'
+$script:Printers = @((Pr 'Office Printer' $true), (Pr 'Den Printer'))
+$res = Invoke-PrinterFix
+Assert ($res.Title -eq 'Nothing changed' -and $script:Calls.Contains('printer pick-list Office Printer|Den Printer') -and (CallsLike 'spooler*') -eq 0 -and (CallsLike 'printer default*') -eq 0 -and (Test-FixItSkipFollowUp $res)) 'closing the list changes nothing and skips "Did that fix it?"'
+# no printers at all
+Reset-All; $d = New-Spool; $script:Printers = @()
+$res = Invoke-PrinterFix
+Assert (@($script:Asked) -notcontains $ask -and $res.Ok) 'no printers on the computer: the question is not asked'
+# practice run
+Reset-All; $d = New-Spool; $script:DryRun = $true
+$script:Printers = @((Pr 'Office Printer' $true), (Pr 'Den Printer'))
+$res = Invoke-PrinterFix
+Assert ((CallsLike 'printer *') -eq 0 -and (CallsLike 'regset*') -eq 0 -and $res.Title -eq 'Practice run') 'practice run: no list, no default change, no registry change'
+Assert ((Get-Content $logFile -Raw) -match 'Would do: show the list of printers and make the one you pick your default printer') 'practice run: says what it would do'
+
+Section 'Confirm window: what the fix will do, Proceed or Go Back'
+$fullL = Get-FixItLayout -Simple $false
+$mains = @($fullL.TileIds) + @('AcrobatRepair')
+$tbl = Get-FixItActionTable
+foreach ($k in $mains) {
+    $pl = Get-FixItPlan -Which $k
+    Assert ($null -ne $pl -and @($pl.Does).Count -ge 2 -and $pl.Time -and $pl.Title -eq $tbl[$k].Title) "main button $k has a plan with steps, a time and the button's own title"
+}
+foreach ($k in @('Pin', 'Restart', 'Undo', 'Status', 'History', 'Files', 'Install', 'PCInfo', 'Guides')) { Assert ($null -eq (Get-FixItPlan -Which $k)) "side-list item $k has no confirm window" }
+# Go Back does nothing at all
+foreach ($k in $mains) {
+    Reset-All; $d = New-Spool; Seed-BrokenAcrobat; Remove-Item (Get-FixItUndoFile) -ErrorAction SilentlyContinue
+    $script:PlanAnswer = $false; $script:PlanSeen = @(); $script:Posts.Clear()
+    $regBefore = RegSnapshot
+    $r = Invoke-FixItAction -Which $k
+    Assert ($null -eq $r -and $script:Calls.Count -eq 0 -and @($script:Asked).Count -eq 0 -and $script:PlanSeen.Count -eq 1 -and $script:PlanSeen[0].Which -eq $k) "Go Back on ${k}: window shown once, nothing done, nothing asked"
+    Assert ((RegSnapshot) -eq $regBefore -and -not (Test-Path (Get-FixItUndoFile)) -and $script:Posts.Count -eq 0 -and @(Get-ChildItem $d -File).Count -eq 6) "Go Back on ${k}: no settings, files, undo record or report"
+}
+$script:PlanAnswer = $true
+# Proceed runs the fix, and the window comes first
+Reset-All; $d = New-Spool; $script:PlanSeen = @(); $script:PlanAnswer = $true
+$script:Spk = [pscustomobject]@{ Name = 'Test device'; Volume = 0; Muted = $true }; $script:Mic = [pscustomobject]@{ Name = 'Test device'; Volume = 0; Muted = $true }
+$r = Invoke-FixItAction -Which 'Sound'
+Assert ($script:PlanSeen.Count -eq 1 -and $r -and (CallsLike 'audio Speakers 25*') -eq 1) 'Proceed: the window is shown once, then the fix runs'
+Reset-All; $script:PlanSeen = @(); $script:Spk = [pscustomobject]@{ Name = 'Test device'; Volume = 0; Muted = $true }; $script:Mic = [pscustomobject]@{ Name = 'Test device'; Volume = 0; Muted = $true }
+[void](Invoke-FixItAction -Which 'Sound' -SkipPlan)
+Assert ($script:PlanSeen.Count -eq 0) '-SkipPlan does not show the window a second time'
+# practice run logs the plan and does not ask
+Reset-All; $script:DryRun = $true; $script:PlanSeen = @()
+[void](Invoke-FixItAction -Which 'Slow')
+$lg = Get-Content $logFile -Raw
+Assert ($script:PlanSeen.Count -eq 0 -and $lg -match 'Would show the "what I will do" window for: My computer is slow' -and $lg -match 'You may need to sign in again') 'practice run: the plan is written to the log, nobody is asked'
+# text: restart and sign-in lines
+$p = Get-FixItPlan -Which 'Printer'
+Assert ($p.RestartLine -eq 'You will not need to restart your computer.' -and $p.SignInLine -eq 'You will not need to sign in again anywhere.' -and -not $p.NeedsRestart -and -not $p.NeedsSignIn) 'no restart and no sign-in: the window says so plainly'
+$p = Get-FixItPlan -Which 'Slow'
+Assert ($p.NeedsSignIn -and $p.SignInLine -match 'sign back in to websites' -and $p.SignInLine -match 'I ask you first') 'Slow: the window warns about signing back in to websites'
+$txt = (Format-FixItPlanText -Plan (Get-FixItPlan -Which 'Network')) -join "`n"
+Assert ($txt -match 'Here is what I will do:' -and $txt -match '(?m)^  1\. ' -and $txt -match 'Please know:' -and $txt -match 'How long it takes:' -and $txt -match 'restart your computer' -and $txt -match 'sign in') 'the plan text has steps, notes, time, restart and sign-in lines'
+# one table drives everything: the claims match the code
+$needRestart = @($mains | Where-Object { (Get-FixItPlan -Which $_).NeedsRestart } | Sort-Object)
+Assert (($needRestart -join ',') -eq 'Acrobat,AcrobatRepair,Network,Slow,WinUpdate') 'restart warning is on exactly: Acrobat, Acrobat repair, internet, slow, Windows Update'
+$needSign = @($mains | Where-Object { (Get-FixItPlan -Which $_).NeedsSignIn } | Sort-Object)
+Assert (($needSign -join ',') -eq 'Browser,OneDrive,Slow') 'sign-in warning is on exactly: browser, OneDrive, slow'
+$srcT = $null; $srcE = $null
+$srcTree = [Management.Automation.Language.Parser]::ParseFile((Join-Path $root 'FamilyFixIt.ps1'), [ref]$srcT, [ref]$srcE)
+$fnAsts = $srcTree.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)
+function FnText { param($Name) return (@($fnAsts | Where-Object { $_.Name -eq $Name } | ForEach-Object { $_.Extent.Text }) -join "`n") }
+foreach ($k in $mains) {
+    $t = FnText $tbl[$k].Fn
+    if ($t -match 'Invoke-AcrobatRepair') { $t = $t + (FnText 'Invoke-AcrobatRepair') }
+    $restartsPc = ($t -match 'Restart-Computer|Restart-FixItComputer|Restart-FixItNow|shutdown')
+    if (-not (Get-FixItPlan -Which $k).NeedsRestart) { Assert (-not $restartsPc) "$k says no restart is needed, and its code never restarts the computer" }
+    else { Assert ($t -match '(?i)restart|reboot|3010') "$k warns about a restart, and its code does mention one" }
+}
+$cacheUsers = @($fnAsts | Where-Object { $_.Extent.Text -match 'Get-FixItBrowserCacheFolders' -and $_.Name -ne 'Get-FixItBrowserCacheFolders' } | ForEach-Object { $_.Name })
+Assert (($cacheUsers -join ',') -eq 'Invoke-SlowFix') 'only the slow fix clears browser cache (so only it carries that sign-in warning)'
+$ol = (Get-FixItPlan -Which 'Outlook'); $ac = (Get-FixItPlan -Which 'Acrobat')
+Assert (($ol.Heads -join ' ') -match 'never cleared or changed' -and ($ac.Heads -join ' ') -match 'not touched' -and -not $ol.NeedsSignIn -and -not $ac.NeedsSignIn) 'Outlook and Acrobat windows promise accounts and sign-ins are untouched'
+$sp = (Get-FixItPlan -Which 'Sound').Does -join ' '
+Assert ($sp -match "$($script:SpeakerRestoreVolume)%" -and $sp -match "$($script:MicRestoreVolume)%" -and $script:SpeakerRestoreVolume -eq 25) 'Sound window quotes the real volumes (speakers 25%, mic 70%)'
+$np = (Get-FixItPlan -Which 'Network').Does -join ' '
+Assert ($np.Contains($script:RouterRestartText) -and $np -match ('about {0} minutes' -f ($script:RouterWaitSeconds / 60))) 'Internet window quotes the real router text and wait time'
+$pp = (Get-FixItPlan -Which 'Printer').Does -join ' '
+Assert ($pp.Contains($ask.Replace("I will ask you: ", ''))) 'Printer window quotes the real question'
+# plain words
+$bad = '(?i)\b(DNS|DHCP|registry|winsock|spooler|LoadBehavior|cache file|proxy|IP address|msiexec|PowerShell|admin|administrator|UAC|HKLM|HKCU|TCP|adapter|ipconfig|netsh|process|processes|service|services|sfc|DISM|SoftwareDistribution|catroot|credential|credentials|token|registry|cmdlet|script|firewall|driver)\b'
+foreach ($k in $mains) {
+    $pl = Get-FixItPlan -Which $k
+    $all = (@($pl.Does) + @($pl.Heads) + @($pl.Time, $pl.RestartLine, $pl.SignInLine)) -join "`n"
+    Assert ($all -notmatch $bad) "$k window uses plain words (no technical terms)"
+    Assert ($all -match '^[\x09\x0A\x20-\x7E]+$') "$k window text is plain ASCII"
+}
+# the real command-line reader: P proceeds, G / anything else goes back
+$readAst = $fnAsts | Where-Object { $_.Name -eq 'Read-FixItPlanChoice' }
+Invoke-Expression ($readAst.Extent.Text -replace 'function Read-FixItPlanChoice', 'function Read-PlanReal')
+function Read-Host { param($Prompt) return $script:HostAnswer }
+$script:GuiActive = $false
+$okAns = @(); foreach ($a in @('P', 'p', 'proceed', 'G', 'g', '', 'no', 'x')) { $script:HostAnswer = $a; $okAns += [string][bool](Read-PlanReal -Plan (Get-FixItPlan -Which 'Printer')) }
+Assert (($okAns -join ',') -eq 'True,True,True,False,False,False,False,False') 'command line: P proceeds; G, Enter or anything else goes back'
+Remove-Item function:Read-Host
+# the window itself and the GUI wiring
+$dlg = FnText 'Show-FixItPlanDialog'
+Assert ($dlg -match "'Proceed'" -and $dlg -match "'Go Back'" -and $dlg -match 'RestartLine' -and $dlg -match 'SignInLine' -and $dlg -match 'CancelButton') 'the window has Proceed and Go Back, shows both warnings, and Esc / closing means Go Back'
+$gb = FnText 'Invoke-GuiButton'
+$iPlan = $gb.IndexOf('Confirm-FixItPlan -Which $Which'); $iBusy = $gb.IndexOf('Working on it'); $iRun = $gb.IndexOf('Invoke-FixItAction -Which $Which -SkipPlan')
+Assert ($iPlan -gt 0 -and $iPlan -lt $iBusy -and $iBusy -lt $iRun) 'a button asks first, then shows "working", then runs the fix'
+$callers = @($fnAsts | Where-Object { $_.Extent.Text -match 'Invoke-FixItAction ' -and $_.Name -notin @('Invoke-FixItAction') } | ForEach-Object { $_.Name })
+Assert (($callers | Sort-Object) -join ',' -eq 'Invoke-FixItAndShow,Invoke-GuiButton') 'only two places run a main action: the button handler (after the window) and the command line (which asks too)'
+Assert ((FnText 'Invoke-FixItAndShow') -notmatch '-SkipPlan') 'the command line never skips the window'
+foreach ($k in @($fullL.TileIds)) { Assert ($src -match "'$k'\s+\{ \[void\]\(Invoke-FixItAndShow -Which '$k'\)") "command line action $k exists" }
+
+Section 'Pin me to the taskbar'
+$simpL = Get-FixItLayout -Simple $true
+foreach ($L in @($fullL, $simpL)) {
+    $pin = @($L.Pin)
+    $lastY = (@($L.Nav) + @($L.Toggles) | ForEach-Object { [int]$_[4] } | Measure-Object -Maximum).Maximum
+    Assert ($pin[0] -eq 'Pin' -and $pin[1] -eq 'Pin me to the taskbar' -and $pin[3] -eq 'pin') ('the Pin item has the right name and icon (' + $L.SideTitle + ')')
+    Assert ([int]$pin[4] -gt $lastY -and ([int]$pin[4] + [int]$pin[5]) -lt $L.FullH) ('the Pin item is the last one in the left list, inside the window (' + $L.SideTitle + ')')
+}
+Assert ($tbl.Contains('Pin') -and -not $tbl['Pin'].Fix -and $null -ne (Get-Command $tbl['Pin'].Fn -ErrorAction SilentlyContinue)) 'Pin is an action that changes nothing'
+$script:Calls.Clear(); $regB = RegSnapshot; $script:PlanSeen = @(); $script:PlanAnswer = $false
+$r = Invoke-FixItAction -Which 'Pin'
+$script:PlanAnswer = $true
+Assert ($r.Ok -and $r.Title -eq 'Pin Family Fix-It to the taskbar' -and $r.GuideId -eq 'pin-taskbar' -and $script:Calls.Count -eq 0 -and (RegSnapshot) -eq $regB -and $script:PlanSeen.Count -eq 0) 'Pin shows a guide only: no window, no changes'
+$g = Get-FixItPinGuide
+Assert (@($g.Steps).Count -eq 5 -and ($g.Steps -join ' ') -match 'Start' -and ($g.Steps -join ' ') -match 'Pin to taskbar' -and ($g.Steps -join ' ') -match 'Right-click' -and $r.Message -match 'does not allow a program to pin itself') 'the guide explains Start, right-click, Pin to taskbar and why Windows blocks self-pinning'
+Assert (@($r.Details).Count -eq 5 -and $r.Details[0] -match '^1\. ') 'the result lists the numbered steps'
+Assert (($g.Steps + $r.Message) -join ' ' -notmatch $bad -and ($g.Steps -join ' ') -match '^[\x09\x0A\x20-\x7E]+$') 'the pin guide is plain words and plain ASCII'
+Assert ($src -match "'pin'\s*=\s*'iVBOR" -and $src -match "'pinW'\s*=\s*'iVBOR") 'both Pin icons (dark and white) are built into the program'
+$gbPin = FnText 'Invoke-GuiButton'
+Assert ($gbPin -match "if \(\`$Which -eq 'Pin'\) \{ Show-FixItGuideSteps -Guide \(Get-FixItPinGuide\)") 'the Pin button opens the step-by-step guide window'
+$outPin = & (Get-Command pwsh).Source -NoProfile -File (Join-Path $root 'FamilyFixIt.ps1') -Action Pin -LogPath (Join-Path $tmp 'cli-pin.log') 2>&1 | Out-String
+Assert ($LASTEXITCODE -eq 0 -and $outPin -match 'Pin to taskbar') 'command line: -Action Pin prints the steps'
+
+Section 'Version'
+Assert ($script:FixItVersion -eq '2.3.0') 'the program is version 2.3.0'
+
 Section 'Publish + update'
 $pub = Join-Path $root 'tools/Publish-FixIt.ps1'
 $dist = Join-Path $tmp 'dist1'
 & $pub -Owner 'octo-test' -OutDir $dist -WarningAction SilentlyContinue | Out-Null
 $man = Get-Content (Join-Path $dist 'manifest.json') -Raw | ConvertFrom-Json
-Assert ($man.version -eq '2.2.2' -and @($man.files).Count -eq 4) 'manifest has version and 4 runtime files'
+Assert ($man.version -eq '2.3.0' -and @($man.files).Count -eq 4) 'manifest has version and 4 runtime files'
 Assert (@($man.apps).Count -eq 4 -and $man.apps[0].id -eq 'Google.Chrome') 'manifest carries the approved app list'
 $badApps = Join-Path $tmp 'badapps'; Copy-Item -LiteralPath $root -Destination $badApps -Recurse
 Set-Content (Join-Path $badApps 'apps.json') '[{"id":"calc; evil","name":"x"}]'
@@ -1132,7 +1459,7 @@ Assert (-not (Select-String -Path (Join-Path $dist '*') -Pattern '(?i)treyb|@gma
 # a newer version 1.0.1 to update to
 $newSrc = Join-Path $tmp 'newsrc'; Copy-Item -LiteralPath $root -Destination $newSrc -Recurse
 $ps = Join-Path $newSrc 'FamilyFixIt.ps1'
-[IO.File]::WriteAllText($ps, ([IO.File]::ReadAllText($ps).Replace("FixItVersion = '2.2.2'", "FixItVersion = '2.2.3'")))
+[IO.File]::WriteAllText($ps, ([IO.File]::ReadAllText($ps).Replace("FixItVersion = '2.3.0'", "FixItVersion = '2.3.1'")))
 $dist2 = Join-Path $tmp 'dist2'
 & (Join-Path $newSrc 'tools/Publish-FixIt.ps1') -SourceDir $newSrc -Owner 'octo-test' -OutDir $dist2 | Out-Null
 $base = 'https://raw.githubusercontent.com/octo-test/family-it-fixit/main/'
@@ -1143,7 +1470,7 @@ $script:ManifestUrl = $base + 'manifest.json'
 Reset-All; Set-Web $dist2; $script:InstallDir = New-Install
 $res = Invoke-FixItUpdate
 Assert ($res.Ok -and $res.Title -eq 'Updated') 'newer version installs after asking'
-Assert ([IO.File]::ReadAllText((Join-Path $script:InstallDir 'FamilyFixIt.ps1')) -match "FixItVersion = '2.2.3'") 'installed script is the new one'
+Assert ([IO.File]::ReadAllText((Join-Path $script:InstallDir 'FamilyFixIt.ps1')) -match "FixItVersion = '2.3.1'") 'installed script is the new one'
 Assert (Test-Path (Join-Path $script:InstallDir 'previous/FamilyFixIt.ps1')) 'old version kept in previous/'
 Assert (@($script:Asked).Count -eq 1) 'asked before updating'
 
@@ -1480,7 +1807,7 @@ $relDir = Join-Path $tmp 'release1'
 $distI = Join-Path $tmp 'dist-i1'
 $newSrcI = Join-Path $tmp 'newsrc-i'; Copy-Item -LiteralPath $root -Destination $newSrcI -Recurse
 $psI = Join-Path $newSrcI 'FamilyFixIt.ps1'
-[IO.File]::WriteAllText($psI, ([IO.File]::ReadAllText($psI).Replace("FixItVersion = '2.2.2'", "FixItVersion = '2.2.3'")))
+[IO.File]::WriteAllText($psI, ([IO.File]::ReadAllText($psI).Replace("FixItVersion = '2.3.0'", "FixItVersion = '2.3.1'")))
 $distI2 = Join-Path $tmp 'dist-i2'
 & (Join-Path $newSrcI 'tools/Publish-FixIt.ps1') -SourceDir $newSrcI -Owner 'octo-test' -OutDir $distI2 -ReleaseDir (Join-Path $tmp 'release2') -WarningAction SilentlyContinue | Out-Null
 
@@ -1535,7 +1862,7 @@ Assert ($rd -match 'releases/latest/download/Install-FamilyFixIt\.zip' -and $rd 
 
     Reset-Inst; Serve $distI
     $r = Install-FamilyFixIt -Base $base -Dir $dir
-    Assert ($r.Ok -and $r.Title -eq 'Installed' -and $r.Version -eq '2.2.2' -and $r.Changed) 'fresh install works'
+    Assert ($r.Ok -and $r.Title -eq 'Installed' -and $r.Version -eq '2.3.0' -and $r.Changed) 'fresh install works'
     $same = $true; foreach ($f in @('FamilyFixIt.ps1', 'Start-FixIt.cmd', 'README.md')) { if ((Get-FileSha256 (Join-Path $dir $f)) -ne (Get-FileSha256 (Join-Path $distI $f))) { $same = $false } }
     Assert $same 'the three files are installed and match the published fingerprints'
     Assert (-not (Test-Path (Join-Path $dir '.staging')) -and -not (Test-Path (Join-Path $dir 'previous'))) 'no leftover staging folder; nothing to keep from a previous version'
@@ -1560,10 +1887,10 @@ Assert ($rd -match 'releases/latest/download/Install-FamilyFixIt\.zip' -and $rd 
 
     Clear-I; Serve $distI2; $script:I.Lnk.Remove($dl)
     $r = Install-FamilyFixIt -Base $base -Dir $dir
-    Assert ($r.Ok -and $r.Version -eq '2.2.3' -and (Get-InstalledVersion $dir) -eq '2.2.3') 'a newer version in the list updates the install'
+    Assert ($r.Ok -and $r.Version -eq '2.3.1' -and (Get-InstalledVersion $dir) -eq '2.3.1') 'a newer version in the list updates the install'
     Assert (($script:I.Actions -join ',') -eq 'GuardianOff,GuardianOn,CheckInOn') 'update restarts the watcher so it runs the new program'
     Assert ($script:I.LnkWrites -eq 1 -and $script:I.Lnk.ContainsKey($dl)) 'a missing shortcut is put back'
-    Assert ((Get-InstalledVersion (Join-Path $dir 'previous')) -eq '2.2.2') 'the old program is kept in previous/'
+    Assert ((Get-InstalledVersion (Join-Path $dir 'previous')) -eq '2.3.0') 'the old program is kept in previous/'
 
     # a download that does not match the fingerprint
     Reset-Inst; Serve $distI; $script:I.Tamper['/FamilyFixIt.ps1'] = $true
@@ -1573,7 +1900,7 @@ Assert ($rd -match 'releases/latest/download/Install-FamilyFixIt\.zip' -and $rd 
     Assert ((Get-Content $script:InstallLog -Raw) -match 'CHECKSUM MISMATCH') 'tampered download: logged'
     Reset-Inst; Serve $distI; $null = Install-FamilyFixIt -Base $base -Dir $dir; Clear-I; Serve $distI2; $script:I.Tamper['/FamilyFixIt.ps1'] = $true
     $r = Install-FamilyFixIt -Base $base -Dir $dir
-    Assert (-not $r.Ok -and (Get-InstalledVersion $dir) -eq '2.2.2') 'tampered update: the working old copy is left exactly as it was'
+    Assert (-not $r.Ok -and (Get-InstalledVersion $dir) -eq '2.3.0') 'tampered update: the working old copy is left exactly as it was'
 
     # network problems
     Reset-Inst; Serve $distI; $script:I.WebFail = $true

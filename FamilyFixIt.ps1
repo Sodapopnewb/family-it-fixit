@@ -6,13 +6,13 @@ browser clean-up, Windows Update, OneDrive; a red "scary pop-up" button; screen 
 
 Run with no options to open the friendly window.
 Command-line use (for Trey):
-  FamilyFixIt.ps1 -Action Printer|Acrobat|AcrobatRepair|Outlook|Network|Slow|Sound|Browser|WinUpdate|OneDrive|Scam|Screen|Report|Update [-WhatIf]
+  FamilyFixIt.ps1 -Action Printer|Acrobat|AcrobatRepair|Outlook|Network|Slow|Sound|Browser|WinUpdate|OneDrive|Scam|Screen|Report|Pin|Update [-WhatIf]
   -WhatIf (alias -DryRun) shows what would happen and changes nothing (nothing is sent either).
   -ReportUrl overrides the address that reports are sent to.
   Guardian (runs at sign-in, hidden) watches for a full-screen browser page and offers a way out; GuardianOn/GuardianOff/GuardianDemo.
 #>
 param(
-    [ValidateSet('Gui', 'Printer', 'Acrobat', 'AcrobatRepair', 'Outlook', 'Network', 'Slow', 'Sound', 'Browser', 'WinUpdate', 'OneDrive', 'Scam', 'Screen', 'Report', 'Update', 'Restart', 'Status', 'Undo', 'CheckIn', 'CheckInOn', 'CheckInOff', 'HealthCheck', 'History', 'Files', 'Install', 'Guardian', 'GuardianOn', 'GuardianOff', 'GuardianDemo', 'PCInfo', 'Guides', 'Simple',
+    [ValidateSet('Gui', 'Printer', 'Acrobat', 'AcrobatRepair', 'Outlook', 'Network', 'Slow', 'Sound', 'Browser', 'WinUpdate', 'OneDrive', 'Scam', 'Screen', 'Report', 'Pin', 'Update', 'Restart', 'Status', 'Undo', 'CheckIn', 'CheckInOn', 'CheckInOff', 'HealthCheck', 'History', 'Files', 'Install', 'Guardian', 'GuardianOn', 'GuardianOff', 'GuardianDemo', 'PCInfo', 'Guides', 'Simple',
         'PrinterAdmin', 'AcrobatAdmin', 'AcrobatRepairAdmin', 'NetworkAdmin', 'SlowAdmin', 'SoundAdmin', 'OutlookAdmin', 'DefenderScanAdmin', 'WinUpdateAdmin', 'WinUpdateDeepAdmin', 'UndoAdmin')]
     [string]$Action = 'Gui',
     [Alias('DryRun')][switch]$WhatIf,
@@ -34,7 +34,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 # Settings
 # ---------------------------------------------------------------------------
-$script:FixItVersion = '2.2.2'
+$script:FixItVersion = '2.3.0'
 $script:DefaultManifestUrl = 'https://raw.githubusercontent.com/Sodapopnewb/family-it-fixit/main/manifest.json'
 $script:OwnerPlaceholder = ('<' + 'OWNER>')   # the guards compare with this; Publish never rewrites it
 # Where reports are sent (a small Cloudflare Worker that Trey runs). The app header is NOT a secret.
@@ -228,6 +228,86 @@ function Set-FixItDefaultPrinter {
     if ($p) { Invoke-CimMethod -InputObject $p -MethodName SetDefaultPrinter | Out-Null }
 }
 
+# Printers that only make files (PDF, XPS, OneNote, fax). They are never picked on their own.
+$script:VirtualPrinterPattern = '(?i)print to pdf|xps document writer|onenote|^fax$|microsoft shared fax|adobe pdf|pdfcreator|cutepdf|save as pdf|snagit'
+$script:PrinterReadyPattern = '^(|Normal|Idle|IOActive|Busy|Printing|Waiting|Processing|Initializing|WarmingUp|TonerLow|PowerSave)$'
+# Windows keeps choosing the default printer by itself unless this is set to 1.
+$script:WindowsNtKey = 'HKCU:\Software\Microsoft\Windows NT\CurrentVersion\Windows'
+
+function Test-FixItVirtualPrinter { param([string]$Name) return ($Name -match $script:VirtualPrinterPattern) }
+
+# Real printers first. If every printer is a "make a file" printer, they are all returned.
+function Get-FixItPickablePrinters {
+    param($Printers)
+    $all = @($Printers | Where-Object { $null -ne $_ })
+    $real = @($all | Where-Object { -not (Test-FixItVirtualPrinter -Name ([string]$_.Name)) })
+    if ($real.Count -gt 0) { return $real }
+    return $all
+}
+
+# A printer on the network is found by the address in its port name (for example IP_192.168.1.20).
+function Get-FixItPrinterAddress {
+    param([string]$PortName)
+    if ($PortName -match '^(?:IP_)?(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})(?:_\d+)?$') { return $Matches[1] }
+    return ''
+}
+function Test-FixItPortOpen {
+    param([string]$Address, [int[]]$Ports)
+    foreach ($port in $Ports) {
+        try {
+            $c = New-Object Net.Sockets.TcpClient
+            $iar = $c.BeginConnect($Address, $port, $null, $null)
+            $ok = $iar.AsyncWaitHandle.WaitOne(1500, $false) -and $c.Connected
+            $c.Close()
+            if ($ok) { return $true }
+        } catch { }
+    }
+    return $false
+}
+
+# Tests one printer. Returns Ok (true/false) and Why (a short, plain reason when it is not ok).
+function Test-FixItPrinterAvailable {
+    param($Printer)
+    $name = [string]$Printer.Name
+    if ([bool]$Printer.WorkOffline) { return [pscustomobject]@{ Name = $name; Ok = $false; Why = 'Windows says it is offline' } }
+    if ([string]$Printer.StatusText -notmatch $script:PrinterReadyPattern) {
+        return [pscustomobject]@{ Name = $name; Ok = $false; Why = ('Windows says: {0}' -f $Printer.StatusText) }
+    }
+    if ([bool]$Printer.IsNetwork -and [string]$Printer.Server) {
+        if (-not (Test-HostReachable -ComputerName ([string]$Printer.Server))) {
+            return [pscustomobject]@{ Name = $name; Ok = $false; Why = ('the computer that shares it ({0}) cannot be reached' -f $Printer.Server) }
+        }
+    }
+    $addr = Get-FixItPrinterAddress -PortName ([string]$Printer.PortName)
+    if ($addr) {
+        if (-not (Test-FixItPortOpen -Address $addr -Ports @(9100, 515, 631))) {
+            return [pscustomobject]@{ Name = $name; Ok = $false; Why = 'it does not answer on the network' }
+        }
+    }
+    return [pscustomobject]@{ Name = $name; Ok = $true; Why = '' }
+}
+
+# Makes one printer the default, in a way Windows keeps. The old default is saved so Undo can put it back.
+function Set-FixItPrinterAsDefault {
+    param([string]$Name, [string]$Previous = '')
+    if ($Previous -and $Previous -ne $Name) { Add-FixItUndoStep ([ordered]@{ Kind = 'defaultprinter'; Name = $Previous }) }
+    $a = Invoke-FixItStep 'Stop Windows from choosing the default printer by itself' { Set-RegDword -Path $script:WindowsNtKey -Name 'LegacyDefaultPrinterMode' -Value 1 }
+    $b = Invoke-FixItStep ('Make {0} the default printer' -f $Name) { Set-FixItDefaultPrinter -Name $Name }
+    return ($a -and $b)
+}
+
+# Asks which printer. The window shows a list of buttons; the command line shows numbers. Returns '' when the person goes back.
+function Select-FixItPrinter {
+    param([string[]]$Names, [string]$Current = '')
+    if ($script:GuiActive) { return [string](Show-FixItPrinterPickDialog -Names $Names -Current $Current) }
+    $i = 1
+    foreach ($n in $Names) { Write-Host ('  {0}. {1}' -f $i, $n); $i++ }
+    $a = Read-Host 'Type the number of your printer (or press Enter to go back)'
+    $k = 0
+    if ([int]::TryParse([string]$a, [ref]$k) -and $k -ge 1 -and $k -le @($Names).Count) { return [string]@($Names)[$k - 1] }
+    return ''
+}
+
 function Get-RunningApp {
     param([string[]]$ProcessNames)
     return @(Get-Process -Name $ProcessNames -ErrorAction SilentlyContinue)
@@ -361,7 +441,6 @@ function Set-RegString {
     New-ItemProperty -LiteralPath $Path -Name $Name -Value $Value -PropertyType String -Force | Out-Null
 }
 
-function Remove-RegKeyTree { param([string]$Path) if (Test-Path -LiteralPath $Path) { Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop } }
 
 # Runs a program and returns its exit code and text. -Live shows the program's own progress in the window.
 function Invoke-FixItNative {
@@ -464,7 +543,6 @@ function Test-SafeCleanPath {
     if ($p -match '(?i)^[A-Za-z]:\\Windows\\Temp$') { return $true }
     if ($p -match '(?i)^[A-Za-z]:\\Windows\\SoftwareDistribution\\Download$') { return $true }
     if ($p -match '(?i)\\(Microsoft\\Edge|Google\\Chrome)\\User Data\\[^\\]+\\(Cache|Code Cache|GPUCache)$') { return $true }
-    if ($p -match '(?i)\\AppData\\Local\\Microsoft\\(OneAuth|IdentityCache)$') { return $true }
     return $false
 }
 
@@ -648,29 +726,20 @@ function Start-FixItOutlookSafe {
     if ($ol.Installed -and $ol.Path) { $exe = $ol.Path }
     Start-Process -FilePath $exe -ArgumentList '/safe' | Out-Null
 }
-function Get-FixItOfficeCredentialTargets {
-    $r = Invoke-FixItNative -File 'cmdkey.exe' -Arguments @('/list')
-    $t = @()
-    foreach ($line in ($r.Output -split "`r?`n")) {
-        if ($line -match 'Target:\s*(?:LegacyGeneric:target=|Domain:target=)?(MicrosoftOffice\d*_Data:[^\s]+|virtualapp/didlogical|OneAuth[^\s]*)') { $t += $Matches[1] }
-    }
-    return @($t | Select-Object -Unique)
+function Start-FixItOutlook {
+    $ol = Get-OutlookInfo
+    $exe = 'outlook.exe'
+    if ($ol.Installed -and $ol.Path) { $exe = $ol.Path }
+    Start-Process -FilePath $exe | Out-Null
 }
-function Remove-FixItCredential { param([string]$Target) Invoke-FixItTool -File 'cmdkey.exe' -Arguments @('/delete:' + $Target) }
-function Get-FixItOfficeIdentityKeys {
-    $out = @()
-    foreach ($v in $script:OfficeVersions) {
-        $k = 'HKCU:\Software\Microsoft\Office\{0}\Common\Identity\Identities' -f $v
-        if (Test-RegKey -Path $k) { $out += $k }
-    }
-    return $out
+# Every program that is "Outlook" (the classic one and the new one). Used to close it completely.
+$script:OutlookProcessNames = @('OUTLOOK', 'olk')
+function Stop-FixItAppsByName {
+    param([string[]]$ProcessNames)
+    foreach ($p in @(Get-Process -Name $ProcessNames -ErrorAction SilentlyContinue)) { try { $p.Kill() } catch { } }
+    $end = (Get-Date).AddSeconds(10)
+    while (@(Get-Process -Name $ProcessNames -ErrorAction SilentlyContinue).Count -gt 0 -and (Get-Date) -lt $end) { Start-Sleep -Milliseconds 300 }
 }
-function Get-FixItOfficeCacheFolders {
-    $l = $env:LOCALAPPDATA
-    if (-not $l) { return @() }
-    return @(('{0}\Microsoft\OneAuth' -f $l), ('{0}\Microsoft\IdentityCache' -f $l) | Where-Object { Test-Path -LiteralPath $_ })
-}
-
 # ----- browsers
 function Get-FixItBrowserProfiles {
     $out = @()
@@ -1118,6 +1187,38 @@ function Invoke-PrinterRefreshUser {
 
 function Invoke-PrinterFix {
     Write-FixItLog 'Started: Fix my printer'
+    $before = @()
+    try { $before = @(Get-FixItPrinters) } catch { Write-FixItLog ('Could not list printers: {0}' -f $_.Exception.Message) 'ERROR' }
+    $pickable = @(Get-FixItPickablePrinters -Printers $before)
+    $oldDefault = ''
+    $dflt = @($before | Where-Object { $_.IsDefault } | Select-Object -First 1)
+    if ($dflt.Count -gt 0) { $oldDefault = [string]$dflt[0].Name }
+
+    # First question: do they already know which printer they want?
+    $mode = 'none'      # none = no printers on this computer, pick = they chose one, auto = I choose
+    $chosen = ''
+    if ($pickable.Count -gt 0) {
+        $mode = 'auto'
+        if (Confirm-FixItStep "Do you know which printer you're trying to use?") {
+            $mode = 'pick'
+            if ($script:DryRun) {
+                Write-FixItLog 'Would do: show the list of printers and make the one you pick your default printer' 'DRYRUN'
+            } else {
+                $names = @($pickable | ForEach-Object { [string]$_.Name })
+                $chosen = [string](Select-FixItPrinter -Names $names -Current $oldDefault)
+                if (-not $chosen) {
+                    Write-FixItLog 'Printer fix: nothing was picked, so nothing was changed'
+                    return New-FixItResult $true 'Nothing changed' 'OK, nothing was changed.' @() @{ SkipFollowUp = $true }
+                }
+                Write-FixItLog ('Printer picked from the list: {0}' -f $chosen)
+            }
+        } else {
+            if ($script:DryRun) { Write-FixItLog 'Would do: test every printer and make one that works your default printer' 'DRYRUN' }
+        }
+    } else {
+        Write-FixItLog 'No printers were found on this computer' 'WARN'
+    }
+
     $admin = Invoke-AdminPart -Part 'PrinterAdmin' -InProcess { Invoke-PrinterAdmin }
     $adminOk = [bool]$admin.Ok
     if (-not $adminOk -and (($admin.PSObject.Properties.Name -contains 'Declined') -and $admin.Declined)) {
@@ -1132,25 +1233,90 @@ function Invoke-PrinterFix {
         else { $lines += 'There were no stuck print jobs.' }
     }
     if ($user.Fixed -gt 0) { $lines += ('Reconnected {0} network printer(s).' -f $user.Fixed) }
-    $lines += @($user.Notes)
+
+    # Which printer ends up as the default
+    $now = @()
+    if ($mode -ne 'none') { try { $now = @(Get-FixItPrinters) } catch { Write-FixItLog ('Could not list printers again: {0}' -f $_.Exception.Message) 'ERROR' } }
+    $pickNow = @(Get-FixItPickablePrinters -Printers $now)
+    $picked = ''          # the printer that is now the default (or would be)
+    $pickedOk = $true
+    $headline = ''
+    $problemText = ''
+    if ($mode -eq 'pick' -and -not $script:DryRun) {
+        $target = @($now | Where-Object { [string]$_.Name -eq $chosen } | Select-Object -First 1)
+        if ($target.Count -eq 0) {
+            $pickedOk = $false
+            $problemText = ('"{0}" is not in the printer list any more. Trey may need to set it up again.' -f $chosen)
+        } else {
+            $t = Test-FixItPrinterAvailable -Printer $target[0]
+            $curNow = ''
+            $cd = @($now | Where-Object { $_.IsDefault } | Select-Object -First 1)
+            if ($cd.Count -gt 0) { $curNow = [string]$cd[0].Name }
+            if ($curNow -ne $chosen) {
+                $setOk = Set-FixItPrinterAsDefault -Name $chosen -Previous $curNow
+                if (-not $setOk) { $pickedOk = $false; $problemText = ('Windows would not let me make "{0}" your default printer.' -f $chosen) }
+            } else {
+                $lines += ('"{0}" was already your default printer.' -f $chosen)
+            }
+            if ($pickedOk) {
+                $picked = $chosen
+                if ($t.Ok) {
+                    $headline = ('"{0}" is now your default printer, so Windows will use it first whenever you print.' -f $chosen)
+                } else {
+                    $pickedOk = $false
+                    $problemText = ('"{0}" is now your default printer, but it is not answering ({1}). Check that it is turned on, has paper, and is plugged in or on Wi-Fi.' -f $chosen, $t.Why)
+                }
+            }
+        }
+    } elseif ($mode -eq 'auto' -and -not $script:DryRun) {
+        $good = @()
+        foreach ($pp in $pickNow) {
+            $tt = Test-FixItPrinterAvailable -Printer $pp
+            if ($tt.Ok) { $lines += ('Tested "{0}": ready.' -f $pp.Name); $good += $pp }
+            else { $lines += ('Tested "{0}": not available ({1}).' -f $pp.Name, $tt.Why) }
+        }
+        if ($good.Count -eq 0) {
+            $pickedOk = $false
+            $problemText = 'I tested every printer on this computer and none of them is available right now. Check that your printer is turned on, has paper, and is plugged in or on Wi-Fi. If it still does not work, please call Trey.'
+        } else {
+            $best = $good[0]
+            foreach ($g in $good) { if ($g.IsDefault) { $best = $g; break } }
+            $curNow = ''
+            $cd = @($now | Where-Object { $_.IsDefault } | Select-Object -First 1)
+            if ($cd.Count -gt 0) { $curNow = [string]$cd[0].Name }
+            $setOk = $true
+            if ($curNow -ne [string]$best.Name) { $setOk = Set-FixItPrinterAsDefault -Name ([string]$best.Name) -Previous $curNow }
+            if ($setOk) {
+                $picked = [string]$best.Name
+                $headline = ('I tested your printers. "{0}" is working, so I made it your default printer. Please print to it.' -f $picked)
+                if ($curNow -eq $picked) { $headline = ('I tested your printers. "{0}" is working and it is already your default printer. Please print to it.' -f $picked) }
+            } else {
+                $pickedOk = $false
+                $problemText = ('"{0}" is working, but Windows would not let me make it your default printer.' -f $best.Name)
+            }
+        }
+    }
+    foreach ($n in @($user.Notes)) { $lines += $n }
     $lines += @($admin.Details)
 
-    $okAll = ($adminOk -and $user.Problems -eq 0)
     if ($script:DryRun) {
         $msg = 'Practice run only - nothing was changed. Details are in the log file.'
         Write-FixItLog 'Finished (practice run): Fix my printer'
         return New-FixItResult $true 'Practice run' $msg $lines
     }
-    if ($okAll) {
+    if (-not $adminOk) {
+        Write-FixItLog 'Finished: Fix my printer - could not restart printing' 'ERROR'
+        return New-FixItResult $false 'Printer not fixed' 'We could not restart printing. Please click "Something else is wrong" and send Trey the report.' $lines
+    }
+    if ($pickedOk) {
         Write-FixItLog 'Finished: Fix my printer - success'
-        return New-FixItResult $true 'Printer fixed' 'Your printing should be working again. Please try printing now.' $lines
+        $m = 'Your printing should be working again. Please try printing now.'
+        if ($headline) { $m = $m + "`r`n`r`n" + $headline }
+        return New-FixItResult $true 'Printer fixed' $m $lines @{ DefaultPrinter = $picked }
     }
-    if ($adminOk) {
-        Write-FixItLog 'Finished: Fix my printer - printing restarted but a printer still has a problem' 'WARN'
-        return New-FixItResult $false 'Almost there' 'Printing was restarted, but one of your printers still has a problem. Try printing. If it still does not work, click "Something else is wrong" and send Trey the report.' $lines
-    }
-    Write-FixItLog 'Finished: Fix my printer - could not restart printing' 'ERROR'
-    return New-FixItResult $false 'Printer not fixed' 'We could not restart printing. Please click "Something else is wrong" and send Trey the report.' $lines
+    Write-FixItLog ('Finished: Fix my printer - printing restarted but: {0}' -f $problemText) 'WARN'
+    $m2 = 'Printing was restarted, but there is still a problem.' + "`r`n`r`n" + $problemText
+    return New-FixItResult $false 'Almost there' $m2 $lines @{ DefaultPrinter = $picked }
 }
 
 # ---------------------------------------------------------------------------
@@ -1307,7 +1473,13 @@ function Invoke-AcrobatRepair {
             return New-FixItResult $false 'Acrobat is still open' 'Please close Acrobat and then click the button again.'
         }
     }
+    $outlookWasOpen = (@(Get-RunningApp -ProcessNames $script:OutlookProcessNames).Count -gt 0)
+    if ($outlookWasOpen) {
+        $cr = Close-FixItOutlookForFix -Question "Outlook is open. It has to be closed completely for the repair, and I will open it again afterwards.`r`n`r`nPlease save or send anything you are writing first.`r`n`r`nClose Outlook now?"
+        if ($cr -ne 'closed') { return (New-FixItOutlookCloseResult -State $cr) }
+    }
     $r = Invoke-AdminPart -Part 'AcrobatRepairAdmin' -InProcess { Invoke-AcrobatRepairAdmin }
+    if ($outlookWasOpen) { [void](Open-FixItOutlookForFix) }
     if ($script:DryRun) { return New-FixItResult $true 'Practice run' 'Practice run only - nothing was changed. Details are in the log file.' }
     if ($r.Ok) {
         Write-FixItLog 'Finished: Repair Acrobat - success'
@@ -1332,20 +1504,28 @@ function Invoke-AcrobatFix {
         return New-FixItResult $false 'Acrobat not found' 'Adobe Acrobat does not seem to be installed on this computer. Please ask Trey.'
     }
 
-    if (@(Get-RunningApp -ProcessNames @('OUTLOOK')).Count -gt 0) {
-        if ($script:DryRun) {
-            Write-FixItLog 'Would do: ask to close Outlook' 'DRYRUN'
-        } else {
-            if (Confirm-FixIt 'Outlook is open. It needs to be closed for this fix. Close it now? (Outlook will ask to save anything unfinished.)') {
-                Write-FixItLog 'Doing: ask Outlook to close'
-                Request-AppClose -ProcessNames @('OUTLOOK')
-            }
-            if (@(Get-RunningApp -ProcessNames @('OUTLOOK')).Count -gt 0) {
-                Write-FixItLog 'Outlook is still open; stopping' 'WARN'
-                return New-FixItResult $false 'Outlook is still open' 'Please close Outlook, then click this button again.'
-            }
+    # Step 1: the gentle fix. Close every Outlook program, open it again, and ask.
+    $closeQ = "Outlook is open. To fix the Acrobat buttons, I first need to close Outlook completely - including the parts running in the background - and then open it again.`r`n`r`nPlease save or send anything you are writing first.`r`n`r`nClose Outlook now?"
+    $c = Close-FixItOutlookForFix -Question $closeQ
+    if ($c -ne 'closed') { return (New-FixItOutlookCloseResult -State $c) }
+    if (-not (Open-FixItOutlookForFix)) { return (New-FixItOutlookOpenFailResult) }
+    if ($script:DryRun) {
+        Write-FixItLog 'Would ask: Is Acrobat showing up in Outlook? (If yes, I stop here. If not, the next steps below happen.)' 'DRYRUN'
+    } else {
+        $w1 = Confirm-FixIt "Outlook is opening again - give it a moment.`r`n`r`nPlease look for Acrobat in Outlook (an Acrobat tab or Create PDF buttons).`r`n`r`nIs Acrobat showing up in Outlook?"
+        Write-FixItLog ('Asked: Is Acrobat showing up in Outlook? -> {0}' -f $(if ($w1) { 'yes' } else { 'no' })) $(if ($w1) { 'INFO' } else { 'WARN' })
+        if ($w1) {
+            Write-FixItLog 'Finished: Fix Acrobat in Outlook - fixed by closing and opening Outlook again'
+            return New-FixItResult $true 'Acrobat fixed' ("Great - Acrobat is working in Outlook again.`r`n`r`nI only closed Outlook completely and opened it again. " + $script:OutlookKeepText) @() @{ SkipFollowUp = $true }
+        }
+        if (-not (Confirm-FixIt "Sorry about that. The next step is to switch the Acrobat add-in back on in Outlook's settings. Outlook will close once more for this.`r`n`r`nYour email accounts and sign-ins will not be touched.`r`n`r`nContinue?")) {
+            return New-FixItResult $false 'Acrobat still needs help' "OK, I stopped here. Acrobat is still not showing in Outlook.`r`n`r`nPlease call Trey." @($script:OutlookKeepText) @{ SkipFollowUp = $true }
         }
     }
+
+    # Step 2: only because it is still not working.
+    $c2 = Close-FixItOutlookFully
+    if ($c2 -ne 'closed') { return (New-FixItOutlookCloseResult -State $c2) }
 
     $before = @(Get-AddinState)
     $hits = @(Get-ResiliencyHits)
@@ -1368,7 +1548,7 @@ function Invoke-AcrobatFix {
 
     if ($script:DryRun) {
         Write-FixItLog 'Finished (practice run): Fix Acrobat in Outlook'
-        return New-FixItResult $true 'Practice run' 'Practice run only - nothing was changed. Details are in the log file.'
+        return New-FixItResult $true 'Practice run' 'Practice run only - nothing was changed. Details are in the log file.' @($script:OutlookKeepText)
     }
 
     $healthy = Test-AcrobatAddinHealthy
@@ -1387,11 +1567,12 @@ function Invoke-AcrobatFix {
 
     $said = 'Done. The Acrobat add-in is switched back on.'
     if (($changedUser + $changedAdmin) -eq 0) { $said = 'The Acrobat add-in was already switched on, so nothing needed changing.' }
-    Write-FixItLog 'Settings fixed; asking the person to check Outlook'
-    $works = Confirm-FixIt ($said + "`r`n`r`nPlease open Outlook now and look for Acrobat (an Acrobat tab or Create PDF buttons).`r`n`r`nIs Acrobat showing up in Outlook?")
+    Write-FixItLog 'Settings fixed; opening Outlook and asking the person to check'
+    if (-not (Open-FixItOutlookForFix)) { return (New-FixItOutlookOpenFailResult) }
+    $works = Confirm-FixIt ($said + "`r`n`r`nOutlook is opening again - give it a moment, then look for Acrobat (an Acrobat tab or Create PDF buttons).`r`n`r`nIs Acrobat showing up in Outlook?")
     if ($works) {
         Write-FixItLog 'Finished: Fix Acrobat in Outlook - success (confirmed by user)'
-        return New-FixItResult $true 'Acrobat fixed' 'Great - Acrobat is working in Outlook again.'
+        return New-FixItResult $true 'Acrobat fixed' 'Great - Acrobat is working in Outlook again.' @($script:OutlookKeepText) @{ SkipFollowUp = $true }
     }
     Write-FixItLog 'User says Acrobat is still missing in Outlook' 'WARN'
     if (Confirm-FixIt 'Sorry about that. The next step is to repair Acrobat. It takes a few minutes and Windows will ask for permission. Repair Acrobat now?') {
@@ -1774,6 +1955,8 @@ function Format-FixItBytes {
 }
 
 function Test-FixItDeclined { param($R) return (($null -ne $R) -and [bool](Get-FixItProp $R 'Declined' $false)) }
+# True when the fix already asked the person (or already told them to call Trey), so "Did that fix it?" would be asked twice.
+function Test-FixItSkipFollowUp { param($R) return (($null -ne $R) -and [bool](Get-FixItProp $R 'SkipFollowUp' $false)) }
 
 # ---------------------------------------------------------------------------
 # Internet and Wi-Fi
@@ -1819,6 +2002,30 @@ function Invoke-NetworkAdmin {
     return New-FixItResult $ok 'Network (all users)' $(if ($ok) { 'Done' } else { 'Some steps could not be done.' }) @() @{ Adapters = $names.Count }
 }
 
+$script:RouterRestartText = 'Unplug the router, wait 30 seconds, then plug it back in.'
+$script:RouterWaitSeconds = 120
+$script:RouterExtraWaitSeconds = 30
+
+# What the waiting window says as the time runs down.
+function Get-FixItCountdownText {
+    param([int]$Remaining, [int]$Total)
+    if ($Remaining -gt ($Total * 0.6)) { return 'Your router is starting up. This takes about 2 minutes.' }
+    if ($Remaining -gt ($Total * 0.2)) { return 'The lights on your router should be settling down now.' }
+    return 'Nearly done - I will test your internet in a moment.'
+}
+# A friendly waiting window with a countdown. The window shows it; the command line prints it.
+function Show-FixItCountdown {
+    param([int]$Seconds, [string]$Title = 'Please wait', [string]$Message = '')
+    if ($script:GuiActive) { Show-FixItCountdownDialog -Seconds $Seconds -Title $Title -Message $Message; return }
+    Write-Host $Message
+    $end = (Get-Date).AddSeconds($Seconds)
+    while ((Get-Date) -lt $end) {
+        $left = [int][math]::Ceiling(($end - (Get-Date)).TotalSeconds)
+        Write-Host ('  {0}:{1:00} left - {2}' -f [int][math]::Floor($left / 60), ($left % 60), (Get-FixItCountdownText -Remaining $left -Total $Seconds))
+        Start-Sleep -Seconds ([math]::Min(10, [math]::Max(1, $left)))
+    }
+}
+
 function Invoke-NetworkFix {
     Write-FixItLog 'Started: Fix my internet'
     $before = Get-FixItConnection
@@ -1851,25 +2058,53 @@ function Invoke-NetworkFix {
     foreach ($l in (Format-FixItConnection $after)) { Write-FixItLog ('After: {0}' -f $l) }
     $lines += (Format-FixItConnection $after)
     if ($script:DryRun) {
+        Write-FixItLog 'Would do (only if the internet is still not working): show "Unplug the router, wait 30 seconds, then plug it back in." and ask "Is that done?"' 'DRYRUN'
+        Write-FixItLog ('Would do: on Yes, wait about {0} seconds with a countdown, test the connection again and report clearly' -f $script:RouterWaitSeconds) 'DRYRUN'
+        Write-FixItLog 'Would do: if it still fails, tell the person to call Trey and send Trey the report automatically' 'DRYRUN'
         return New-FixItResult $true 'Practice run' 'Practice run only - nothing was changed. Details are in the log file.' $lines
     }
     if (Test-FixItConnectionGood $after) {
         Write-FixItLog 'Finished: Fix my internet - success'
         return New-FixItResult $true 'Internet fixed' 'Your internet is working again.' $lines
     }
-    $restartHint = ''
-    if ($needRestart) { $restartHint = "`r`n`r`nPlease also restart your computer once - one of the repairs only finishes after a restart." }
-    if ($adminDeclined) { $restartHint = "`r`n`r`nWindows asked for permission to do a deeper repair and it was not given." }
-    if (-not $after.RouterOk) {
-        Write-FixItLog 'Finished: Fix my internet - router not answering' 'WARN'
-        return New-FixItResult $false 'Restart your router' ("Your computer cannot reach your router.`r`n`r`n1. Unplug your router (and modem) from the wall.`r`n2. Wait 30 seconds.`r`n3. Plug them back in and wait 2 or 3 minutes until the lights are steady.`r`n4. Click this button again.`r`n`r`nIf you use Wi-Fi, also check that Wi-Fi is turned on." + $restartHint) $lines
+    $restartHint = @()
+    if ($needRestart) { $restartHint += 'One of the repairs only finishes after a restart, so please also restart your computer once.' }
+    if ($adminDeclined) { $restartHint += 'Windows asked for permission to do a deeper repair and it was not given.' }
+
+    # Still not working: the router step. Say it clearly, ask "Is that done?", wait, test again.
+    Write-FixItLog 'The internet is still not working; asking the person to restart the router' 'WARN'
+    $done = Confirm-FixIt ("I tried everything I can from this computer, and the internet is still not working.`r`n`r`n" + $script:RouterRestartText + "`r`n`r`nIs that done?") -Title 'Fix my internet'
+    Write-FixItLog ('Asked: router unplugged and plugged back in? -> {0}' -f $(if ($done) { 'yes' } else { 'no' }))
+    if (-not $done) {
+        return New-FixItResult $false 'Router not restarted' ("OK, no problem. Whenever you are ready:`r`n`r`n" + $script:RouterRestartText + "`r`n`r`nThen click 'Fix my internet' again.`r`n`r`nIf you need help, please call Trey.") $lines @{ SkipFollowUp = $true }
     }
-    if (-not $after.InternetOk) {
-        Write-FixItLog 'Finished: Fix my internet - router ok but no internet' 'WARN'
-        return New-FixItResult $false 'Internet is not coming through' ("Your router is fine, but the internet is not coming through it. Restart your router and modem (unplug for 30 seconds), wait 3 minutes and try again. If it still fails, call your internet company - the problem may be on their side." + $restartHint) $lines
+    Show-FixItCountdown -Seconds $script:RouterWaitSeconds -Title 'Giving your router time to start up' -Message 'Your router needs a couple of minutes to wake up. Nothing else to do - please wait.'
+    Invoke-FixItStep 'Ask the router for a fresh address (renew)' { Invoke-FixItTool -File 'ipconfig.exe' -Arguments @('/renew') } | Out-Null
+    $final = Get-FixItConnection
+    if (-not (Test-FixItConnectionGood $final) -and (-not $final.RouterOk -or -not $final.InternetOk)) {
+        Write-FixItLog 'Still starting up; waiting a little longer' 'WARN'
+        Show-FixItCountdown -Seconds $script:RouterExtraWaitSeconds -Title 'Still starting up' -Message 'Your router is taking a little longer. Please wait just a bit more.'
+        $final = Get-FixItConnection
     }
-    Write-FixItLog 'Finished: Fix my internet - partly working' 'WARN'
-    return New-FixItResult $false 'Almost there' ("The internet answers but websites are not opening properly. Try again in a few minutes. If it still fails, click the report button and send Trey the report." + $restartHint) $lines
+    foreach ($l in (Format-FixItConnection $final)) { Write-FixItLog ('After the router restart: {0}' -f $l) }
+    $report = @('Router unplugged and plugged back in, then waited. Test results:') + @(Format-FixItConnection $final)
+    if (Test-FixItConnectionGood $final) {
+        Write-FixItLog 'Finished: Fix my internet - success after the router restart'
+        return New-FixItResult $true 'Internet fixed' ("Your internet is working again.`r`n`r`nRestarting the router did it. Your router answers, the internet answers and websites open.") $report @{ SkipFollowUp = $true }
+    }
+    Write-FixItLog 'Finished: Fix my internet - still not working after the router restart' 'WARN'
+    $sent = $false
+    try {
+        $note = 'Fix my internet did NOT work, even after the router was unplugged and plugged back in and about {0} seconds had passed. Test results: {1}' -f $script:RouterWaitSeconds, ((Format-FixItConnection $final) -join '; ')
+        $text = Get-FixItReportText -Kind 'report' -Note $note
+        [void](Save-FixItReportFile -Text $text -Prefix 'Report-for-Trey')
+        $sent = [bool](Send-FixItReport -Text $text -Kind 'report')
+    } catch { Write-FixItLog ('The internet report could not be made: {0}' -f $_.Exception.Message) 'ERROR' }
+    $sentLine = 'I have sent Trey a report with everything I found, so he can see what happened.'
+    if (-not $sent) { $sentLine = "I tried to send Trey a report, but that needs the internet, and the internet is not working. A copy of the report is saved on your Desktop - please tell Trey when you call." }
+    $msg = "Your internet is still not working, even after restarting the router.`r`n`r`nPlease call Trey.`r`n`r`n" + $sentLine
+    foreach ($h in $restartHint) { $msg += "`r`n`r`n" + $h }
+    return New-FixItResult $false 'Please call Trey' $msg $report @{ SkipFollowUp = $true; ReportSent = $sent }
 }
 
 # ---------------------------------------------------------------------------
@@ -1914,9 +2149,18 @@ function Invoke-SlowFix {
         if (-not (Invoke-FixItStep 'Empty your temporary files folder' { $script:__f += (Clear-FixItFolder -Path $userTemp) })) { $problems++ }
     }
     if (-not (Invoke-FixItStep 'Empty the Recycle Bin' { Clear-FixItRecycleBin })) { $problems++ }
-    foreach ($c in @(Get-FixItBrowserCacheFolders)) {
-        $cp = $c.Path
-        if (-not (Invoke-FixItStep ('Empty the {0} browser cache {1}' -f $c.Browser, $cp) { $script:__f += (Clear-FixItFolder -Path $cp) })) { $problems++ }
+    $cacheFolders = @(Get-FixItBrowserCacheFolders)
+    $clearCache = $false
+    if ($cacheFolders.Count -gt 0) {
+        $clearCache = Confirm-FixItStep "Clear the temporary website files your browser has saved (called the cache)? This can free a lot of space.`r`n`r`nWarning: afterwards you may need to sign back in to websites you visit, so have your passwords handy.`r`n`r`nClear them now?"
+        if (-not $clearCache) { $lines += 'Your browser was left alone, as you chose. You will not need to sign in to any website again.' }
+    }
+    if ($clearCache) {
+        foreach ($c in $cacheFolders) {
+            $cp = $c.Path
+            if (-not (Invoke-FixItStep ('Empty the {0} browser cache {1}' -f $c.Browser, $cp) { $script:__f += (Clear-FixItFolder -Path $cp) })) { $problems++ }
+        }
+        $lines += 'Cleared the temporary website files your browser had saved. You may need to sign back in to some websites.'
     }
     $freed += $script:__f
     $admin = Invoke-AdminPart -Part 'SlowAdmin' -InProcess { Invoke-SlowAdmin }
@@ -1957,6 +2201,10 @@ function Invoke-SoundAdmin {
     return New-FixItResult $ok 'Sound service' $(if ($ok) { 'Done' } else { 'The sound service could not be restarted.' })
 }
 
+# When the speakers are muted or almost silent they are set to this, so a video call does not suddenly blast out.
+$script:SpeakerRestoreVolume = 25
+$script:MicRestoreVolume = 70
+
 function Invoke-SoundFix {
     Write-FixItLog 'Started: Fix sound, microphone and camera'
     $lines = @()
@@ -1973,7 +2221,7 @@ function Invoke-SoundFix {
         Write-FixItLog ('Speakers: {0} volume={1} muted={2}' -f $spk.Name, $spk.Volume, $spk.Muted)
         if ($spk.Muted -or $spk.Volume -lt 10) {
             Add-FixItUndoStep ([ordered]@{ Kind = 'audio'; Device = 'Speakers'; Volume = [int]$spk.Volume; Muted = [bool]$spk.Muted })
-            if (Invoke-FixItStep 'Unmute the speakers and set a normal volume' { Set-FixItAudioDevice -Kind Speakers -Volume 40 }) { $lines += ('Your speakers ({0}) were muted or almost silent. They are now on.' -f $spk.Name) }
+            if (Invoke-FixItStep ('Unmute the speakers and set the volume to {0}%' -f $script:SpeakerRestoreVolume) { Set-FixItAudioDevice -Kind Speakers -Volume $script:SpeakerRestoreVolume }) { $lines += ('Your speakers ({0}) were muted or almost silent. They are now on at {1}% - not too loud. Turn them up if you need to.' -f $spk.Name, $script:SpeakerRestoreVolume) }
         } else { $lines += ('Speakers: {0}, volume {1}%.' -f $spk.Name, $spk.Volume) }
     }
     if (-not $mic) { $lines += 'No microphone is selected in Windows.'; $needRestart = $true; if (-not $page) { $page = 'ms-settings:sound' } }
@@ -1981,7 +2229,7 @@ function Invoke-SoundFix {
         Write-FixItLog ('Microphone: {0} volume={1} muted={2}' -f $mic.Name, $mic.Volume, $mic.Muted)
         if ($mic.Muted -or $mic.Volume -lt 10) {
             Add-FixItUndoStep ([ordered]@{ Kind = 'audio'; Device = 'Microphone'; Volume = [int]$mic.Volume; Muted = [bool]$mic.Muted })
-            if (Invoke-FixItStep 'Unmute the microphone and set a normal volume' { Set-FixItAudioDevice -Kind Microphone -Volume 70 }) { $lines += ('Your microphone ({0}) was muted or almost silent. It is now on.' -f $mic.Name) }
+            if (Invoke-FixItStep ('Unmute the microphone and set the volume to {0}%' -f $script:MicRestoreVolume) { Set-FixItAudioDevice -Kind Microphone -Volume $script:MicRestoreVolume }) { $lines += ('Your microphone ({0}) was muted or almost silent. It is now on.' -f $mic.Name) }
         } else { $lines += ('Microphone: {0}, volume {1}%.' -f $mic.Name, $mic.Volume) }
     }
 
@@ -2065,12 +2313,74 @@ function Invoke-OutlookAdmin {
     return New-FixItResult $ok 'Search index' $(if ($ok) { 'Done' } else { 'The search index could not be rebuilt.' })
 }
 
+# Closes every Outlook process (also the ones with no window). Returns 'closed', 'declined' (they said no to ending it by force) or 'stuck'.
+function Close-FixItOutlookFully {
+    $names = $script:OutlookProcessNames
+    if ($script:DryRun) { Write-FixItLog 'Would do: close every Outlook program completely (and ask first before ending one by force)' 'DRYRUN'; return 'closed' }
+    if (@(Get-RunningApp -ProcessNames $names).Count -eq 0) { return 'closed' }
+    Write-FixItLog 'Doing: close Outlook completely'
+    Request-AppClose -ProcessNames $names
+    if (@(Get-RunningApp -ProcessNames $names).Count -gt 0) {
+        $force = Confirm-FixIt "Outlook is not closing on its own. It may be stuck, or waiting for you (for example, to save a message).`r`n`r`nClose it by force? Anything you have not saved in Outlook will be lost."
+        Write-FixItLog ('Asked: end Outlook by force -> {0}' -f $(if ($force) { 'yes' } else { 'no' }))
+        if (-not $force) { return 'declined' }
+        [void](Invoke-FixItStep 'End the Outlook programs that are still running' { Stop-FixItAppsByName -ProcessNames $names })
+        Start-Sleep -Seconds 2
+        if (@(Get-RunningApp -ProcessNames $names).Count -gt 0) { Write-FixItLog 'Outlook is still running after ending it' 'ERROR'; return 'stuck' }
+    }
+    Start-Sleep -Seconds 3
+    return 'closed'
+}
+# Asks first (only when Outlook is open), then closes it completely. Same return values as Close-FixItOutlookFully.
+function Close-FixItOutlookForFix {
+    param([string]$Question)
+    $running = (@(Get-RunningApp -ProcessNames $script:OutlookProcessNames).Count -gt 0)
+    if ($running) { if (-not (Confirm-FixItStep $Question)) { return 'declined' } }
+    return (Close-FixItOutlookFully)
+}
+function Open-FixItOutlookForFix {
+    return (Invoke-FixItStep 'Open Outlook again' { Start-Sleep -Seconds 2; Start-FixItOutlook })
+}
+$script:OutlookKeepText = 'Your email accounts, passwords, sign-ins and Outlook profiles were not touched.'
+function New-FixItOutlookCloseResult {
+    param([string]$State)
+    if ($State -eq 'declined') {
+        return New-FixItResult $true 'Nothing changed' 'OK, Outlook was left alone and nothing was changed.' @($script:OutlookKeepText) @{ SkipFollowUp = $true }
+    }
+    return New-FixItResult $false 'Outlook would not close' "Outlook is stuck and would not close, even when I asked firmly.`r`n`r`nPlease restart your computer, then click the button again. If it still does not work, please call Trey." @($script:OutlookKeepText)
+}
+function New-FixItOutlookOpenFailResult {
+    return New-FixItResult $false 'Outlook did not open' "I closed Outlook, but it did not open again by itself.`r`n`r`nPlease open Outlook from the Start menu. If it will not open, please call Trey." @($script:OutlookKeepText)
+}
+
 function Invoke-OutlookFix {
     Write-FixItLog 'Started: Fix Outlook'
     $lines = @()
-    $running = (@(Get-RunningApp -ProcessNames @('OUTLOOK')).Count -gt 0)
-    $needClosed = $false
+    $closeQ = "Outlook is open. To fix it, I need to close it completely - including the parts running in the background - and then open it again.`r`n`r`nPlease save or send anything you are writing first.`r`n`r`nClose Outlook now?"
 
+    # Step 1: the gentle fix. Close every Outlook program, open it again, and ask.
+    $c = Close-FixItOutlookForFix -Question $closeQ
+    if ($c -ne 'closed') { return (New-FixItOutlookCloseResult -State $c) }
+    if (-not (Open-FixItOutlookForFix)) { return (New-FixItOutlookOpenFailResult) }
+    $lines += 'Closed Outlook completely and opened it again.'
+    if ($script:DryRun) {
+        Write-FixItLog 'Would ask: Is Outlook working properly now? (If yes, I stop here. If not, the next steps below happen.)' 'DRYRUN'
+    } else {
+        $works = Confirm-FixIt "Outlook is opening again - give it a moment.`r`n`r`nIs Outlook working properly now?"
+        Write-FixItLog ('Asked: Is Outlook working properly now? -> {0}' -f $(if ($works) { 'yes' } else { 'no' })) $(if ($works) { 'INFO' } else { 'WARN' })
+        if ($works) {
+            Write-FixItLog 'Finished: Fix Outlook - fixed by closing and opening it again'
+            return New-FixItResult $true 'Outlook fixed' ("Great - Outlook is working again.`r`n`r`nI only closed it completely and opened it again. " + $script:OutlookKeepText) $lines @{ SkipFollowUp = $true }
+        }
+        if (-not (Confirm-FixIt "Sorry about that. The next steps are gentle too: I will look for Outlook add-ins that cause trouble, you can choose to rebuild Outlook search, and I can open Outlook in safe mode to test it.`r`n`r`nOutlook will close once more for this. Your email accounts and sign-ins will not be touched.`r`n`r`nContinue?")) {
+            Write-FixItLog 'The person did not want the next Outlook steps' 'WARN'
+            return New-FixItResult $false 'Outlook still needs help' "OK, I stopped here. Outlook is still open.`r`n`r`nIf it still does not work, please call Trey." @($script:OutlookKeepText) @{ SkipFollowUp = $true }
+        }
+    }
+
+    # Step 2: only because it is still not working.
+    $c2 = Close-FixItOutlookFully
+    if ($c2 -ne 'closed') { return (New-FixItOutlookCloseResult -State $c2) }
     $bad = @(Find-FixItBadAddins)
     $disableUser = @($bad | Where-Object { -not $_.Add.IsMachineWide })
     foreach ($b in @($bad | Where-Object { $_.Add.IsMachineWide })) { $lines += ('The add-in "{0}" {1}, but it is installed for everyone, so Trey needs to turn it off.' -f $b.Add.ProgId, $b.Reason) }
@@ -2085,47 +2395,21 @@ function Invoke-OutlookFix {
         }
     } elseif ($bad.Count -eq 0) { $lines += 'No troublesome add-ins were found.' }
 
-    $doCreds = Confirm-FixItStep "Clear the saved Microsoft 365 sign-in information on this computer? Outlook will ask you to sign in again. Your email and files are not deleted."
-    $doIndex = Confirm-FixItStep "Rebuild the Outlook search index? Search may be incomplete for an hour or so. Windows will ask for permission."
-    if (($doCreds -or $doIndex) -and $running) {
-        if (Confirm-FixItStep 'Outlook is open. It needs to close for this. Close it now?') {
-            if (Invoke-FixItStep 'Close Outlook' { Request-AppClose -ProcessNames @('OUTLOOK') }) { $running = (@(Get-RunningApp -ProcessNames @('OUTLOOK')).Count -gt 0) }
-        }
-        if ($running -and -not $script:DryRun) {
-            $lines += 'Outlook is still open, so the sign-in and search steps were skipped. Close Outlook and try again.'
-            $doCreds = $false; $doIndex = $false
-        }
-    }
-    if ($doCreds) {
-        Add-FixItCannotUndo 'The cleared Microsoft 365 sign-in information cannot be restored (you just sign in again).'
-        $removed = 0
-        foreach ($t in @(Get-FixItOfficeCredentialTargets)) {
-            $tt = $t
-            if (Invoke-FixItStep ('Remove saved Office sign-in entry {0}' -f $tt) { Remove-FixItCredential -Target $tt }) { $removed++ }
-        }
-        foreach ($k in @(Get-FixItOfficeIdentityKeys)) {
-            $kk = $k
-            if (Invoke-FixItStep ('Remove Office sign-in cache {0}' -f $kk) { Remove-RegKeyTree -Path $kk }) { $removed++ }
-        }
-        foreach ($f in @(Get-FixItOfficeCacheFolders)) {
-            $ff = $f
-            if (Invoke-FixItStep ('Empty the sign-in cache folder {0}' -f $ff) { [void](Clear-FixItFolder -Path $ff) }) { $removed++ }
-        }
-        $lines += ('Cleared saved sign-in information ({0} item(s)). Outlook will ask you to sign in.' -f $removed)
-    }
-    if ($doIndex) {
+    if (Confirm-FixItStep "Rebuild the Outlook search index? Search may be incomplete for an hour or so. Windows will ask for permission.") {
         $admin = Invoke-AdminPart -Part 'OutlookAdmin' -InProcess { Invoke-OutlookAdmin }
         if ($admin.Ok) { $lines += 'Windows is rebuilding the search index in the background.' }
         elseif (Test-FixItDeclined $admin) { $lines += 'The search index was not rebuilt because permission was not given.' }
         else { $lines += 'The search index could not be rebuilt.' }
     }
-    if (Confirm-FixItStep 'Open Outlook in safe mode now to test? (Safe mode starts Outlook without any add-ins.)') {
-        if (Invoke-FixItStep 'Start Outlook in safe mode' { Start-FixItOutlookSafe }) { $lines += 'Outlook was started in safe mode. If it works there, an add-in was the problem.' }
+    $opened = $false
+    if (Confirm-FixItStep "Open Outlook in safe mode to test it? (Safe mode starts Outlook without any add-ins. Choose No to open Outlook normally.)") {
+        if (Invoke-FixItStep 'Start Outlook in safe mode' { Start-FixItOutlookSafe }) { $lines += 'Outlook was started in safe mode. If it works there, an add-in was the problem.'; $opened = $true }
     }
-    $lines += 'Your mail files and Outlook profiles were not touched.'
+    if (-not $opened) { if (Open-FixItOutlookForFix) { $lines += 'Outlook was opened again.' } }
+    $lines += $script:OutlookKeepText
     if ($script:DryRun) { return New-FixItResult $true 'Practice run' 'Practice run only - nothing was changed. Details are in the log file.' $lines }
-    Write-FixItLog 'Finished: Fix Outlook'
-    return New-FixItResult $true 'Outlook check done' 'I went through the Outlook steps. Please try Outlook now.' $lines
+    Write-FixItLog 'Finished: Fix Outlook (further steps)'
+    return New-FixItResult $true 'Outlook check done' 'I went through the extra Outlook steps. Please try Outlook now.' $lines
 }
 
 # ---------------------------------------------------------------------------
@@ -2519,6 +2803,10 @@ function Invoke-FixItUndoSteps {
                 $kd = [string]$st.Device; $vol = [int]$st.Volume; $mu = [bool]$st.Muted
                 if (-not (Invoke-FixItStep ('Put the {0} volume back to {1}' -f $kd, $vol) { Set-FixItAudioDevice -Kind $kd -Volume $vol -Muted $mu })) { $ok = $false }
             }
+            'defaultprinter' {
+                $pn = [string]$st.Name
+                if (-not (Invoke-FixItStep ('Make {0} the default printer again' -f $pn) { Set-FixItDefaultPrinter -Name $pn })) { $ok = $false }
+            }
             default { Write-FixItLog ('Unknown undo step "{0}" skipped' -f $kind) 'WARN'; $ok = $false }
         }
     }
@@ -2593,21 +2881,155 @@ function Mark-FixItUndone {
 # ---------------------------------------------------------------------------
 # Running a fix: undo record + "Did that fix it?"
 # ---------------------------------------------------------------------------
+# Every action in one place. The main buttons also carry a Plan: the text of the "Here is what I will do" window.
+# Plan.Does = what happens, in order. Plan.Heads = other things worth knowing. Plan.Restart / Plan.SignIn stay empty when
+# nothing is needed, otherwise they say when a restart or signing in again may be needed. The window and the tests both read this.
 function Get-FixItActionTable {
     return @{
-        Printer = @{ Fn = 'Invoke-PrinterFix'; Title = 'Fix my printer'; Fix = $true }
-        Acrobat = @{ Fn = 'Invoke-AcrobatFix'; Title = 'Fix Acrobat in Outlook'; Fix = $true }
-        AcrobatRepair = @{ Fn = 'Invoke-AcrobatRepair'; Title = 'Repair Acrobat'; Fix = $true }
-        Outlook = @{ Fn = 'Invoke-OutlookFix'; Title = 'Fix Outlook'; Fix = $true }
-        Network = @{ Fn = 'Invoke-NetworkFix'; Title = 'Fix my internet'; Fix = $true }
-        Slow = @{ Fn = 'Invoke-SlowFix'; Title = 'My computer is slow'; Fix = $true }
-        Sound = @{ Fn = 'Invoke-SoundFix'; Title = 'Fix sound, mic and camera'; Fix = $true }
-        Browser = @{ Fn = 'Invoke-BrowserFix'; Title = 'Clean up my browser'; Fix = $true }
-        WinUpdate = @{ Fn = 'Invoke-WinUpdateFix'; Title = 'Fix Windows Update'; Fix = $true }
-        OneDrive = @{ Fn = 'Invoke-OneDriveFix'; Title = 'Fix OneDrive'; Fix = $true }
-        Scam = @{ Fn = 'Invoke-ScamAlert'; Title = 'Scary pop-up'; Fix = $false }
-        Screen = @{ Fn = 'Invoke-ScreenShare'; Title = 'Let Trey see my screen'; Fix = $false }
-        Report = @{ Fn = 'Invoke-FixItReport'; Title = 'Send Trey a report'; Fix = $false }
+        Printer = @{ Fn = 'Invoke-PrinterFix'; Title = 'Fix my printer'; Fix = $true; Plan = @{
+            Time = 'About 1 minute'
+            Does = @(
+                "I will ask you: Do you know which printer you're trying to use?",
+                'If you do, you pick it from a list and I make it your main (default) printer, so Windows uses it first.',
+                'If you are not sure, I test every printer on this computer, pick one that is available, make it your main printer, and tell you which one I picked.',
+                'I restart the part of Windows that handles printing and clear out any print jobs that are stuck in the line.',
+                'I reconnect any shared printers that have lost their connection.')
+            Heads = @(
+                'Anything waiting in the print line is cancelled, so you will need to print it again.',
+                'Windows may ask for permission (a box with a shield). Please click Yes.')
+            Restart = ''; SignIn = '' } }
+        Acrobat = @{ Fn = 'Invoke-AcrobatFix'; Title = 'Fix Acrobat in Outlook'; Fix = $true; Plan = @{
+            Time = 'About 2 minutes'
+            Does = @(
+                'I close Outlook completely, including the parts that run in the background, and open it again. Often that is all it takes.',
+                'I ask you whether Acrobat is showing up in Outlook. If it is, I stop there.',
+                "If it is not, I switch the Acrobat add-in back on in Outlook's settings, then close and open Outlook once more and ask you again.",
+                'Only if Acrobat is still missing, I offer to repair Acrobat. I ask you first.')
+            Heads = @(
+                'Outlook closes for a moment. Please save or send anything you are writing first.',
+                'Your email accounts, passwords and sign-ins are not touched.')
+            Restart = 'Only if Acrobat has to be repaired: Windows may say it needs a restart to finish. I will tell you if so.'; SignIn = '' } }
+        AcrobatRepair = @{ Fn = 'Invoke-AcrobatRepair'; Title = 'Repair Acrobat'; Fix = $true; Plan = @{
+            Time = 'A few minutes'
+            Does = @(
+                'I check that the full Adobe Acrobat is installed on this computer.',
+                'I close Acrobat and Outlook completely (I ask you first).',
+                "I run Windows' own repair for Adobe Acrobat. This takes a few minutes.",
+                'I open Outlook again afterwards.')
+            Heads = @(
+                'Please save your work first. Anything unsaved in Acrobat or Outlook could be lost when they close.',
+                'Windows will ask for permission (a box with a shield). Please click Yes.',
+                'Your email accounts, passwords and sign-ins are not touched.')
+            Restart = 'Windows may say it needs a restart to finish the repair. I will tell you if so.'; SignIn = '' } }
+        Outlook = @{ Fn = 'Invoke-OutlookFix'; Title = 'Fix Outlook'; Fix = $true; Plan = @{
+            Time = 'About 2 minutes'
+            Does = @(
+                'I close Outlook completely, including the parts that run in the background, and open it again. Most of the time that is all it needs.',
+                'I ask you whether Outlook is working properly now. If it is, I stop there.',
+                'If it is not, I ask before going on. Then I look for add-ins (small extras plugged into Outlook) that cause trouble and offer to turn them off (this can be undone), offer to rebuild the Outlook search, and offer to open Outlook in safe mode to test it.')
+            Heads = @(
+                'Outlook closes for a moment. Please save or send anything you are writing first.',
+                'Your email accounts, passwords, sign-ins and Outlook profiles are never cleared or changed.',
+                'If you choose to rebuild the search, searching may be incomplete for about an hour.')
+            Restart = ''; SignIn = '' } }
+        Network = @{ Fn = 'Invoke-NetworkFix'; Title = 'Fix my internet'; Fix = $true; Plan = @{
+            Time = 'About 1 to 5 minutes'
+            Does = @(
+                'I test your router, the internet and opening a website.',
+                'If something is wrong, I refresh your internet address, clear the saved website addresses, switch off a setting that can block websites if it is on, and reset the network settings. Windows may ask for permission.',
+                "If the internet is still not working, I will ask you to do this: Unplug the router, wait 30 seconds, then plug it back in. Then I ask 'Is that done?'",
+                'When you say Yes, I wait about 2 minutes (with a countdown) while the router starts up, then I test again and tell you clearly if it works.',
+                'If it still does not work, I tell you to call Trey and send him a report automatically.')
+            Heads = @(
+                'Your internet disconnects for a few seconds while it is reset. Downloads and video calls will be interrupted.',
+                'If you restart the router, everyone in your home loses the internet for a few minutes.')
+            Restart = 'Sometimes one of the repairs only finishes after a restart. I will tell you if that happens.'; SignIn = '' } }
+        Slow = @{ Fn = 'Invoke-SlowFix'; Title = 'My computer is slow'; Fix = $true; Plan = @{
+            Time = 'A few minutes'
+            Does = @(
+                'If a program has frozen, I offer to close it. I ask first.',
+                'I empty your temporary files, empty the Recycle Bin, and empty the temporary files Windows keeps (Windows will ask for permission).',
+                "I ask you before clearing your web browser's saved temporary website files (called the cache). If you say No, only that step is skipped.",
+                'I show you how much space was freed and which programs use the most memory.')
+            Heads = @(
+                'The Recycle Bin is emptied for good. Please look inside it first if you might need something.',
+                'Deleted temporary files cannot be brought back. Your Documents, Desktop, Pictures and Downloads are never touched.',
+                'Anything you have not saved in a frozen program is lost if you let me close it.')
+            Restart = 'Not required, but I will suggest a restart if your computer has not been restarted in over a week, or Windows is waiting for one.'
+            SignIn = 'Only if you say Yes to clearing the browser cache: you may need to sign back in to websites you visit, so have your passwords handy. I ask you first.' } }
+        Sound = @{ Fn = 'Invoke-SoundFix'; Title = 'Fix sound, mic and camera'; Fix = $true; Plan = @{
+            Time = 'About 1 minute'
+            Does = @(
+                'I check your speakers and microphone. If the speakers are muted or almost silent, I turn them on at 25% (quiet, so nothing blasts out) and you can turn them up. If the microphone is muted or almost silent, I turn it on at 70%.',
+                'If Windows is blocking programs from using your microphone or camera, I offer to allow it. I ask first.',
+                'If needed, I restart the part of Windows that handles sound (Windows will ask for permission).',
+                'I open the Windows page where you can pick the right speakers, microphone and camera.')
+            Heads = @(
+                'Sound cuts out for a second or two while that part of Windows restarts.',
+                'A volume that is not muted and not almost silent is left exactly as it is.')
+            Restart = ''; SignIn = '' } }
+        Browser = @{ Fn = 'Invoke-BrowserFix'; Title = 'Clean up my browser'; Fix = $true; Plan = @{
+            Time = 'A few minutes'
+            Does = @(
+                'I make a safe copy of your browser settings and bookmarks first.',
+                'I look for a changed home page or search engine, extensions you do not know, and websites allowed to send you pop-up notices.',
+                'For each thing I find, I ask before I open the browser page where you can fix it. You choose what to turn off.',
+                'I offer a quick virus scan with Microsoft Defender (5 to 10 minutes). I ask first.')
+            Heads = @(
+                'I do not change your browser myself. I only open the pages where you can.',
+                'Your passwords, bookmarks and history are not touched.')
+            Restart = ''
+            SignIn = "Only if you choose to reset your browser's settings on a page I open: the browser may sign you out of some websites." } }
+        WinUpdate = @{ Fn = 'Invoke-WinUpdateFix'; Title = 'Fix Windows Update'; Fix = $true; Plan = @{
+            Time = 'A few minutes (20 to 40 minutes for the deeper repair)'
+            Does = @(
+                'I pause Windows Update, set aside the folders where it keeps its update files (nothing is deleted), and start it again.',
+                'I open the Windows Update page so you can click Check for updates.',
+                'If updates are still stuck, I offer a deeper repair of Windows itself. It can take 20 to 40 minutes, and I ask you first.')
+            Heads = @(
+                'Windows will ask for permission (a box with a shield). Please click Yes.',
+                'For the deeper repair, a black window shows the progress. Please leave it open.',
+                'Updates cannot be installed for a minute or so while this runs.')
+            Restart = 'After the deeper repair, your computer should be restarted. I ask you before I do it. Please save your work first.'; SignIn = '' } }
+        OneDrive = @{ Fn = 'Invoke-OneDriveFix'; Title = 'Fix OneDrive'; Fix = $true; Plan = @{
+            Time = 'A few minutes'
+            Does = @(
+                'I check whether OneDrive is installed, signed in and running, and whether your folders are backed up to it.',
+                'I tell you what I find. If a reset would help, I ask before I do it.',
+                'A reset makes OneDrive restart and check all of your files again. Your files are not deleted.')
+            Heads = @(
+                'After a reset OneDrive can take a few minutes (longer if you have many files) to catch up.')
+            Restart = ''
+            SignIn = 'OneDrive normally stays signed in. If it asks you to sign in again, use your usual Microsoft email and password.' } }
+        Scam = @{ Fn = 'Invoke-ScamAlert'; Title = 'Scary pop-up'; Fix = $false; Plan = @{
+            Time = 'A few seconds'
+            Does = @(
+                'I gather basic facts about this computer, such as what is running and what was installed or downloaded lately.',
+                'I send Trey a report right away and save a copy on your Desktop.',
+                'I tell you what to do next.')
+            Heads = @(
+                'I do not change anything on your computer.',
+                'Do NOT call any phone number shown on the screen.')
+            Restart = ''; SignIn = '' } }
+        Screen = @{ Fn = 'Invoke-ScreenShare'; Title = 'Let Trey see my screen'; Fix = $false; Plan = @{
+            Time = 'About 1 minute'
+            Does = @(
+                'I open the Zoho Assist web page where you type in a code.',
+                'Trey gives you the code on the phone. You type it in and click Join. Only then can Trey see your screen.')
+            Heads = @(
+                'Nothing is installed ahead of time, and Trey cannot see your screen until you do this.',
+                'Only do this if YOU called Trey. If someone else asked you to, say no.')
+            Restart = ''; SignIn = '' } }
+        Report = @{ Fn = 'Invoke-FixItReport'; Title = 'Send Trey a report'; Fix = $false; Plan = @{
+            Time = 'A few seconds'
+            Does = @(
+                'I collect information about this computer that helps Trey: your Windows version, printers, Outlook and Acrobat, a health check and recent problems.',
+                'I save a copy on your Desktop and send it to Trey.')
+            Heads = @(
+                'The report does not include your files or your passwords.',
+                'I do not change anything on your computer.')
+            Restart = ''; SignIn = '' } }
+        Pin = @{ Fn = 'Invoke-PinGuide'; Title = 'Pin me to the taskbar'; Fix = $false }
         Update = @{ Fn = 'Invoke-FixItUpdate'; Title = 'Update'; Fix = $false }
         Restart = @{ Fn = 'Invoke-RestartRight'; Title = 'Restart the right way'; Fix = $false }
         Status = @{ Fn = 'Invoke-StatusCheck'; Title = 'Is it just me?'; Fix = $false }
@@ -2624,11 +3046,80 @@ function Get-FixItActionTable {
     }
 }
 
-# Runs one action by name, keeping an undo record for the fixes. Returns the result.
-function Invoke-FixItAction {
+# ---------------------------------------------------------------------------
+# The "Here is what I will do" window. Every main button shows it first; Go Back does nothing.
+# ---------------------------------------------------------------------------
+function Get-FixItPlan {
     param([string]$Which)
     $t = (Get-FixItActionTable)[$Which]
+    if (-not $t -or -not $t.ContainsKey('Plan')) { return $null }
+    $pl = $t.Plan
+    $restart = [string]$pl.Restart
+    $signIn = [string]$pl.SignIn
+    $restartLine = 'You will not need to restart your computer.'
+    if ($restart) { $restartLine = 'You may need to restart your computer. ' + $restart }
+    $signInLine = 'You will not need to sign in again anywhere.'
+    if ($signIn) { $signInLine = 'You may need to sign in again. ' + $signIn }
+    return [pscustomobject]@{
+        Which = $Which; Title = [string]$t.Title; Time = [string]$pl.Time
+        Does = @($pl.Does); Heads = @($pl.Heads)
+        NeedsRestart = [bool]$restart; NeedsSignIn = [bool]$signIn
+        RestartLine = $restartLine; SignInLine = $signInLine
+    }
+}
+
+function Format-FixItPlanText {
+    param($Plan)
+    $o = New-Object System.Collections.Generic.List[string]
+    $o.Add($Plan.Title)
+    $o.Add(('How long it takes: {0}' -f $Plan.Time))
+    $o.Add('')
+    $o.Add('Here is what I will do:')
+    $n = 1
+    foreach ($d in @($Plan.Does)) { $o.Add(('  {0}. {1}' -f $n, $d)); $n++ }
+    if (@($Plan.Heads).Count -gt 0) {
+        $o.Add('')
+        $o.Add('Please know:')
+        foreach ($h in @($Plan.Heads)) { $o.Add(('  - {0}' -f $h)) }
+    }
+    $o.Add('')
+    $o.Add($Plan.RestartLine)
+    $o.Add($Plan.SignInLine)
+    return @($o)
+}
+
+# The window shows the plan with Proceed and Go Back. The command line prints it and asks. Returns $true for Proceed.
+function Read-FixItPlanChoice {
+    param($Plan)
+    if ($script:GuiActive) { return [bool](Show-FixItPlanDialog -Plan $Plan) }
+    Write-Host ''
+    foreach ($l in (Format-FixItPlanText -Plan $Plan)) { Write-Host $l }
+    Write-Host ''
+    $a = Read-Host 'Type P to Proceed, or G to Go Back'
+    return ($a -match '^(p|proceed)$')
+}
+
+function Confirm-FixItPlan {
+    param([string]$Which)
+    $plan = Get-FixItPlan -Which $Which
+    if ($null -eq $plan) { return $true }
+    if ($script:DryRun) {
+        Write-FixItLog ('Would show the "what I will do" window for: {0}' -f $plan.Title) 'DRYRUN'
+        foreach ($l in (Format-FixItPlanText -Plan $plan)) { if ($l) { Write-FixItLog ('  {0}' -f $l) 'DRYRUN' } }
+        return $true
+    }
+    $go = [bool](Read-FixItPlanChoice -Plan $plan)
+    Write-FixItLog ('Plan window "{0}" -> {1}' -f $plan.Title, $(if ($go) { 'Proceed' } else { 'Go Back (nothing was done)' }))
+    return $go
+}
+
+# Runs one action by name, keeping an undo record for the fixes. Returns the result.
+# Main buttons show the "what I will do" window first; Go Back returns nothing and changes nothing.
+function Invoke-FixItAction {
+    param([string]$Which, [switch]$SkipPlan)
+    $t = (Get-FixItActionTable)[$Which]
     if (-not $t) { throw ('Unknown action {0}' -f $Which) }
+    if (-not $SkipPlan) { if (-not (Confirm-FixItPlan -Which $Which)) { return $null } }
     if ($t.Fix) { Start-FixItUndoRecord -Fix $Which -Title $t.Title }
     try {
         $r = & $t.Fn
@@ -2643,6 +3134,7 @@ function Invoke-FixItFollowUp {
     $t = (Get-FixItActionTable)[$Which]
     if (-not $t -or -not $t.Fix -or $null -eq $Result) { return $null }
     if (Test-FixItDeclined $Result) { return $null }
+    if (Test-FixItSkipFollowUp $Result) { return $null }
     if ($script:DryRun) { Write-FixItLog 'Would ask: Did that fix it?' 'DRYRUN'; return $null }
     $yes = Confirm-FixIt -Question 'Did that fix it?' -Title $t.Title -Kind 'Fixed' -Detail ("I just ran {0}. Try it now, then let me know." -f $t.Title)
     Write-FixItLog ('Did that fix it? ({0}) -> {1}' -f $t.Title, $(if ($yes) { 'yes' } else { 'NO' })) $(if ($yes) { 'INFO' } else { 'WARN' })
@@ -4121,6 +4613,24 @@ function Get-FixItNoGuideNote {
     $q = Clear-FixItGuideText $Query 80
     return ('The person looked in "Help me with..." for "{0}" and there was no guide for it yet.' -f $q)
 }
+# Windows does not let a program pin itself to the taskbar, so this shows the few clicks. One guide, kept here so it is always right.
+function Get-FixItPinGuide {
+    return [pscustomobject]@{ Id = 'pin-taskbar'; Title = 'Pin Family Fix-It to the taskbar'; Keywords = @('pin', 'taskbar', 'shortcut', 'icon', 'find'); Steps = @(
+        'Click the Start button (the Windows logo at the bottom of the screen).',
+        'Type Family Fix-It. It shows up at the top of the list.',
+        'Right-click it (press the right mouse button). If you only see a short list, click Show more options or More.',
+        'Click Pin to taskbar.',
+        'Family Fix-It now stays at the bottom of your screen. Click it any time you need help.') }
+}
+function Invoke-PinGuide {
+    Write-FixItLog 'Started: pin me to the taskbar (guide)'
+    $g = Get-FixItPinGuide
+    $n = 1
+    $lines = @()
+    foreach ($st in @($g.Steps)) { $lines += ('{0}. {1}' -f $n, $st); $n++ }
+    return New-FixItResult $true $g.Title 'Windows does not allow a program to pin itself, so here is how to do it:' $lines @{ GuideId = $g.Id }
+}
+
 function Invoke-GuidesHelper {
     param([string]$Search = '')
     $q = $Search; if (-not $q -and $script:Query) { $q = $script:Query }
@@ -4162,7 +4672,8 @@ function Get-FixItLayout {
             @('Simple', 'Simple mode', 'simple', $true, 44, 40),
             @('BigText', 'Big text', 'text', $BigText, 88, 40),
             @('Contrast', 'High contrast', 'contrast', $HighContrast, 132, 40))
-        $lay = @{ Simple = $true; SideTitle = 'SETTINGS'; Nav = @(); SepY = 0; Toggles = $toggles; Groups = $groups; ScamY = 236; PrimaryY = 324; StatusY = 412; LinksY = 446; FullH = 480 }
+        $pin = @('Pin', 'Pin me to the taskbar', '', 'pin', 428, 40)
+        $lay = @{ Simple = $true; SideTitle = 'SETTINGS'; Nav = @(); SepY = 0; Pin = $pin; Toggles = $toggles; Groups = $groups; ScamY = 236; PrimaryY = 324; StatusY = 412; LinksY = 446; FullH = 480 }
     } else {
         $groups = @(
             @{ Name = 'PRINTING AND EMAIL'; Y = 84; Bg = '#E6F0FA'; Tiles = $tiles1 },
@@ -4183,7 +4694,8 @@ function Get-FixItLayout {
             @('BigText', 'Big text', 'text', $BigText, 584, 40),
             @('Contrast', 'High contrast', 'contrast', $HighContrast, 628, 40),
             @('CheckIn', 'Weekly check-in', 'check', $CheckInOn, 672, 40))
-        $lay = @{ Simple = $false; SideTitle = 'TOOLS'; Nav = $nav; SepY = 470; Toggles = $toggles; Groups = $groups; ScamY = 538; PrimaryY = 626; StatusY = 712; LinksY = 746; FullH = 780 }
+        $pin = @('Pin', 'Pin me to the taskbar', '', 'pin', 728, 40)
+        $lay = @{ Simple = $false; SideTitle = 'TOOLS'; Nav = $nav; SepY = 470; Pin = $pin; Toggles = $toggles; Groups = $groups; ScamY = 538; PrimaryY = 626; StatusY = 712; LinksY = 746; FullH = 780 }
     }
     $ids = @()
     foreach ($g in $lay.Groups) { foreach ($t in $g.Tiles) { $ids += [string]$t[0] } }
@@ -4291,6 +4803,8 @@ function Get-FixItIconMap {
         'historyW' = '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'
         'contrast' = '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'
         'contrastW' = 'iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAFR0lEQVR4nOSbeYhVVRzHf89Ki2wbwxZaqYgisgXCQktJsRJriqbQdohMMimCMgyMlCyTKEiijKDF8o8siYZIYSrSMgvBCBGDCiJpKJss20bt9fl574z3nXfufu/z3TNf+HK4Z7n3/L5nvWcZJkMcw2SIY8gLcKC0APV6fQrOeHgcHO3zTHg4rMHd8F+4E+6AvbC7Vqs9KSWjJiUAg4fjTIbXw2vgUZINdfgNfB0uQZC/pWAUKgCGawnPg7fCw6R4bIIzEGKzFIRCBMDwo3EehrPgIVI+NsDpCPGt5EQuATD8SJy5cI60xnAT6+ENCPGDZERmATB+DM774nVsUdB2+zFcA9fBbfAK+KIUgz3iifC2ZECmUQDjr8RZKdGlvgy+RcZWW9IX2fccoHnhnfP41uOSEqkF4EN34rwg4XOId+BcMrM14jVljD4LydtJfPfuNIlSTYT4wALxStaWbi0cSwauizF+76ukeKioM8ljT5pEiQXgxdNxHrEFwfkYPR5+LslQyvzDx0TyujRp5EQC8MKxOK9YgvphJ4Y/Ju2FWeR5ZpKIsQLwolNxuuFBRtCvcBzGvyvp8Z+UC61hz5P3S+IiRgrAC3Q29wHsMIJ2wakY/4VkQyt+wlSEHmwYLTky8gQ8w+J/G8avl/bHCPEKMBShAqDcyTi2drQY49+U6mAMtowLC4yqAU+JN8kIYjPGPyTVgjaF18ICrQKg2Pk4XZagVJOMNsIp2HStLSCsBjxn8VtF6X8i1cUym2eTACh1Fo45fGivP0eqjVHYNsH0tNWAqyx+z+T55WwjzDY9bD9DUy1+z4obmGB6NNQAqoj+3l5qxNlK6f8obqDDX70ahNkEtPqbQ98acQc6JN4X9DCbwIWWRC4JoGiYFJkCHG9J8JW4hWODD0kEcKH3D6Lhxy5OgJ10gLvFLYwMPsQJ8JO4hxHBh8FRgOFBe39zC6tX3EMNWw8eeAjWANus0MXdYx0KB1ekBg2kret8v8+IfIy4hzq29g88mCVsVvkTxD30Bx9MAcxObzjtZaS4hT+DD3E1QOFaM9gRfIirAYoLxC1sDz6YAmy0JLha3MKnwQdTgFXSvG83jX7AleFQbWs4d9RgGMPD7zjmut8R4h1wcgF92Lgt6GErWdtW1z3iBpp2jm0CrLT4ddEMzpXqY4Hp0SQAVeR7nNWWxIul2ujFtqa1jbDO7QGL3xRqQVX7Au38brEFWAVAqa9xVliCXkaEQ6V6+A6brEt7UcObnvvbY/idDqu0MarQ0u8KCwwVwO8LbEfZdF7woFQHm7BlY1hg3ARHd4JtB54WIcJl0v7QA9iToyJECoByf+DomcDfLOn0bN7Fkg1lH5FRaNWfhA2/REWKneL653F1u2yXETQKfoQIMyQ9yp5aq/F3kfe1cRETZYQX6Q/EHZYgPRa/HBEWFXz6My+WkueXkkRMXBK8cDnO/JBgPTD9ZZJTWT7KOCg5gB7yem/SyKmqon8e8CbxbniY0HWDdYiwwj9fFPkqKR4qqpb85WkSpW6LfOAN8XaQt4dEuRFuQYSFLZw0aad6O3mbnTZhps6ID32Gcx7cEhJF19315kgvInTD++E5Ug7+Ee+M8quSAXkvTKihut2sxiZdPNUhVUusQ/LjPQyfJjlQ1JUZHRIfFe8UWStuoundoU5/tpoLRV+aOg1nCeyUcqCrOTdj+IdSEMq6NneieIupOoGaKF6fkBU/i7eS8zSGb5CCUfrkxT93NAleJN7us+4zaPs/WxovTurdor9k38VJLWU9ndYnJaKdZm/7BS7u/qbCkBfgfwAAAP//6/2pvwAAAAZJREFUAwC18mXrBdzWagAAAABJRU5ErkJggg=='
+        'pin' = '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'
+        'pinW' = 'iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAEJUlEQVR4nOyaS0gVURjH/0ZRlpVFb4ik9wuKwpBqUdAqwwoNicpqURa0M1q5CKJN0KoWkUIGuigSwUerFklUEGlBRS+026KHYmXZkx72/5gbyHiu9zxmusLMD/6c65nj+c755jxmvjMjEHFGIOJE3gEjEQD9/f1jmVRQ+dQyai7CoYN6RN2lTmdlZX2FI1lwhJ1fyaQe4XU6FZ1UMZ1wHw44OYCd38KkCZmlkE64CkusHcDO5zJ5Rk1FZummFtMJH2CByxpQBXXne6jH1B8EiyzYS6gpvvxp1FlqFyywGgG8+9LxbsWlEt6JeoQIbRczuaK4lEvbH2GI7Ta4QJF3IezOC0kbtYpLC2GBrQNUK77TamyIypbVLmS7BrxW5E3G/yNXkdcFC2zXgIlMen3ZsiPIatyPEKFtGbWyyPqHfDZtf4chLttggskcX3Yb1ezLk3JNbNw7mNUvC20hlee7tI1a4cvrYP3zYYGLA44wOaNZXFbnyWyk1taYvMvvqYnQo5x1n4cF1i9DNCh7b4tmcenIeuizAfqdb7DtvOD6Nrgb+o/Ci6DPPM1yjdQ+OODkAHq+lyrizwPUl3TFoU+6dn2mDtL2VuoTHAgkHsBGVFM5/LmaKoN3Z/yY7A6qtULq3CM2aGs8VYUACCQe8A82qp1JezI+UOS/DH1UN6aF9dciYOKQGCJO7ABEnNgBiDixAxBxAn0QGoDqocckSPpbs05nwnJAviLPJGLTo8hbhRAIfArwMbiASbHi0gvok1Dk7WDd+QiYwBzAxuVQJ/jzNga/y7/lc/xDaJI87vKH3SdRd8SG2EJAODuAjRlNHYV31ypTFKuGOTUp8sVGgjYrxDYccT0blDjAcWrWEMUeUOt4V/tgVreMolvU0iGKvaIqWXcNLLGNCksA8iK1Nk3RVqqUDbQKWdPObHinQGvSFL1BldFOAoYYO4CNWg5vng81DyVsfYwNakYA0OZ2JifhnQ2mQsL0BbT5FAYYOYANmcDkObwDSRUJeEOyDiFA+3vhTbm8FEVe0nYeDDBdBOUEVtV5OSk6RC0Iq/MC65ZpJ+eSh6E+nZpDJ+2HAaYj4CYGz3v5OGGna3DSlORWeIna7Lt0nW3ZCE1MHSCnOwPPAH9ROTT4AxmA7RkDLxo9cCR3sT0zdOvQngI0lo3BB6Btmeq8kDwLvOfLng4DTNaAbEWe0d4eEv5DWrlZk6BJ/DoMNzbR26Eeh4dN5EeA6S4gcz6wN7GQ6OPiOEG3sOkIaMTwp8GksOkIGAfvSLyEGgV7ZmLwJy7yic0b2POTukzVcgR80/2nUOJs6aAjy5mc82Vbf+XhQhwWR8SJHYCIEzsAESd2ACJO7ABEnLBOh9PR6vtbYgrXkAEy4gA+8z/h+8Ap/ixNZtUxrxMZICMvQ8OJeBFExPkLAAD//yTi7rUAAAAGSURBVAMAOdETdfaKR2MAAAAASUVORK5CYII='
     }
     $map = @{}
     foreach ($k in $b64.Keys) {
@@ -4569,6 +5083,10 @@ function Show-FixItWindowOnce {
         $tt.AccessibleName = ('{0}: {1}' -f $td[1], $(if ($td[3]) { 'on' } else { 'off' }))
         $side.Controls.Add($tt)
     }
+    # last item on the left bar: how to pin this program to the taskbar (Windows does not let a program pin itself)
+    $pd = $lay.Pin
+    $pt = New-FixItTile -Run $pd[0] -Title $pd[1] -Sub $pd[2] -IconKey $pd[3] -Style 'nav' -IconBg '' -X 12 -Y $pd[4] -W 176 -H $pd[5]
+    $side.Controls.Add($pt); [void]$script:FixButtons.Add($pt)
     $script:CheckInLinkText = $checkIn
 
     # ---- main area
@@ -4739,6 +5257,211 @@ function Show-FixItFixedDialog {
     $r = $f.ShowDialog($script:Form)
     $f.Dispose()
     return ($r -eq 'Yes')
+}
+
+# ---- "Here is what I will do": Proceed or Go Back (shown before every main button)
+function Show-FixItPlanDialog {
+    param($Plan)
+    $S = $script:UiScale
+    $hc = [bool]$script:UiHighContrast
+    $px = [System.Drawing.GraphicsUnit]::Pixel
+    $cText = '#1A1A1A'; $cMuted = '#555555'; $cNum = '#0F6CBD'
+    $warnBg = '#FFF4E0'; $warnLine = '#C77700'; $warnText = '#6B3F00'
+    $okBg = '#E8F5EC'; $okLine = '#107C41'; $okText = '#0B5A2E'
+    if ($hc) { $cText = '#FFFFFF'; $cMuted = '#FFFFFF'; $cNum = '#FFFF00'; $warnBg = '#000000'; $warnLine = '#FFFF00'; $warnText = '#FFFF00'; $okBg = '#000000'; $okLine = '#FFFFFF'; $okText = '#FFFFFF' }
+    $f = New-Object System.Windows.Forms.Form
+    $f.Text = 'Family Fix-It - ' + [string]$Plan.Title
+    $f.StartPosition = 'CenterParent'; $f.FormBorderStyle = 'FixedDialog'; $f.MaximizeBox = $false; $f.MinimizeBox = $false; $f.ShowInTaskbar = $false
+    $f.BackColor = (Get-FixItColor $script:UiBack)
+    $wa = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+    $fontBody = New-Object System.Drawing.Font('Segoe UI', [single](17 * $S), [System.Drawing.FontStyle]::Regular, $px)
+    $fontBold = New-Object System.Drawing.Font('Segoe UI', [single](17 * $S), [System.Drawing.FontStyle]::Bold, $px)
+    $fontNum = New-Object System.Drawing.Font('Segoe UI', [single](19 * $S), [System.Drawing.FontStyle]::Bold, $px)
+    $tflags = [System.Windows.Forms.TextFormatFlags]::WordBreak -bor [System.Windows.Forms.TextFormatFlags]::NoPadding
+    $panelW = [int](612 * $S)
+    $stepW = [int](540 * $S)
+    $h = New-Object System.Windows.Forms.Label
+    $h.Text = [string]$Plan.Title; $h.AutoSize = $false
+    $h.Font = New-Object System.Drawing.Font('Segoe UI', [single](26 * $S), [System.Drawing.FontStyle]::Bold, $px)
+    $h.ForeColor = (Get-FixItColor $cText)
+    $h.Location = New-Object System.Drawing.Point([int](24 * $S), [int](14 * $S)); $h.Size = New-Object System.Drawing.Size($panelW, [int](40 * $S))
+    $f.Controls.Add($h)
+    $sub = New-Object System.Windows.Forms.Label
+    $sub.Text = ('Here is what I will do. How long it takes: {0}.' -f ([string]$Plan.Time).ToLower()); $sub.AutoSize = $false
+    $sub.Font = New-Object System.Drawing.Font('Segoe UI', [single](15 * $S), [System.Drawing.FontStyle]::Regular, $px)
+    $sub.ForeColor = (Get-FixItColor $cMuted)
+    $sub.Location = New-Object System.Drawing.Point([int](24 * $S), [int](56 * $S)); $sub.Size = New-Object System.Drawing.Size($panelW, [int](26 * $S))
+    $f.Controls.Add($sub)
+
+    $pn = New-Object System.Windows.Forms.Panel
+    $pn.AutoScroll = $true; $pn.BackColor = (Get-FixItColor $script:UiBack)
+    $pn.Location = New-Object System.Drawing.Point([int](24 * $S), [int](92 * $S))
+    $y = 0; $n = 1
+    foreach ($d in @($Plan.Does)) {
+        $hh = [System.Windows.Forms.TextRenderer]::MeasureText([string]$d, $fontBody, (New-Object System.Drawing.Size($stepW, 0)), $tflags).Height
+        $hh = [math]::Max($hh + [int](6 * $S), [int](34 * $S))
+        $nl = New-Object System.Windows.Forms.Label
+        $nl.Text = [string]$n; $nl.AutoSize = $false; $nl.Font = $fontNum; $nl.ForeColor = (Get-FixItColor $cNum); $nl.TextAlign = 'TopCenter'
+        $nl.Location = New-Object System.Drawing.Point(0, $y); $nl.Size = New-Object System.Drawing.Size([int](44 * $S), $hh)
+        $pn.Controls.Add($nl)
+        $tl = New-Object System.Windows.Forms.Label
+        $tl.Text = [string]$d; $tl.AutoSize = $false; $tl.Font = $fontBody; $tl.ForeColor = (Get-FixItColor $cText)
+        $tl.Location = New-Object System.Drawing.Point([int](48 * $S), ($y + [int](2 * $S))); $tl.Size = New-Object System.Drawing.Size($stepW, $hh)
+        $pn.Controls.Add($tl)
+        $y += $hh + [int](8 * $S); $n++
+    }
+    $y += [int](6 * $S)
+    # one coloured box: the things worth knowing, and whether a restart or signing in again may be needed
+    $boxes = @()
+    if (@($Plan.Heads).Count -gt 0) { $boxes += , @('Please know', @($Plan.Heads | ForEach-Object { '- ' + [string]$_ }), $warnBg, $warnLine, $warnText) }
+    $rs = @($warnBg, $warnLine, $warnText); if (-not $Plan.NeedsRestart) { $rs = @($okBg, $okLine, $okText) }
+    $sg = @($warnBg, $warnLine, $warnText); if (-not $Plan.NeedsSignIn) { $sg = @($okBg, $okLine, $okText) }
+    $boxes += , @($null, @([string]$Plan.RestartLine), $rs[0], $rs[1], $rs[2])
+    $boxes += , @($null, @([string]$Plan.SignInLine), $sg[0], $sg[1], $sg[2])
+    $innerW = $panelW - [int](36 * $S)
+    foreach ($bx in $boxes) {
+        $bp = New-Object System.Windows.Forms.Panel
+        $bp.BackColor = (Get-FixItColor $bx[2])
+        $by = [int](8 * $S)
+        $labels = @()
+        if ($bx[0]) { $labels += , @([string]$bx[0], $fontBold) }
+        foreach ($tx in @($bx[1])) { $labels += , @([string]$tx, $(if ($bx[0]) { $fontBody } else { $fontBold })) }
+        foreach ($lb in $labels) {
+            $lh = [System.Windows.Forms.TextRenderer]::MeasureText([string]$lb[0], $lb[1], (New-Object System.Drawing.Size($innerW, 0)), $tflags).Height + [int](4 * $S)
+            $ll = New-Object System.Windows.Forms.Label
+            $ll.Text = [string]$lb[0]; $ll.AutoSize = $false; $ll.Font = $lb[1]; $ll.ForeColor = (Get-FixItColor $bx[4]); $ll.BackColor = (Get-FixItColor $bx[2])
+            $ll.Location = New-Object System.Drawing.Point([int](14 * $S), $by); $ll.Size = New-Object System.Drawing.Size($innerW, $lh)
+            $bp.Controls.Add($ll); $by += $lh
+        }
+        $by += [int](6 * $S)
+        $bar = New-Object System.Windows.Forms.Label
+        $bar.BackColor = (Get-FixItColor $bx[3]); $bar.Location = New-Object System.Drawing.Point(0, 0); $bar.Size = New-Object System.Drawing.Size([int](5 * $S), $by)
+        $bp.Controls.Add($bar)
+        $bp.Location = New-Object System.Drawing.Point(0, $y); $bp.Size = New-Object System.Drawing.Size($panelW, $by)
+        $pn.Controls.Add($bp)
+        $y += $by + [int](10 * $S)
+    }
+    $maxPanel = $wa.Height - [int](260 * $S)
+    $panelH = [math]::Min($y, $maxPanel)
+    $extraW = 0; if ($y -gt $maxPanel) { $extraW = [System.Windows.Forms.SystemInformation]::VerticalScrollBarWidth }
+    $pn.Size = New-Object System.Drawing.Size(($panelW + $extraW), $panelH)
+    $f.Controls.Add($pn)
+    $btnY = [int](92 * $S) + $panelH + [int](14 * $S)
+    $go = New-FixItTile -Run '' -Title 'Proceed' -Sub '' -IconKey '' -Style 'yes' -IconBg '' -X 24 -Y ([int]($btnY / $S)) -W 290 -H 60
+    $back = New-FixItTile -Run '' -Title 'Go Back' -Sub '' -IconKey '' -Style 'no' -IconBg '' -X 332 -Y ([int]($btnY / $S)) -W 290 -H 60
+    $go.DialogResult = 'OK'; $back.DialogResult = 'Cancel'
+    $go.AccessibleName = 'Proceed. Do these steps now.'; $back.AccessibleName = 'Go Back. Do nothing.'
+    $f.Controls.Add($go); $f.Controls.Add($back)
+    $f.CancelButton = $back
+    $f.ClientSize = New-Object System.Drawing.Size(([int](24 * $S) * 2 + $panelW + $extraW), ($btnY + [int](60 * $S) + [int](22 * $S)))
+    $r = $f.ShowDialog($script:Form)
+    $f.Dispose()
+    return ($r -eq 'OK')
+}
+
+# ---- Which printer? One big button per printer. Returns the name, or '' when the person goes back.
+function Show-FixItPrinterPickDialog {
+    param([string[]]$Names, [string]$Current = '')
+    $S = $script:UiScale; $hc = [bool]$script:UiHighContrast
+    $px = [System.Drawing.GraphicsUnit]::Pixel
+    $cText = '#1A1A1A'; $cMuted = '#555555'; if ($hc) { $cText = '#FFFFFF'; $cMuted = '#FFFFFF' }
+    $script:PickedPrinter = ''
+    $wa = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+    $f = New-Object System.Windows.Forms.Form
+    $f.Text = 'Family Fix-It - Which printer?'
+    $f.StartPosition = 'CenterParent'; $f.FormBorderStyle = 'FixedDialog'; $f.MaximizeBox = $false; $f.MinimizeBox = $false; $f.ShowInTaskbar = $false
+    $f.BackColor = (Get-FixItColor $script:UiBack)
+    $script:PickDialog = $f
+    $h = New-Object System.Windows.Forms.Label
+    $h.Text = 'Which printer do you want to use?'; $h.AutoSize = $false
+    $h.Font = New-Object System.Drawing.Font('Segoe UI', [single](24 * $S), [System.Drawing.FontStyle]::Bold, $px)
+    $h.ForeColor = (Get-FixItColor $cText)
+    $h.Location = New-Object System.Drawing.Point([int](24 * $S), [int](16 * $S)); $h.Size = New-Object System.Drawing.Size([int](572 * $S), [int](38 * $S))
+    $f.Controls.Add($h)
+    $sub = New-Object System.Windows.Forms.Label
+    $sub.Text = 'Click it. I will make it your main printer, so Windows uses it first.'; $sub.AutoSize = $false
+    $sub.Font = New-Object System.Drawing.Font('Segoe UI', [single](15 * $S), [System.Drawing.FontStyle]::Regular, $px)
+    $sub.ForeColor = (Get-FixItColor $cMuted)
+    $sub.Location = New-Object System.Drawing.Point([int](24 * $S), [int](56 * $S)); $sub.Size = New-Object System.Drawing.Size([int](572 * $S), [int](26 * $S))
+    $f.Controls.Add($sub)
+    $pn = New-Object System.Windows.Forms.Panel
+    $pn.AutoScroll = $true; $pn.BackColor = (Get-FixItColor $script:UiBack)
+    $pn.Location = New-Object System.Drawing.Point([int](24 * $S), [int](94 * $S))
+    $y = 0
+    foreach ($nm in @($Names)) {
+        $title = [string]$nm
+        if ($Current -and $title -eq $Current) { $title = $title + '  (your main printer now)' }
+        $b = New-FixItTile -Run ('PrinterPick:' + [string]$nm) -Title $title -Sub '' -IconKey '' -Style 'btn' -IconBg '' -X 0 -Y $y -W 556 -H 54
+        $b.AccessibleName = ('Printer: ' + [string]$nm)
+        $pn.Controls.Add($b); $y += 62
+    }
+    $maxPanel = $wa.Height - [int](300 * $S)
+    $panelH = [math]::Min([int]($y * $S), $maxPanel)
+    $extraW = 0; if ([int]($y * $S) -gt $maxPanel) { $extraW = [System.Windows.Forms.SystemInformation]::VerticalScrollBarWidth }
+    $pn.Size = New-Object System.Drawing.Size(([int](572 * $S) + $extraW), $panelH)
+    $f.Controls.Add($pn)
+    $btnY = [int](94 * $S) + $panelH + [int](14 * $S)
+    $back = New-FixItTile -Run '' -Title 'Go Back' -Sub '' -IconKey '' -Style 'no' -IconBg '' -X 24 -Y ([int]($btnY / $S)) -W 230 -H 52
+    $back.DialogResult = 'Cancel'
+    $f.Controls.Add($back)
+    $f.CancelButton = $back
+    $f.ClientSize = New-Object System.Drawing.Size(([int](620 * $S) + $extraW), ($btnY + [int](52 * $S) + [int](22 * $S)))
+    [void]$f.ShowDialog($script:Form)
+    $f.Dispose()
+    $script:PickDialog = $null
+    return [string]$script:PickedPrinter
+}
+
+# ---- The waiting window with a friendly countdown (after the router is unplugged and plugged back in)
+function Show-FixItCountdownDialog {
+    param([int]$Seconds, [string]$Title, [string]$Message)
+    $S = $script:UiScale; $hc = [bool]$script:UiHighContrast
+    $px = [System.Drawing.GraphicsUnit]::Pixel
+    $cText = '#1A1A1A'; $cMuted = '#555555'; $cBig = '#0F6CBD'; if ($hc) { $cText = '#FFFFFF'; $cMuted = '#FFFFFF'; $cBig = '#FFFF00' }
+    $f = New-Object System.Windows.Forms.Form
+    $f.Text = 'Family Fix-It'
+    $f.StartPosition = 'CenterParent'; $f.FormBorderStyle = 'FixedDialog'; $f.MaximizeBox = $false; $f.MinimizeBox = $false; $f.ControlBox = $false; $f.ShowInTaskbar = $false
+    $f.BackColor = (Get-FixItColor $script:UiBack)
+    $f.ClientSize = New-Object System.Drawing.Size([int](600 * $S), [int](380 * $S))
+    $mk = {
+        param($text, $size, $bold, $color, $y, $hgt)
+        $l = New-Object System.Windows.Forms.Label
+        $l.Text = $text; $l.AutoSize = $false; $l.TextAlign = 'MiddleCenter'
+        $st = [System.Drawing.FontStyle]::Regular; if ($bold) { $st = [System.Drawing.FontStyle]::Bold }
+        $l.Font = New-Object System.Drawing.Font('Segoe UI', [single]($size * $S), $st, $px)
+        $l.ForeColor = (Get-FixItColor $color)
+        $l.Location = New-Object System.Drawing.Point([int](24 * $S), [int]($y * $S)); $l.Size = New-Object System.Drawing.Size([int](552 * $S), [int]($hgt * $S))
+        return $l
+    }
+    $f.Controls.Add((& $mk $Title 26 $true $cText 20 44))
+    $f.Controls.Add((& $mk $Message 16 $false $cMuted 70 56))
+    $script:CdTime = & $mk '' 64 $true $cBig 134 84
+    $f.Controls.Add($script:CdTime)
+    $script:CdMsg = & $mk '' 16 $false $cText 226 36
+    $f.Controls.Add($script:CdMsg)
+    $bar = New-Object System.Windows.Forms.ProgressBar
+    $bar.Minimum = 0; $bar.Maximum = [math]::Max(1, $Seconds); $bar.Value = 0
+    $bar.Location = New-Object System.Drawing.Point([int](60 * $S), [int](286 * $S)); $bar.Size = New-Object System.Drawing.Size([int](480 * $S), [int](24 * $S))
+    $f.Controls.Add($bar)
+    $f.Controls.Add((& $mk 'Please do not turn off the computer.' 14 $false $cMuted 326 30))
+    $script:CdBar = $bar; $script:CdForm = $f; $script:CdTotal = [math]::Max(1, $Seconds)
+    $script:CdEnd = (Get-Date).AddSeconds($Seconds)
+    $script:CdTime.Text = ('{0}:{1:00}' -f [int][math]::Floor($Seconds / 60), ($Seconds % 60))
+    $script:CdMsg.Text = (Get-FixItCountdownText -Remaining $Seconds -Total $Seconds)
+    $tm = New-Object System.Windows.Forms.Timer
+    $tm.Interval = 250
+    $script:CdTimer = $tm
+    $tm.Add_Tick({
+        $left = [int][math]::Ceiling(($script:CdEnd - (Get-Date)).TotalSeconds)
+        if ($left -le 0) { $script:CdTimer.Stop(); $script:CdForm.Close(); return }
+        $script:CdTime.Text = ('{0}:{1:00}' -f [int][math]::Floor($left / 60), ($left % 60))
+        $script:CdMsg.Text = (Get-FixItCountdownText -Remaining $left -Total $script:CdTotal)
+        $script:CdBar.Value = [int][math]::Min($script:CdBar.Maximum, [math]::Max(0, $script:CdTotal - $left))
+    })
+    $tm.Start()
+    [void]$f.ShowDialog($script:Form)
+    $tm.Stop(); $tm.Dispose()
+    $f.Dispose()
 }
 
 # ---- My files window: search box + a list; every file gets exactly two buttons
@@ -5047,7 +5770,6 @@ function Send-FixItGuideNote {
 function Invoke-GuiButton {
     param([string]$Which)
     if (-not $Which) { return }
-    if (-not $Which) { return }
     if ($Which -like 'OpenFile:*' -or $Which -like 'ShowFile:*') {
         $p = $Which.Substring(9)
         $r = $null
@@ -5059,6 +5781,12 @@ function Invoke-GuiButton {
         $script:Form.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
         try { Show-FixItResult (Invoke-InstallApp -AppName $Which.Substring(11)) } catch { Write-FixItLog ('Install failed: {0}' -f $_.Exception.Message) 'ERROR'; Show-FixItResult (New-FixItResult $false 'Could not install it' 'Something went wrong. Please click "Send Trey a report".') }
         finally { $script:Form.Cursor = [System.Windows.Forms.Cursors]::Default }
+        return
+    }
+    if ($Which -eq 'Pin') { Show-FixItGuideSteps -Guide (Get-FixItPinGuide); return }
+    if ($Which -like 'PrinterPick:*') {
+        $script:PickedPrinter = $Which.Substring(12)
+        if ($script:PickDialog) { $script:PickDialog.Close() }
         return
     }
     if ($Which -eq 'Files') { Show-FixItFilesDialog; return }
@@ -5073,7 +5801,7 @@ function Invoke-GuiButton {
     if ($Which -like 'GuideHelp:*') {
         $gid = $Which.Substring(10)
         $gg = @($script:GuidesAll | Where-Object { $_.Id -eq $gid } | Select-Object -First 1)
-        $gt = $gid; if ($gg.Count -gt 0) { $gt = [string]$gg[0].Title }
+        $gt = $gid; if ($gg.Count -gt 0) { $gt = [string]$gg[0].Title } elseif ($script:GuideShown -and [string]$script:GuideShown.Id -eq $gid) { $gt = [string]$script:GuideShown.Title }
         Send-FixItGuideNote -Note ('The person followed the help guide "{0}" and it did not help.' -f (Clear-FixItGuideText $gt 80))
         return
     }
@@ -5087,12 +5815,14 @@ function Invoke-GuiButton {
         $script:Form.Close()
         return
     }
+    # Every main button first shows what it will do. Go Back does nothing.
+    if (-not (Confirm-FixItPlan -Which $Which)) { return }
     foreach ($x in $script:FixButtons) { $x.Enabled = $false; $x.Invalidate() }
     $script:StatusLabel.Text = 'Working on it... please wait. Do not turn off the computer.'
     $script:Form.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
     $script:Form.Refresh()
     try {
-        $r = Invoke-FixItAction -Which $Which
+        $r = Invoke-FixItAction -Which $Which -SkipPlan
         if ($r) { $script:StatusLabel.Text = $r.Title } else { $script:StatusLabel.Text = (Get-FixItIdleStatus) }
         Show-FixItResult $r
         $script:StatusLabel.Text = (Get-FixItIdleStatus)
@@ -5146,6 +5876,7 @@ function Start-FamilyFixIt {
             'Scam'              { [void](Invoke-FixItAndShow -Which 'Scam') }
             'Screen'            { [void](Invoke-FixItAndShow -Which 'Screen') }
             'Report'            { [void](Invoke-FixItAndShow -Which 'Report') }
+            'Pin'               { [void](Invoke-FixItAndShow -Which 'Pin') }
             'Update'            { [void](Invoke-FixItAndShow -Which 'Update') }
             'Restart'           { [void](Invoke-FixItAndShow -Which 'Restart') }
             'Status'            { [void](Invoke-FixItAndShow -Which 'Status') }
