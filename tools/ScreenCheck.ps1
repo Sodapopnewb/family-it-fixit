@@ -109,6 +109,34 @@ public static class ScNative {
         return bmp;
     }
     public static int[] WindowRect(IntPtr h) { RECT r; if (!GetWindowRect(h, out r)) return new int[] { 0, 0, 0, 0 }; return new int[] { r.Left, r.Top, r.Right, r.Bottom }; }
+    // The left-most / right-most / top-most / bottom-most pixel that differs from the rectangle's top-left pixel (relative to the rectangle), or -1 when nothing is drawn.
+    public static int[] InkExtent(Bitmap bmp, int x, int y, int w, int h, int tol) {
+        int[] none = new int[] { -1, -1, -1, -1 };
+        if (x < 0) { w += x; x = 0; }
+        if (y < 0) { h += y; y = 0; }
+        if (x + w > bmp.Width) w = bmp.Width - x;
+        if (y + h > bmp.Height) h = bmp.Height - y;
+        if (w <= 0 || h <= 0) return none;
+        BitmapData d = bmp.LockBits(new Rectangle(0, 0, bmp.Width, bmp.Height), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+        try {
+            int stride = Math.Abs(d.Stride);
+            byte[] buf = new byte[stride * bmp.Height];
+            Marshal.Copy(d.Scan0, buf, 0, buf.Length);
+            int bi = y * stride + x * 4;
+            int b0 = buf[bi], g0 = buf[bi + 1], r0 = buf[bi + 2], a0 = buf[bi + 3];
+            int minX = int.MaxValue, maxX = -1, minY = int.MaxValue, maxY = -1;
+            for (int yy = 0; yy < h; yy++) {
+                int p = (y + yy) * stride + x * 4;
+                for (int xx = 0; xx < w; xx++, p += 4) {
+                    if (Math.Abs(buf[p] - b0) > tol || Math.Abs(buf[p + 1] - g0) > tol || Math.Abs(buf[p + 2] - r0) > tol || Math.Abs(buf[p + 3] - a0) > tol) {
+                        if (xx < minX) minX = xx; if (xx > maxX) maxX = xx; if (yy < minY) minY = yy; if (yy > maxY) maxY = yy;
+                    }
+                }
+            }
+            if (maxX < 0) return none;
+            return new int[] { minX, maxX, minY, maxY };
+        } finally { bmp.UnlockBits(d); }
+    }
     // How many pixels inside the rectangle differ from the background (the colour of the rectangle's top-left pixel) by more than tol.
     public static int CountInk(Bitmap bmp, int x, int y, int w, int h, int tol) {
         if (x < 0) { w += x; x = 0; }
@@ -264,31 +292,58 @@ function Get-AlignRect {
     return (New-Object System.Drawing.Rectangle($x, $y, $tw, $th))
 }
 
+function New-LabelClone {
+    param($C, [int]$Height)
+    $l = New-Object System.Windows.Forms.Label
+    $l.AutoSize = $false
+    try { $l.UseCompatibleTextRendering = $C.UseCompatibleTextRendering } catch { }
+    try { $l.UseMnemonic = $C.UseMnemonic } catch { }
+    try { $l.FlatStyle = $C.FlatStyle } catch { }
+    $l.Font = $C.Font; $l.Text = [string]$C.Text; $l.Padding = $C.Padding
+    $l.BackColor = [System.Drawing.Color]::White; $l.ForeColor = [System.Drawing.Color]::Black
+    $l.AutoEllipsis = $false
+    $ta = ([string]$C.TextAlign) -replace '^(Middle|Bottom)', 'Top'
+    $l.TextAlign = [System.Enum]::Parse([System.Drawing.ContentAlignment], $ta)
+    $l.Size = New-Object System.Drawing.Size($C.Width, $Height)
+    return $l
+}
+function Get-CloneInk {
+    param($L)
+    $bmp = New-Object System.Drawing.Bitmap($L.Width, $L.Height, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    try {
+        $L.DrawToBitmap($bmp, (New-Object System.Drawing.Rectangle(0, 0, $L.Width, $L.Height)))
+        return [ScNative]::CountInk($bmp, 0, 0, $L.Width, $L.Height, 60)
+    } finally { $bmp.Dispose(); $L.Dispose() }
+}
+
 function Test-TextControl {
     param($C, $Form)
     $text = [string]$C.Text
     if ([string]::IsNullOrWhiteSpace($text)) { return }
     $font = $C.Font
     $isLabel = ($C -is [System.Windows.Forms.Label])
-    $mn = $false; try { $mn = [bool]$C.UseMnemonic } catch { }
-    $padW = 0; $padH = 0; try { $padW = $C.Padding.Horizontal; $padH = $C.Padding.Vertical } catch { }
     if ($C.Width -le 0 -or $C.Height -le 0) { Add-Finding 'zero-size' $C ('The control has text but its size is {0}x{1}.' -f $C.Width, $C.Height) $Form; return }
-    if ($isLabel) { $availW = $C.ClientSize.Width - $padW; $availH = $C.ClientSize.Height - $padH }
-    else { $availW = $C.ClientSize.Width - 10; $availH = $C.ClientSize.Height - 2 }   # the frame of a button / check box takes a little room
-    $m = Measure-Wrapped -Text $text -Font $font -Width $availW -Mnemonic $mn
-    $needH = [int]$m.Height; $needW = [int]$m.Width
-    $pref = $null
-    try { $pref = $C.GetPreferredSize((New-Object System.Drawing.Size($C.Width, 0))) } catch { }
-    $prefH = 0; if ($null -ne $pref) { $prefH = [int]$pref.Height }
-    $clipTR = ($needH -gt ($availH + 1))
-    $clipPref = $false
-    if ($isLabel -and $null -ne $pref) { $clipPref = ($prefH -gt ($C.Height + 2)) }
-    if ($clipTR -or $clipPref) {
-        Add-Finding 'clipped-text' $C ('The text needs {0}px of height ({1}px wide) but the control is only {2}px tall and {3}px wide{4}. The last lines are cut off.' -f $needH, $needW, $C.Height, $C.Width, $(if ($clipPref) { (' (the control''s own measure says ' + $prefH + 'px)') } else { '' })) $Form
-    } elseif ($needW -gt ($availW + 1) -and ($text.IndexOf(' ') -lt 0)) {
-        Add-Finding 'clipped-text' $C ('One long word needs {0}px but only {1}px are free; it is cut off or broken in the middle.' -f $needW, $availW) $Form
+    if ($isLabel) {
+        # A label that sizes itself always fits; any other label is drawn twice with the same font, text and width: once at its real height and once
+        # with plenty of room. If the real one shows fewer marks, the last lines are cut off.
+        $auto = $false; try { $auto = [bool]$C.AutoSize } catch { }
+        if (-not $auto) {
+            $inkReal = Get-CloneInk (New-LabelClone -C $C -Height $C.Height)
+            $tall = [math]::Min(1500, [math]::Max(600, ($C.Height * 8)))
+            $inkTall = Get-CloneInk (New-LabelClone -C $C -Height $tall)
+            if ($inkTall -gt 0 -and ($inkTall - $inkReal) -gt [math]::Max(6, [int]($inkTall * 0.015))) {
+                $lost = [int](100 * ($inkTall - $inkReal) / $inkTall)
+                Add-Finding 'clipped-text' $C ('About {0}% of the text does not fit: the label is {1}px tall and {2}px wide, and the rest is cut off at the bottom.' -f $lost, $C.Height, $C.Width) $Form
+            }
+        }
+    } else {
+        $availW = $C.ClientSize.Width - 10; $availH = $C.ClientSize.Height - 2   # the frame of a button / check box takes a little room
+        $m = Measure-Wrapped -Text $text -Font $font -Width $availW -Mnemonic $false
+        if ([int]$m.Height -gt ($availH + 1)) {
+            Add-Finding 'clipped-text' $C ('The text needs {0}px of height ({1}px wide) but the control is only {2}px tall and {3}px wide. The last lines are cut off.' -f [int]$m.Height, [int]$m.Width, $C.Height, $C.Width) $Form
+        }
     }
-    # does the text sit inside the control, and is it visible (not the same colour as the background)?
+    # is the text visible (not the same colour as the background, not drawn outside)?
     $ink = Test-ControlInk -C $C -Rect (New-Object System.Drawing.Rectangle(2, 2, [math]::Max(1, $C.Width - 4), [math]::Max(1, $C.Height - 4)))
     if ($null -ne $ink -and $ink -lt 3) { Add-Finding 'empty-control' $C 'The control has text but nothing can be seen: its text is the same colour as its background, or is drawn outside it.' $Form }
 }
@@ -343,6 +398,7 @@ function Test-Tile {
     $title = [string]$t['Title']
     if ([string]::IsNullOrWhiteSpace($title) -and [string]$t['Style'] -ne 'logo') { Add-Finding 'empty-control' $B 'This button has no label at all.' $Form; return }
     $rects = @(Get-TileRects -B $B)
+    $tileBmp = $null
     $w = $B.ClientSize.Width; $h = $B.ClientSize.Height
     foreach ($r in $rects) {
         if ([string]::IsNullOrEmpty([string]$r.Text)) { continue }
@@ -357,13 +413,15 @@ function Test-Tile {
             if ($wm.Height -gt ($rc.Height + 1)) { Add-Finding 'clipped-text' $B ('The {0} "{1}" wraps to {2}px but only {3}px are free next to the switch.' -f $r.Name, $r.Text, $wm.Height, $rc.Height) $Form }
             continue
         }
-        if ($sz.Width -gt ($rc.Width + 1)) {
-            Add-Finding 'clipped-text' $B ('The {0} "{1}" needs {2}px of width but only {3}px are free, so it ends in "..." (cut off).' -f $r.Name, $r.Text, $sz.Width, $rc.Width) $Form
-        }
-        if ($sz.Height -gt ($rc.Height + 2)) {
-            Add-Finding 'clipped-text' $B ('The {0} "{1}" is {2}px tall but its line is {3}px; letters are cut off at the top or bottom.' -f $r.Name, $r.Text, $sz.Height, $rc.Height) $Form
+        if ($null -eq $tileBmp) { $tileBmp = New-Object System.Drawing.Bitmap($B.Width, $B.Height, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb); try { $B.DrawToBitmap($tileBmp, (New-Object System.Drawing.Rectangle(0, 0, $B.Width, $B.Height))) } catch { $tileBmp.Dispose(); $tileBmp = $null } }
+        if ($null -ne $tileBmp) {
+            $ext = [ScNative]::InkExtent($tileBmp, $rc.X, $rc.Y, $rc.Width, $rc.Height, 60)
+            if ($ext[1] -ge 0 -and $ext[1] -ge ($rc.Width - 2) -and $sz.Width -gt ($rc.Width - 12)) {
+                Add-Finding 'clipped-text' $B ('The {0} "{1}" runs right to the edge of the {2}px it is given (it needs about {3}px), so it is cut off or ends in "...".' -f $r.Name, $r.Text, $rc.Width, $sz.Width) $Form
+            }
         }
     }
+    if ($null -ne $tileBmp) { $tileBmp.Dispose() }
     # pixel check: is the title really visible? (catches a label drawn outside, or in the background colour)
     if ($rects.Count -gt 0 -and -not [string]::IsNullOrEmpty([string]$rects[0].Text)) {
         $tr = $rects[0].Rect
@@ -463,7 +521,7 @@ function Get-InkBounds {
     # the part of a control that is really drawn on: a label's text area; everything else its full box
     param($C)
     $r = $C.Bounds
-    if ($C -is [System.Windows.Forms.Label] -and -not ($C.Tag -is [System.Collections.IDictionary])) {
+    if ($C -is [System.Windows.Forms.Label] -and -not ($C.Tag -is [System.Collections.IDictionary]) -and $C.BackColor.A -lt 255) {
         try {
             $m = Measure-Wrapped -Text ([string]$C.Text) -Font $C.Font -Width ($C.ClientSize.Width) -Mnemonic ([bool]$C.UseMnemonic)
             $ar = Get-AlignRect -C $C -TextW ([int]$m.Width) -TextH ([int]$m.Height)
@@ -732,7 +790,7 @@ Add-Scenario 'whats-shared-first-run' { Show-FixItPrivacyForm -FirstRun $true }
 Add-Scenario 'whats-shared' { Show-FixItPrivacyForm -FirstRun $false }
 Add-Scenario 'did-that-fix-it' { [void](Show-FixItFixedDialog -Title 'Did that fix it?' -Detail 'I just ran Fix sound, mic and camera. Try it now, then let me know.') }
 Add-Scenario 'chrome-question' { [void](Show-FixItChromeAskDialog) }
-Add-Scenario 'printer-pick' { [void](Show-FixItPrinterPickDialog -Names @('Microsoft Print to PDF', 'HP OfficeJet Pro 9015e Series (Network) on PRINT-SERVER-01 in the upstairs hallway', 'Brother HL-L2350DW series', 'Canon TR8620a', 'OneNote (Desktop)') -Current 'Brother HL-L2350DW series') }
+Add-Scenario 'printer-pick' { [void](Show-FixItPrinterPickDialog -Names @('Microsoft Print to PDF', 'HP OfficeJet Pro 9015e Series (Network)', 'Brother HL-L2350DW series', 'Canon TR8620a', 'OneNote (Desktop)') -Current 'Brother HL-L2350DW series') }
 Add-Scenario 'countdown' { Show-FixItCountdownDialog -Seconds 30 -Title 'Please wait' -Message 'Windows is restarting the printing service. This takes about half a minute. Please do not close this window or turn off the computer.' }
 Add-Scenario 'scary-popup-sent' { Show-FixItScamForm -Result (New-FixItResult $true 'Do not call that number' ("STOP. Do NOT call any phone number on the screen.`r`n`r`n1. Turn off your Wi-Fi now (or unplug the network cable).`r`n2. Do not click anything else, and do not type any passwords.`r`n3. Call Trey.`r`n`r`nTrey never asks you for codes or to install remote-control programs unless YOU contacted him first.`r`n`r`nA report about this computer was sent to Trey.") @() @{ Scam = $true; Sent = $true; ReportPath = 'C:\x' }) }
 Add-Scenario 'scary-popup-not-sent' { Show-FixItScamForm -Result (New-FixItResult $true 'Do not call that number' ("STOP. Do NOT call any phone number on the screen.`r`n`r`n1. Turn off your Wi-Fi now (or unplug the network cable).`r`n2. Do not click anything else, and do not type any passwords.`r`n3. Call Trey.`r`n`r`nTrey never asks you for codes or to install remote-control programs unless YOU contacted him first.`r`n`r`nThe report could not be sent, so tell Trey on the phone. A copy is saved in the 'Family Fix-It Reports' folder in your Documents.") @() @{ Scam = $true; Sent = $false; ReportPath = 'C:\x' }) }
