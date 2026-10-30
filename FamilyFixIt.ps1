@@ -37,7 +37,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 # Settings
 # ---------------------------------------------------------------------------
-$script:FixItVersion = '2.3.4'
+$script:FixItVersion = '2.3.5'
 $script:DefaultManifestUrl = 'https://raw.githubusercontent.com/Sodapopnewb/family-it-fixit/main/manifest.json'
 $script:OwnerPlaceholder = ('<' + 'OWNER>')   # the guards compare with this; Publish never rewrites it
 # Where reports are sent (a small Cloudflare Worker that Trey runs). The app header is NOT a secret.
@@ -140,6 +140,8 @@ function Invoke-FixItStep {
 #     PASS / WARN / FAIL for the step. The checklist is shown at the end of each button.
 # ---------------------------------------------------------------------------
 $script:TestAll = $false
+$script:ChromeLookup = $null   # where chrome.exe is, for this run of the browser clean-up (null = not looked up yet)
+$script:StatusLabel = $null; $script:Form = $null
 $script:InProbe = $false
 $script:ProbeResults = $null
 $script:TestRecords = New-Object System.Collections.ArrayList
@@ -215,12 +217,43 @@ function Add-FixItTestNote {
 }
 
 # ----- read-only facts the checks use (replaceable in the tests) -----
-function Test-FixItCanElevate {
+# The groups in this sign-in's token, as the "whoami /groups" command shows them (the SID is the same in every language).
+# Windows gives an administrator two tokens (UAC); in the everyday one the Administrators group is marked "Group used for deny only".
+# That group is still there, and it is what lets the account say Yes to the permission box. Returns $null when the list cannot be read.
+function Convert-FixItWhoamiGroups {
+    param($Lines)
+    $out = @()
+    foreach ($row in @($Lines | Where-Object { $_ -and ([string]$_).Trim() } | ConvertFrom-Csv -Header 'Name', 'Type', 'Sid', 'Attributes' -ErrorAction SilentlyContinue)) {
+        $sid = ([string]$row.Sid).Trim()
+        if ($sid -match '^S-1-\d+(-\d+)+$') { $out += [pscustomobject]@{ Sid = $sid; Attributes = [string]$row.Attributes } }
+    }
+    return @($out)
+}
+function Get-FixItTokenGroups {
+    $found = @()
+    try {
+        $lines = @(& whoami.exe /groups /fo csv /nh 2>$null)
+        $found = @(Convert-FixItWhoamiGroups -Lines $lines)
+    } catch { $found = @() }
     try {
         $id = [Security.Principal.WindowsIdentity]::GetCurrent()
-        foreach ($g in @($id.Groups)) { if ([string]$g.Value -eq 'S-1-5-32-544') { return $true } }
+        foreach ($g in @($id.Groups)) { $found += [pscustomobject]@{ Sid = [string]$g.Value; Attributes = 'Enabled' } }
     } catch { }
+    if ($found.Count -eq 0) { return $null }
+    return @($found)
+}
+# $true when the user is in the Administrators group (S-1-5-32-544) with ANY attribute, "deny only" included.
+function Test-FixItCanElevate {
+    $groups = $null
+    try { $groups = Get-FixItTokenGroups } catch { $groups = $null }
+    if ($null -eq $groups) { return $false }
+    foreach ($g in @($groups)) { if ([string]$g.Sid -eq 'S-1-5-32-544') { return $true } }
     return $false
+}
+function Test-FixItTokenReadable {
+    $groups = $null
+    try { $groups = Get-FixItTokenGroups } catch { $groups = $null }
+    return ($null -ne $groups)
 }
 function Test-FixItCommandPresent { param([string]$Name) return [bool](Get-Command -Name $Name -ErrorAction SilentlyContinue) }
 function Test-FixItUriHandler {
@@ -254,6 +287,86 @@ function Test-FixItFileWritable {
     param([string]$Path)
     try { $fs = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Write, [IO.FileShare]::ReadWrite); $fs.Close(); return $true } catch { return $false }
 }
+# The nearest folder that exists, walking up from a folder that may not be made yet ('' when none is found).
+function Get-FixItNearestExistingFolder {
+    param([string]$Path)
+    $p = $Path
+    while ($p) {
+        if (Test-Path -LiteralPath $p -PathType Container -ErrorAction SilentlyContinue) { return $p }
+        $up = ''; try { $up = Split-Path -Parent $p } catch { $up = '' }
+        if (-not $up -or $up -eq $p) { return '' }
+        $p = $up
+    }
+    return ''
+}
+# Can files be made in this existing folder? Makes a tiny temporary file that Windows deletes the moment it is closed (nothing stays behind).
+function Test-FixItFolderWritable {
+    param([string]$Path)
+    try {
+        $tmp = ($Path.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar + '.fixit-write-test-' + [guid]::NewGuid().ToString('N') + '.tmp')
+        $fs = New-Object IO.FileStream($tmp, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None, 1, [IO.FileOptions]::DeleteOnClose)
+        $fs.Close()
+        return $true
+    } catch { return $false }
+}
+
+# ----- finding a browser program (it is usually NOT on the PATH) -----
+function Test-FixItFileExists { param([string]$Path) try { return (Test-Path -LiteralPath $Path -PathType Leaf -ErrorAction Stop) } catch { return $false } }
+function Get-FixItCommandPath {
+    param([string]$Name)
+    try { $c = @(Get-Command -Name $Name -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1); if ($c.Count -gt 0 -and $c[0].Source) { return [string]$c[0].Source } } catch { }
+    return ''
+}
+# The program's own entry in Windows' "App Paths" list (HKLM and HKCU, 64-bit and 32-bit views).
+function Get-FixItAppPathsExe {
+    param([string]$Exe)
+    foreach ($root in @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths', 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths')) {
+        try {
+            $k = Join-Path $root $Exe
+            if (Test-Path -LiteralPath $k -ErrorAction Stop) {
+                $v = (Get-ItemProperty -LiteralPath $k -ErrorAction Stop).'(default)'
+                if (-not $v) { $v = (Get-Item -LiteralPath $k -ErrorAction Stop).GetValue('') }
+                $v = ([string]$v).Trim('"', ' ')
+                if ($v) { return $v }
+            }
+        } catch { }
+    }
+    return ''
+}
+function Get-FixItBrowserExeCandidates {
+    param([string]$Exe)
+    $rel = ''
+    switch ($Exe.ToLowerInvariant()) {
+        'msedge.exe' { $rel = 'Microsoft\Edge\Application\msedge.exe' }
+        'chrome.exe' { $rel = 'Google\Chrome\Application\chrome.exe' }
+        default { return @() }
+    }
+    $roots = @($env:ProgramFiles, ${env:ProgramFiles(x86)}, $env:ProgramW6432, $env:LOCALAPPDATA, 'C:\Program Files', 'C:\Program Files (x86)') | Where-Object { $_ }
+    $o = @(); $seen = @{}
+    foreach ($r in $roots) { $c = ($r.TrimEnd('\') + '\' + $rel); if (-not $seen.ContainsKey($c.ToLowerInvariant())) { $seen[$c.ToLowerInvariant()] = $true; $o += $c } }
+    return $o
+}
+# Full path of a browser program ('' when it is not installed): the PATH, Program Files, Program Files (x86), the App Paths list, then LOCALAPPDATA.
+function Resolve-FixItBrowserExe {
+    param([string]$Exe)
+    if (-not $Exe) { return '' }
+    if ($Exe -match '[\\/]' -and (Test-FixItFileExists -Path $Exe)) { return $Exe }
+    $leaf = $Exe; try { $leaf = [IO.Path]::GetFileName($Exe.Replace('/', '\')) } catch { }
+    $c = Get-FixItCommandPath -Name $leaf
+    if ($c) { return $c }
+    $cands = @(Get-FixItBrowserExeCandidates -Exe $leaf)
+    $local = @($cands | Where-Object { $env:LOCALAPPDATA -and $_.StartsWith($env:LOCALAPPDATA.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase) })
+    foreach ($x in @($cands | Where-Object { $local -notcontains $_ })) { if (Test-FixItFileExists -Path $x) { return $x } }
+    $ap = Get-FixItAppPathsExe -Exe $leaf
+    if ($ap -and (Test-FixItFileExists -Path $ap)) { return $ap }
+    foreach ($x in $local) { if (Test-FixItFileExists -Path $x) { return $x } }
+    if ($leaf -ieq 'chrome.exe') {   # a copy found earlier by the deeper search, remembered in the tool's settings
+        $saved = ''; try { $saved = Get-FixItSetting -Name 'ChromePath' } catch { }
+        if ($saved -and (Test-FixItFileExists -Path $saved)) { return $saved }
+    }
+    return ''
+}
+
 # Only asks whether the address answers (no data is sent to it).
 function Test-FixItReportReachable {
     param([string]$Url)
@@ -263,12 +376,14 @@ function Test-FixItReportReachable {
     } catch { return $false }
 }
 
-# Administrator rights: PASS when already on, or when this account is allowed to say yes to Windows' question (nothing is elevated here).
+# Administrator rights: PASS when already on, or when this account is an administrator (it will see Windows' Yes box; nothing is elevated here).
+# A standard account is not a failure: Windows asks for an administrator's password, so it is a plain WARN.
 function Get-FixItAdminCheck {
     param([string]$What)
     if (Test-FixItAdmin) { return (New-FixItProbeResult 'PASS' 'administrator rights are already on') }
-    if (Test-FixItCanElevate) { return (New-FixItProbeResult 'PASS' ('{0} needs administrator permission. Windows will ask, and this account is allowed to say yes' -f $What)) }
-    return (New-FixItProbeResult 'FAIL' ('{0} needs administrator permission, and this account is not allowed to give it' -f $What))
+    if (Test-FixItCanElevate) { return (New-FixItProbeResult 'PASS' ('{0} needs administrator permission: will ask for permission (a Yes box)' -f $What)) }
+    if (-not (Test-FixItTokenReadable)) { return (New-FixItProbeResult 'WARN' ('{0} needs administrator permission; this PC would not say whether the account is an administrator, so Windows will ask and may want an administrator''s password' -f $What)) }
+    return (New-FixItProbeResult 'WARN' ('{0} needs an administrator''s password (this account is a standard account, so Windows will ask for one)' -f $What))
 }
 
 function Get-FixItNativeNeedsAdmin {
@@ -401,7 +516,10 @@ function Get-FixItPreflight {
         }
         'Open-FixItBrowserPage' {
             $e = [string]$A['Exe']
-            if (Test-FixItCommandPresent -Name $e) { & $pass ('{0} was found' -f $e) } else { & $fail ('{0} was not found on this PC' -f $e) }
+            $full = Resolve-FixItBrowserExe -Exe $e
+            if ($full) { & $pass ('{0} was found ({1})' -f $e, $full) }
+            elseif (Test-FixItCommandPresent -Name $e) { & $pass ('{0} was found' -f $e) }
+            else { & $fail ('{0} was not found on this PC (looked on the PATH, in Program Files, in Program Files (x86), in the App Paths list and in LOCALAPPDATA)' -f $e) }
             break
         }
         'Open-FixItFile' {
@@ -416,7 +534,10 @@ function Get-FixItPreflight {
         'Copy-FixItBackup' {
             if (Test-Path -LiteralPath ([string]$A['Source'])) { & $pass 'the file to back up exists' } else { & $pass 'the file to back up is not there, so nothing needs saving' }
             $dd = [string]$A['DestDir']
-            if ((Test-Path -LiteralPath $dd) -or (Test-Path -LiteralPath (Split-Path -Parent $dd))) { & $pass 'the backup folder exists or can be made' } else { & $fail 'the backup folder cannot be made here' }
+            $near = Get-FixItNearestExistingFolder -Path $dd
+            if (-not $near) { & $fail ('the backup folder cannot be made here (no part of {0} exists)' -f $dd) }
+            elseif (Test-FixItFolderWritable -Path $near) { if ($near -eq $dd) { & $pass 'the backup folder exists and can be written to' } else { & $pass ('the backup folder does not exist yet, but it can be made (the nearest existing folder, {0}, can be written to)' -f $near) } }
+            else { & $fail ('the backup folder cannot be made here ({0} cannot be written to)' -f $near) }
             break
         }
         'Start-FixItDefenderScan' {
@@ -1770,7 +1891,9 @@ function Set-FixItServiceStartType {
 function Open-FixItBrowserPage {
     param([string]$Exe, [string]$Url)
     if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Open-FixItBrowserPage' -Arguments $PSBoundParameters; return }
-    Start-Process -FilePath $Exe -ArgumentList $Url | Out-Null
+    $full = Resolve-FixItBrowserExe -Exe $Exe
+    if (-not $full) { $full = $Exe }
+    Start-Process -FilePath $full -ArgumentList $Url | Out-Null
 }
 
 # ----- extra facts for reports
@@ -3482,8 +3605,170 @@ function Invoke-DefenderScanAdmin {
     return New-FixItResult $ok 'Virus scan' $(if ($ok) { 'The quick scan finished.' } else { 'The quick scan could not be run.' })
 }
 
+
+# ----- Is Google Chrome here? Quick lookup first; only then ask, and search deeper only when the person says Yes or "I don't know" -----
+function Test-FixItCloudOrLink {
+    param($Item)
+    try {
+        $a = [int]$Item.Attributes
+        # ReparsePoint (a link or a cloud placeholder) 0x400, Offline 0x1000, RecallOnOpen 0x40000, RecallOnDataAccess 0x400000
+        return (($a -band 0x400) -ne 0 -or ($a -band 0x1000) -ne 0 -or ($a -band 0x40000) -ne 0 -or ($a -band 0x400000) -ne 0)
+    } catch { return $true }
+}
+function Get-FixItShortcutTarget {
+    param([string]$Path)
+    try { $w = New-Object -ComObject WScript.Shell; return [string]$w.CreateShortcut($Path).TargetPath } catch { return '' }
+}
+function Get-FixItChromeUninstallHints {
+    $o = @()
+    foreach ($k in @('HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall', 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall', 'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall')) {
+        try {
+            foreach ($e in @(Get-ChildItem -LiteralPath $k -ErrorAction Stop)) {
+                try {
+                    $dn = [string]$e.GetValue('DisplayName', '')
+                    if ($dn -notmatch '(?i)\bgoogle chrome\b|^chrome$') { continue }
+                    $loc = ([string]$e.GetValue('InstallLocation', '')).Trim('"', ' ')
+                    if ($loc) { $o += ($loc.TrimEnd('\') + '\chrome.exe') }
+                    $ic = ([string]$e.GetValue('DisplayIcon', '')).Trim('"', ' ')
+                    if ($ic) { $o += (($ic -replace ',\s*-?\d+$', '').Trim('"', ' ')) }
+                } catch { }
+            }
+        } catch { }
+    }
+    return @($o)
+}
+function Test-FixItIsChromeFile {
+    param([string]$Path)
+    if (-not $Path -or ([IO.Path]::GetFileName($Path.Replace('\', '/')) -ine 'chrome.exe')) { return $false }
+    if (-not (Test-FixItFileExists -Path $Path)) { return $false }
+    try { $pn = [string][Diagnostics.FileVersionInfo]::GetVersionInfo($Path).ProductName; if ($pn -and $pn -notmatch '(?i)chrome|chromium') { return $false } } catch { }
+    return $true
+}
+# The deeper search: the Start menu and Desktop shortcuts, the uninstall list, then the user's own folders. Stops after MaxSeconds.
+# Skips links and cloud-only files (nothing is downloaded). Returns the full path, or '' when not found.
+function Find-FixItChromeDeep {
+    param([int]$MaxSeconds = 30, [string[]]$Roots = @(), [string[]]$ShortcutFolders = @())
+    if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Find-FixItChromeDeep' -Arguments $PSBoundParameters) }
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    $limit = [math]::Max(0, $MaxSeconds) * 1000
+    if (@($ShortcutFolders).Count -eq 0) {
+        $sf = @(); $desk = ''; try { $desk = [Environment]::GetFolderPath('Desktop') } catch { }
+        $cdesk = ''; try { $cdesk = [Environment]::GetFolderPath('CommonDesktopDirectory') } catch { }
+        foreach ($d in @($desk, $cdesk, $(if ($env:APPDATA) { $env:APPDATA + '\Microsoft\Windows\Start Menu\Programs' }), $(if ($env:ProgramData) { $env:ProgramData + '\Microsoft\Windows\Start Menu\Programs' }))) { if ($d) { $sf += $d } }
+        $ShortcutFolders = $sf
+    }
+    if (@($Roots).Count -eq 0) {
+        $rs = @(); foreach ($d in @($env:LOCALAPPDATA, $env:APPDATA, $env:USERPROFILE)) { if ($d) { $rs += $d } }
+        $Roots = $rs
+    }
+    # 1. shortcuts on the Desktop and in the Start menu
+    foreach ($folder in $ShortcutFolders) {
+        if ($sw.ElapsedMilliseconds -ge $limit) { Write-FixItLog 'The search for Chrome ran out of time' 'WARN'; return '' }
+        try {
+            $stack = New-Object System.Collections.Generic.Stack[string]; $stack.Push($folder); $depth = 0
+            while ($stack.Count -gt 0) {
+                if ($sw.ElapsedMilliseconds -ge $limit) { return '' }
+                $dir = $stack.Pop()
+                foreach ($it in @(Get-ChildItem -LiteralPath $dir -Force -ErrorAction SilentlyContinue)) {
+                    if ($sw.ElapsedMilliseconds -ge $limit) { return '' }
+                    if (Test-FixItCloudOrLink -Item $it) { continue }
+                    if ($it.PSIsContainer) { if ($stack.Count -lt 200) { $stack.Push($it.FullName) }; continue }
+                    if ($it.Extension -ine '.lnk') { continue }
+                    $t = Get-FixItShortcutTarget -Path $it.FullName
+                    if ($t -and (Test-FixItIsChromeFile -Path $t)) { Write-FixItLog ('Found Chrome from a shortcut: {0}' -f $t); return $t }
+                }
+            }
+        } catch { }
+    }
+    # 2. the list of installed programs
+    foreach ($c in @(Get-FixItChromeUninstallHints)) { if (Test-FixItIsChromeFile -Path $c) { Write-FixItLog ('Found Chrome from the installed programs list: {0}' -f $c); return $c } }
+    # 3. the user's own folders (not links, not cloud-only files)
+    foreach ($root in $Roots) {
+        if (-not (Test-Path -LiteralPath $root -PathType Container -ErrorAction SilentlyContinue)) { continue }
+        $stack = New-Object System.Collections.Generic.Stack[object]; $stack.Push(@($root, 0))
+        while ($stack.Count -gt 0) {
+            if ($sw.ElapsedMilliseconds -ge $limit) { Write-FixItLog 'The search for Chrome ran out of time' 'WARN'; return '' }
+            $cur = $stack.Pop(); $dir = [string]$cur[0]; $depth = [int]$cur[1]
+            $items = @()
+            try { $items = @(Get-ChildItem -LiteralPath $dir -Force -ErrorAction SilentlyContinue) } catch { }
+            foreach ($it in $items) {
+                if (Test-FixItCloudOrLink -Item $it) { continue }
+                if ($it.PSIsContainer) { if ($depth -lt 7) { $stack.Push(@($it.FullName, ($depth + 1))) }; continue }
+                if ($it.Name -ieq 'chrome.exe' -and (Test-FixItIsChromeFile -Path $it.FullName)) { Write-FixItLog ('Found Chrome in a user folder: {0}' -f $it.FullName); return $it.FullName }
+            }
+        }
+    }
+    return ''
+}
+
+# The plain question. 'Yes', 'No' or 'Unsure'. The window shows three big buttons; the command line takes Y / N / D.
+function Read-FixItChromeAnswer {
+    if ($script:GuiActive) { return [string](Show-FixItChromeAskDialog) }
+    if (-not (Test-FixItCanAsk)) { return 'No' }
+    $a = Read-Host 'Is Google Chrome on this computer? (Y = Yes, N = No, D = I don''t know)'
+    if ($a -match '^(y|yes)$') { return 'Yes' }
+    if ($a -match '^(d|i don.?t know|dont know|idk|\?)$') { return 'Unsure' }
+    return 'No'
+}
+function Set-FixItNote {
+    param([string]$Text)
+    if ($script:GuiActive) { try { if ($script:StatusLabel) { $script:StatusLabel.Text = $Text; $script:Form.Refresh() } } catch { }; Update-FixItUi }
+}
+# Where chrome.exe is ('' when it is not there or the person said it is not). Asks at most once per run, and remembers the answer.
+function Get-FixItChromeForPages {
+    if ($null -ne $script:ChromeLookup) { return [string]$script:ChromeLookup }
+    $path = ''
+    try { $path = Resolve-FixItBrowserExe -Exe 'chrome.exe' } catch { $path = '' }
+    $how = 'quick'
+    if ($path) { Write-FixItLog ('Chrome found: {0}' -f $path) }
+    elseif ($script:TestMode -or $script:TestAll -or $script:DryRun) {
+        $how = 'would-ask'
+        Write-FixItLog 'Chrome was not found by the quick lookup. A real run would ask "Is Google Chrome on this computer?" (never asked in Test mode or a practice run)'
+    } else {
+        $skip = $false
+        $until = ''; try { $until = Get-FixItSetting -Name 'ChromeSkipUntil' } catch { }
+        if ($until) { $d = [datetime]::MinValue; if ([datetime]::TryParse($until, [ref]$d) -and (Get-Date) -lt $d) { $skip = $true } }
+        if ($skip) { $how = 'remembered-no'; Write-FixItLog 'Chrome: not asking again yet (it was not found a short while ago)' }
+        elseif (-not (Test-FixItCanAsk)) { $how = 'nobody'; Write-FixItLog 'Chrome was not found and nobody is there to ask; skipping Chrome' }
+        else {
+            $ans = Read-FixItChromeAnswer
+            Write-FixItLog ('Asked: Is Google Chrome on this computer? -> {0}' -f $ans)
+            if ($ans -eq 'Yes' -or $ans -eq 'Unsure') {
+                $old = ''; if ($script:GuiActive) { try { if ($script:StatusLabel) { $old = [string]$script:StatusLabel.Text } } catch { } }
+                Set-FixItNote -Text 'Looking for Chrome...'
+                try { $path = [string](Find-FixItChromeDeep -MaxSeconds 30) } catch { Write-FixItLog ('The search for Chrome stopped: {0}' -f $_.Exception.Message) 'WARN'; $path = '' }
+                if ($old) { Set-FixItNote -Text $old }
+                if ($path) { $how = 'found-deep'; Set-FixItSetting -Name 'ChromePath' -Value $path; Write-FixItLog ('Chrome found and remembered: {0}' -f $path) }
+                else { $how = 'not-found'; Write-FixItLog 'Chrome was not found; skipping Chrome' }
+            } else { $how = 'said-no' }
+            if (-not $path) { Set-FixItSetting -Name 'ChromeSkipUntil' -Value ((Get-Date).AddDays(30).ToString('s')) }
+        }
+    }
+    if ($script:TestMode) {
+        if ($path) { Add-FixItTestNote -Step 'Find Google Chrome' -Status 'PASS' -Text ('Chrome was found ({0})' -f $path) }
+        else { Add-FixItTestNote -Step 'Find Google Chrome' -Status 'PASS' -Text 'Chrome was not found by the quick lookup (App Paths, Program Files, Program Files (x86), LOCALAPPDATA). A real run WOULD ask "Is Google Chrome on this computer?" (Yes / No / I don''t know) and, for Yes or I don''t know, look deeper for up to 30 seconds. The question is never shown in Test mode.' }
+    }
+    $script:ChromeLookup = $path
+    return [string]$path
+}
+
+# Which browser pages to open: Edge when it has a profile on this PC; Chrome when chrome.exe is found (see Get-FixItChromeForPages).
+function Get-FixItBrowserPageTargets {
+    param($Profiles, [string]$EdgePage, [string]$ChromePage)
+    $t = @()
+    $hasEdge = (@($Profiles | Where-Object { $_.Browser -eq 'Edge' }).Count -gt 0)
+    if ($hasEdge) { $t += [pscustomobject]@{ Exe = 'msedge.exe'; Page = $EdgePage } }
+    $chrome = ''
+    try { $chrome = Get-FixItChromeForPages } catch { Write-FixItLog ('Chrome lookup failed: {0}' -f $_.Exception.Message) 'WARN' }
+    if ($chrome) { $t += [pscustomobject]@{ Exe = $chrome; Page = $ChromePage } }
+    if ($t.Count -eq 0) { $t += [pscustomobject]@{ Exe = 'msedge.exe'; Page = $EdgePage } }
+    return @($t)
+}
+
 function Invoke-BrowserFix {
     Write-FixItLog 'Started: Clean up my browser'
+    $script:ChromeLookup = $null
+    if ($script:TestMode) { [void](Get-FixItChromeForPages) }   # Test mode: report what the lookup finds (it never asks)
     $profiles = @()
     try { $profiles = @(Get-FixItBrowserProfiles) } catch { Write-FixItLog ('Could not look for browsers: {0}' -f $_.Exception.Message) 'WARN' }
     $lines = @()
@@ -3533,18 +3818,20 @@ function Invoke-BrowserFix {
         $lines += 'Extensions I do not recognise (turn off any you did not choose):'
         foreach ($u in $unknownExt) { $lines += ('  ' + $u) }
         if (Confirm-FixItStep 'Open the extensions page so you can turn off the ones you do not want?') {
-            $page = 'edge://extensions'; $exe2 = 'msedge.exe'
-            if (@($profiles | Where-Object { $_.Browser -eq 'Edge' }).Count -eq 0) { $page = 'chrome://extensions'; $exe2 = 'chrome.exe' }
-            Invoke-FixItStep ('Open {0}' -f $page) { Open-FixItBrowserPage -Exe $exe2 -Url $page } | Out-Null
+            foreach ($t in @(Get-FixItBrowserPageTargets -Profiles $profiles -EdgePage 'edge://extensions' -ChromePage 'chrome://extensions')) {
+                $pg = [string]$t.Page; $ex = [string]$t.Exe
+                Invoke-FixItStep ('Open {0}' -f $pg) { Open-FixItBrowserPage -Exe $ex -Url $pg } | Out-Null
+            }
         }
     }
     if ($notifSites.Count -gt 0) {
         $lines += 'Websites allowed to show you notification pop-ups:'
         foreach ($n in ($notifSites | Select-Object -First 15)) { $lines += ('  ' + $n) }
         if (Confirm-FixItStep 'Open the notification settings so you can remove sites you do not want?') {
-            $exe3 = 'msedge.exe'; $page3 = 'edge://settings/content/notifications'
-            if (@($profiles | Where-Object { $_.Browser -eq 'Edge' }).Count -eq 0) { $exe3 = 'chrome.exe'; $page3 = 'chrome://settings/content/notifications' }
-            Invoke-FixItStep ('Open {0}' -f $page3) { Open-FixItBrowserPage -Exe $exe3 -Url $page3 } | Out-Null
+            foreach ($t in @(Get-FixItBrowserPageTargets -Profiles $profiles -EdgePage 'edge://settings/content/notifications' -ChromePage 'chrome://settings/content/notifications')) {
+                $pg = [string]$t.Page; $ex = [string]$t.Exe
+                Invoke-FixItStep ('Open {0}' -f $pg) { Open-FixItBrowserPage -Exe $ex -Url $pg } | Out-Null
+            }
         }
     }
     if (Confirm-FixItStep 'Run a quick virus scan with Microsoft Defender now? It can take 5 to 10 minutes. Windows will ask for permission.') {
@@ -6727,6 +7014,44 @@ function Show-FixItFixedDialog {
     $r = $f.ShowDialog($script:Form)
     $f.Dispose()
     return ($r -eq 'Yes')
+}
+
+# ---- "Is Google Chrome on this computer?" Three big buttons. Returns 'Yes', 'No' or 'Unsure' (closing the window counts as No).
+function Show-FixItChromeAskDialog {
+    $S = $script:UiScale
+    $hc = [bool]$script:UiHighContrast
+    $px = [System.Drawing.GraphicsUnit]::Pixel
+    $cText = '#1A1A1A'; $cMuted = '#555555'; if ($hc) { $cText = '#FFFFFF'; $cMuted = '#FFFFFF' }
+    $f = New-Object System.Windows.Forms.Form
+    Set-FixItFormIcon $f
+    $f.Text = 'Family Fix-It'
+    $f.StartPosition = 'CenterParent'; $f.FormBorderStyle = 'FixedDialog'; $f.MaximizeBox = $false; $f.MinimizeBox = $false; $f.ShowInTaskbar = $false
+    $f.BackColor = (Get-FixItColor $script:UiBack)
+    $f.ClientSize = New-Object System.Drawing.Size([int](640 * $S), [int](230 * $S))
+    $mk = {
+        param($text, $size, $bold, $color, $y, $hgt)
+        $l = New-Object System.Windows.Forms.Label
+        $l.Text = $text; $l.AutoSize = $false; $l.TextAlign = 'MiddleCenter'
+        $st = [System.Drawing.FontStyle]::Regular; if ($bold) { $st = [System.Drawing.FontStyle]::Bold }
+        $l.Font = New-Object System.Drawing.Font('Segoe UI', [single]($size * $S), $st, $px)
+        $l.ForeColor = (Get-FixItColor $color)
+        $l.Location = New-Object System.Drawing.Point([int](20 * $S), [int]($y * $S)); $l.Size = New-Object System.Drawing.Size([int](600 * $S), [int]($hgt * $S))
+        return $l
+    }
+    $f.Controls.Add((& $mk 'Is Google Chrome on this computer?' 26 $true $cText 20 44))
+    $f.Controls.Add((& $mk 'I could not find it. If it is here, I will look for it and open its settings pages.' 14 $false $cMuted 72 50))
+    $yes = New-FixItTile -Run '' -Title 'Yes' -Sub '' -IconKey '' -Style 'yes' -IconBg '' -X 24 -Y 144 -W 184 -H 56
+    $no = New-FixItTile -Run '' -Title 'No' -Sub '' -IconKey '' -Style 'no' -IconBg '' -X 228 -Y 144 -W 184 -H 56
+    $idk = New-FixItTile -Run '' -Title "I don't know" -Sub '' -IconKey '' -Style 'outline' -IconBg '' -X 432 -Y 144 -W 184 -H 56
+    $yes.DialogResult = 'Yes'; $no.DialogResult = 'No'; $idk.DialogResult = 'Ignore'
+    $yes.AccessibleName = 'Yes. Google Chrome is on this computer.'; $no.AccessibleName = 'No. Google Chrome is not on this computer.'; $idk.AccessibleName = "I don't know."
+    $f.Controls.Add($yes); $f.Controls.Add($no); $f.Controls.Add($idk)
+    $f.CancelButton = $no
+    $r = $f.ShowDialog($script:Form)
+    $f.Dispose()
+    if ($r -eq 'Yes') { return 'Yes' }
+    if ($r -eq 'Ignore') { return 'Unsure' }
+    return 'No'
 }
 
 # ---- "Here is what I will do": Proceed or Go Back (shown before every main button)
