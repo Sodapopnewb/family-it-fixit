@@ -27,7 +27,7 @@ if (-not $ReleaseDir) { $ReleaseDir = Join-Path (Split-Path -Parent $OutDir) 're
 $runtimeFiles = @('FamilyFixIt.ps1', 'Start-FixIt.cmd', 'README.md', 'guides.json')   # what the family's copy downloads
 $assetFiles = @('FamilyFixIt.ico')   # pictures: listed under "assets" in manifest.json (not "files"; older versions refuse unknown names in "files")
 $installerFiles = @('Install-FixIt.ps1', 'Install-FamilyFixIt.cmd')   # the bootstrap installer (also zipped for the release)
-$extraFiles = @('.gitattributes', '.gitignore', 'apps.json', 'tools/Publish-FixIt.ps1', 'tests/Test-FixIt.ps1', 'tests/Test-FixIt-V234.ps1', 'tests/Test-FixIt-V235.ps1', 'tests/Test-FixIt-V236.ps1', 'tests/Test-FixIt-V237.ps1', 'tests/Test-FixIt-V238.ps1', 'tests/Test-FixIt-V239.ps1', 'tests/Test-FixIt-V2310.ps1', 'tests/Test-FixIt-V2311.ps1', 'tests/Test-FixIt-V2313.ps1', 'tests/Test-FixIt-V2313Layout.ps1', 'tests/Test-FixIt-V2314.ps1') + $installerFiles
+$extraFiles = @('.gitattributes', '.gitignore', 'apps.json', 'tools/Publish-FixIt.ps1', 'tests/Test-FixIt.ps1', 'tests/Test-FixIt-V234.ps1', 'tests/Test-FixIt-V235.ps1', 'tests/Test-FixIt-V236.ps1', 'tests/Test-FixIt-V237.ps1', 'tests/Test-FixIt-V238.ps1', 'tests/Test-FixIt-V239.ps1', 'tests/Test-FixIt-V2310.ps1', 'tests/Test-FixIt-V2311.ps1', 'tests/Test-FixIt-V2313.ps1', 'tests/Test-FixIt-V2313Layout.ps1', 'tests/Test-FixIt-V2314.ps1', 'tests/Test-FixIt-V2315.ps1') + $installerFiles
 
 $main = Join-Path $SourceDir 'FamilyFixIt.ps1'
 $m = [regex]::Match([IO.File]::ReadAllText($main), "FixItVersion = '(\d+\.\d+\.\d+)'")

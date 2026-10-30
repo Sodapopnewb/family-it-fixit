@@ -37,7 +37,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 # Settings
 # ---------------------------------------------------------------------------
-$script:FixItVersion = '2.3.14'
+$script:FixItVersion = '2.3.15'
 $script:GuideFont = $null; $script:FilesMsg = $null; $script:FilesPanel = $null; $script:FilesTip = $null; $script:FilesNameFont = $null   # My files window pieces (set when the window opens)
 $script:DefaultManifestUrl = 'https://raw.githubusercontent.com/Sodapopnewb/family-it-fixit/main/manifest.json'
 $script:OwnerPlaceholder = ('<' + 'OWNER>')   # the guards compare with this; Publish never rewrites it
@@ -609,7 +609,18 @@ function Get-FixItPreflight {
         }
         'Write-FixItTextFile' {
             $dir = Split-Path -Parent ([string]$A['Path'])
-            if ($dir -and (Test-Path -LiteralPath $dir)) { & $pass ('the folder exists ({0})' -f $dir) } else { & $fail ('the folder was not found ({0})' -f $dir) }
+            if ($dir -and (Test-Path -LiteralPath $dir)) { & $pass ('the folder exists ({0})' -f $dir) }
+            else {
+                # Test mode creates nothing, so the 'Family Fix-It Reports' folder may not be there yet. A real run makes it, which is fine
+                # when the folder it goes in (Documents) exists and can be written to. Any other missing folder is still a failure.
+                $up = ''; if ($dir) { try { $up = Split-Path -Parent $dir } catch { $up = '' } }
+                $leaf = ''; if ($dir) { try { $leaf = Split-Path -Leaf $dir } catch { $leaf = '' } }
+                if ($dir -and $up -and $leaf -eq $script:ReportsFolderName) {
+                    if (-not (Test-Path -LiteralPath $up -PathType Container)) { & $fail ('the folder was not found ({0}), and the folder it goes in was not found either ({1})' -f $dir, $up) }
+                    elseif (Test-FixItFolderWritable -Path $up) { & $pass ('the folder {0} is not there yet, so the real run would create it ({1} exists and can be written to)' -f $leaf, $up) }
+                    else { & $fail ('the folder {0} is not there yet and cannot be made, because {1} cannot be written to' -f $leaf, $up) }
+                } else { & $fail ('the folder was not found ({0})' -f $dir) }
+            }
             break
         }
         { $_ -in @('Rename-FixItFolderAside', 'Restore-FixItFolder') } {
@@ -1199,6 +1210,24 @@ function Test-FixItNoEvents {
     $id = ''; try { $id = [string]$Err.FullyQualifiedErrorId } catch { }
     $m = ''; try { $m = [string]$Err.Exception.Message } catch { }
     return ($id -like 'NoMatchingEventsFound*' -or $m -match 'No events were found')
+}
+# Windows says so when a log source (for example a graphics vendor's) is not on this PC. That is normal, not a problem.
+function Test-FixItNoProvider {
+    param($Err)
+    $id = ''; try { $id = [string]$Err.FullyQualifiedErrorId } catch { }
+    $m = ''; try { $m = [string]$Err.Exception.Message } catch { }
+    return ($id -like 'NoMatchingProvider*' -or $m -match '(?i)not an event provider|providers? (do|does) not exist|no (such )?(event )?providers?\b|provider\b.{0,60}(was |is )?not found')
+}
+# Says once per run, in the log only, which log source is not on this PC (the person never sees it).
+$script:ProvidersMissingLogged = @{}
+function Write-FixItProviderMissing {
+    param([string]$Provider)
+    try {
+        if ($null -eq $script:ProvidersMissingLogged) { $script:ProvidersMissingLogged = @{} }
+        if ($script:ProvidersMissingLogged.ContainsKey($Provider)) { return }
+        $script:ProvidersMissingLogged[$Provider] = $true
+    } catch { }
+    Write-FixItLog ('Windows log source {0} is not on this PC, so it has no entries (normal)' -f $Provider) 'DEBUG'
 }
 function Get-FixItEvents {
     param([string]$LogName, [int]$Max = 25)
@@ -1795,9 +1824,13 @@ function Get-FixItBrowserSettings {
     $r = [ordered]@{ Homepage = ''; StartupUrls = @(); SearchName = ''; SearchUrl = ''; NotificationSites = @() }
     if ((Test-FixItHas $j 'homepage')) { $r.Homepage = [string]$j.homepage }
     if ((Test-FixItHas $j 'session') -and (Test-FixItHas $j.session 'startup_urls')) { $r.StartupUrls = @($j.session.startup_urls) }
-    if ((Test-FixItHas $j 'default_search_provider_data')) {
+    # Chrome only writes template_url_data when the default search was changed, so a missing one means "not changed" (no warning)
+    if ((Test-FixItHas $j 'default_search_provider_data') -and (Test-FixItHas $j.default_search_provider_data 'template_url_data')) {
         $t = $j.default_search_provider_data.template_url_data
-        if ($t) { $r.SearchName = [string]$t.short_name; $r.SearchUrl = [string]$t.url }
+        if ($t) {
+            if (Test-FixItHas $t 'short_name') { $r.SearchName = [string]$t.short_name }
+            if (Test-FixItHas $t 'url') { $r.SearchUrl = [string]$t.url }
+        }
     }
     if ((Test-FixItHas $j 'profile') -and (Test-FixItHas $j.profile 'content_settings')) {
         $cs = $j.profile.content_settings
@@ -2166,7 +2199,7 @@ function Confirm-FixIt {
         return ($r -eq 'Yes')
     }
     if (-not (Test-FixItCanAsk)) { Write-FixItLog ('Nobody is there to answer, so the answer is no: {0}' -f $Question) 'WARN'; return $false }
-    if ($Kind -eq 'Fixed') { $Question = $Question + ' ' + $Detail + " If it's still broken, I'll send Trey a report automatically." }
+    if ($Kind -eq 'Fixed') { $Question = $Question + ' ' + $Detail + (ConvertTo-FixItHelperText " If it's still broken, I'll send Trey a report automatically.") }
     $a = Read-Host ('{0} (Y/N)' -f $Question)
     return ($a -match '^(y|yes)$')
 }
@@ -3733,9 +3766,26 @@ function Test-FixItBasicDisplay {
 }
 # A count from the Windows log that never throws: $null means "could not be read".
 function Get-FixItDisplayEventCount {
-    param([string]$Provider, [int[]]$Ids = @(), [string]$MessageLike = '', [string]$LogName = 'System')
+    param([string]$Provider, [int[]]$Ids = @(), [string]$MessageLike = '', [string]$LogName = 'System', [switch]$Optional)
     try { return [int](Get-FixItHwEventCount -Provider $Provider -Ids $Ids -Days 7 -MessageLike $MessageLike -LogName $LogName) }
-    catch { Write-FixItLog ('Display: could not count {0} events ({1})' -f $Provider, $_.Exception.Message); return $null }
+    catch {
+        # an optional log source (a graphics vendor's, or one that only some Windows versions have) that cannot be read is not worth a line every run
+        if ($Optional -or (Test-FixItNoProvider -Err $_)) { Write-FixItProviderMissing -Provider $Provider; return $null }
+        Write-FixItLog ('Display: could not count {0} events ({1})' -f $Provider, $_.Exception.Message); return $null
+    }
+}
+# Which graphics makers' log sources are worth asking about: only those of the graphics cards this PC has (all three when the card is unknown).
+function Get-FixItDisplayVendorProviders {
+    param($Cards)
+    $names = @(@($Cards) | ForEach-Object { [string](Get-FixItProp $_ 'Name' '') })
+    $out = @()
+    if ($names.Count -eq 0) { return @('nvlddmkm', 'amdkmdag', 'igfx') }
+    foreach ($n in $names) {
+        if ($n -match '(?i)nvidia|geforce|quadro|rtx|gtx') { $out += 'nvlddmkm' }
+        if ($n -match '(?i)\bamd\b|radeon|\bati\b') { $out += 'amdkmdag' }
+        if ($n -match '(?i)intel|iris|uhd graphics|hd graphics|\barc\b') { $out += 'igfx' }
+    }
+    return @($out | Select-Object -Unique)
 }
 function Get-FixItDisplaySum {
     param($Counts)
@@ -3790,20 +3840,19 @@ function Get-FixItDisplayFacts {
     foreach ($c in $cards) { if ($null -eq $cur -and $c.Width -and $c.Height) { $cur = [pscustomobject]@{ Width = [int]$c.Width; Height = [int]$c.Height; Hz = $c.Hz } } }
 
     $stop = 'stopped responding|has successfully recovered|recovered|TDR|reset'
-    $resets = Get-FixItDisplaySum @(
-        (Get-FixItDisplayEventCount -Provider 'Display' -Ids @(4101)),
-        (Get-FixItDisplayEventCount -Provider 'nvlddmkm' -MessageLike $stop),
-        (Get-FixItDisplayEventCount -Provider 'amdkmdag' -MessageLike $stop),
-        (Get-FixItDisplayEventCount -Provider 'igfx' -MessageLike $stop))
+    $rc = @((Get-FixItDisplayEventCount -Provider 'Display' -Ids @(4101)))
+    foreach ($vp in @(Get-FixItDisplayVendorProviders -Cards $cards)) { $rc += (Get-FixItDisplayEventCount -Provider $vp -MessageLike $stop -Optional) }
+    $resets = Get-FixItDisplaySum $rc
     $power = Get-FixItDisplayEventCount -Provider 'Microsoft-Windows-Kernel-Power' -Ids @(41)
     $whea = Get-FixItDisplayEventCount -Provider 'Microsoft-Windows-WHEA-Logger'
     $live = Get-FixItDisplayEventCount -Provider 'Windows Error Reporting' -Ids @(1001) -MessageLike 'LiveKernelEvent' -LogName 'Application'
     $plug = Get-FixItDisplaySum @(
         (Get-FixItDisplayEventCount -Provider 'Microsoft-Windows-Kernel-PnP' -MessageLike 'DISPLAY\\'),
-        (Get-FixItDisplayEventCount -Provider 'Microsoft-Windows-DeviceSetupManager' -MessageLike 'monitor|display'))
+        (Get-FixItDisplayEventCount -Provider 'Microsoft-Windows-DeviceSetupManager' -MessageLike 'monitor|display' -Optional))
     return [pscustomobject]@{ Cards = @($cards); ScreenCount = $screens; Connections = @($conn); Current = $cur; Recommended = $rec; Resets = $resets; PowerLoss = $power; Whea = $whea; LiveKernel = $live; PlugEvents = $plug; Notes = @($notes) }
 }
 
+$script:DisplaySuddenStopsMany = 5   # this many sudden stops in a week is worth a call to the helper even without a hardware error
 function Get-FixItDisplayNum { param($Value) if ($null -eq $Value -or [string]$Value -eq '') { return 0 }; return [int]$Value }
 
 # Says in plain words what it looks like. Kind: driver, connection, both, none or unknown.
@@ -3812,7 +3861,7 @@ function Get-FixItDisplayVerdict {
     $nothing = ($null -eq $Facts)
     if (-not $nothing) { $nothing = ((@(Get-FixItProp $Facts 'Cards' @()).Count -eq 0) -and ($null -eq (Get-FixItProp $Facts 'Resets' $null)) -and ($null -eq (Get-FixItProp $Facts 'PlugEvents' $null))) }
     if ($nothing) {
-        return [pscustomobject]@{ Kind = 'unknown'; Text = 'I cannot see enough about your screen to say what is wrong.'; Suggestion = 'Please click Send Trey a report, so he can look.'; Extra = '' }
+        return [pscustomobject]@{ Kind = 'unknown'; Text = 'I cannot see enough about your screen to say what is wrong.'; Suggestion = (ConvertTo-FixItHelperText 'Please click Send Trey a report, so he can look.'); Extra = '' }
     }
     $cards = @(Get-FixItProp $Facts 'Cards' @())
     $cardBad = $false
@@ -3832,9 +3881,16 @@ function Get-FixItDisplayVerdict {
     elseif ($driver) { $kind = 'driver'; $text = $dText; $fix = $dFix }
     elseif ($lost) { $kind = 'connection'; $text = $cText; $fix = $cFix }
     $extra = ''
-    $n = (Get-FixItDisplayNum (Get-FixItProp $Facts 'PowerLoss' $null)) + (Get-FixItDisplayNum (Get-FixItProp $Facts 'Whea' $null)) + (Get-FixItDisplayNum (Get-FixItProp $Facts 'LiveKernel' $null))
-    if ($n -gt 0) { $extra = 'Windows also stopped suddenly or reported a hardware error {0} time(s) this week. If it keeps happening, please call Trey.' -f $n }
-    return [pscustomobject]@{ Kind = $kind; Text = $text; Suggestion = $fix; Extra = $extra }
+    # Sudden stops (Kernel-Power 41) include plain power loss (a switched-off power strip, an outage), so they are said calmly and on their own.
+    # The helper is only suggested for real hardware errors (WHEA, LiveKernelEvent, graphics driver crashes) or when sudden stops are frequent.
+    $sudden = Get-FixItDisplayNum (Get-FixItProp $Facts 'PowerLoss' $null)
+    $hard = (Get-FixItDisplayNum (Get-FixItProp $Facts 'Whea' $null)) + (Get-FixItDisplayNum (Get-FixItProp $Facts 'LiveKernel' $null))
+    $parts = @()
+    if ($sudden -gt 0) { $parts += ('Your computer turned off without shutting down {0} this week. This often happens when power is lost.' -f $(if ($sudden -eq 1) { 'once' } else { [string]$sudden + ' times' })) }
+    if ($hard -gt 0) { $parts += ('Windows also reported {0} hardware {1} this week.' -f $hard, $(if ($hard -eq 1) { 'error' } else { 'errors' })) }
+    if ($parts.Count -gt 0 -and ($hard -gt 0 -or $resets -gt 0 -or $sudden -ge $script:DisplaySuddenStopsMany)) { $parts += ('If it keeps happening, please call {0}.' -f (Get-FixItHelperName)) }
+    $extra = ($parts -join ' ')
+    return [pscustomobject]@{ Kind = $kind; Text = $text; Suggestion = (ConvertTo-FixItHelperText $fix); Extra = $extra }
 }
 
 function Format-FixItDisplayCount {
@@ -3868,7 +3924,7 @@ function Get-FixItDisplayLines {
         if ($rec) { $o += ('Best size for this screen: {0} x {1}' -f $rec.Width, $rec.Height) }
         $o += ('Graphics driver crashes and restarts, last 7 days: {0}' -f (Format-FixItDisplayCount (Get-FixItProp $Facts 'Resets' $null)))
         $o += ('Screen plugged or unplugged, last 7 days: {0}' -f (Format-FixItDisplayCount (Get-FixItProp $Facts 'PlugEvents' $null)))
-        $o += ('Windows stopped suddenly (power), last 7 days: {0}' -f (Format-FixItDisplayCount (Get-FixItProp $Facts 'PowerLoss' $null)))
+        $o += ('Computer turned off without shutting down, last 7 days: {0}' -f (Format-FixItDisplayCount (Get-FixItProp $Facts 'PowerLoss' $null)))
         $o += ('Hardware errors (WHEA), last 7 days: {0}' -f (Format-FixItDisplayCount (Get-FixItProp $Facts 'Whea' $null)))
         $o += ('Graphics hardware errors (LiveKernelEvent), last 7 days: {0}' -f (Format-FixItDisplayCount (Get-FixItProp $Facts 'LiveKernel' $null)))
         foreach ($n in @(Get-FixItProp $Facts 'Notes' @())) { $o += ('Not available: {0}' -f $n) }
@@ -5319,7 +5375,11 @@ function Get-FixItHwEventCount {
     $f = @{ LogName = $LogName; ProviderName = $Provider; StartTime = (Get-Date).AddDays(-$Days) }
     if ($Ids.Count -gt 0) { $f['Id'] = $Ids }
     if ($Levels.Count -gt 0) { $f['Level'] = $Levels }
-    try { $ev = @(Get-WinEvent -FilterHashtable $f -MaxEvents 200 -ErrorAction Stop) } catch { if (Test-FixItNoEvents -Err $_) { return 0 }; throw }
+    try { $ev = @(Get-WinEvent -FilterHashtable $f -MaxEvents 200 -ErrorAction Stop) } catch {
+        if (Test-FixItNoEvents -Err $_) { return 0 }
+        if (Test-FixItNoProvider -Err $_) { Write-FixItProviderMissing -Provider $Provider; return 0 }   # that log source is not on this PC, so it has no entries
+        throw
+    }
     if ($MessageLike) { $ev = @($ev | Where-Object { ([string]$_.Message) -match $MessageLike }) }
     return [int]$ev.Count
 }
@@ -5843,9 +5903,9 @@ function Format-FixItHistoryLine {
     $when = ([datetime]$Item.Time).ToString('ddd MMM d, h:mm tt', [Globalization.CultureInfo]::InvariantCulture)
     $res = 'finished (you did not say if it worked)'
     if ($Item.Answer -eq 'yes') { $res = 'WORKED (you said yes)' }
-    elseif ($Item.Answer -eq 'no') { $res = 'did NOT work (you said no) - a report went to Trey' }
+    elseif ($Item.Answer -eq 'no') { $res = 'did NOT work (you said no) - a report went to ' + (Get-FixItRecipient) }
     elseif (-not $Item.Ok) { $res = 'could not be finished' }
-    return ('{0}  -  {1}  -  {2}' -f $when, $Item.Title, $res)
+    return (ConvertTo-FixItHelperText ('{0}  -  {1}  -  {2}' -f $when, $Item.Title, $res))
 }
 function Invoke-HistoryShow {
     Write-FixItLog 'Started: what did I fix'

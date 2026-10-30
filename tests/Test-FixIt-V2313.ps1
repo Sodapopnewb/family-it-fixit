@@ -195,7 +195,7 @@ Assert ($f.ScreenCount -eq 1 -and ($f.Connections -join ',') -eq 'HDMI') 'one sc
 Assert ($f.Current.Width -eq 1366 -and $f.Current.Height -eq 768 -and $f.Recommended.Width -eq 1920 -and $f.Recommended.Height -eq 1080 -and $f.Recommended.Hz -eq 60) 'the current size and the screen''s preferred size (from its own preferred mode)'
 Assert ($f.Resets -eq 0 -and $f.PowerLoss -eq 0 -and $f.Whea -eq 0 -and $f.LiveKernel -eq 0 -and $f.PlugEvents -eq 0) 'all counts are 0 on a quiet PC'
 $calls = $script:EvCalls -join ' ; '
-Assert ($calls -match 'Display\|4101\|System\|7' -and $calls -match 'nvlddmkm' -and $calls -match 'amdkmdag' -and $calls -match 'igfx') 'it counts Display 4101 and the nvlddmkm, amdkmdag and igfx entries for 7 days'
+Assert ($calls -match 'Display\|4101\|System\|7' -and $calls -match 'nvlddmkm' -and $calls -notmatch 'amdkmdag|igfx') 'it counts Display 4101 and the entries of the graphics maker this PC has (NVIDIA here) for 7 days'
 Assert ($calls -match 'Microsoft-Windows-Kernel-Power\|41\|' -and $calls -match 'WHEA-Logger' -and $calls -match 'Windows Error Reporting\|1001\|Application' -and $calls -match 'Kernel-PnP' -and $calls -match 'DeviceSetupManager') 'it also counts Kernel-Power 41, WHEA, LiveKernelEvent reports and screen plug/unplug entries'
 $script:Ev = @{ 'Display' = 3; 'nvlddmkm' = 2; 'Microsoft-Windows-Kernel-Power' = 1; 'Microsoft-Windows-Kernel-PnP' = 4; 'Microsoft-Windows-DeviceSetupManager' = 3 }
 $f = Get-FixItDisplayFacts
@@ -242,7 +242,7 @@ Assert ($v.Kind -eq 'both' -and $v.Text -match 'driver' -and $v.Suggestion -matc
 $v = Get-FixItDisplayVerdict -Facts (New-Facts)
 Assert ($v.Kind -eq 'none' -and $v.Text -match 'did not find' -and $v.Suggestion -match 'click this again') 'nothing found: says so and says what to do if it comes back'
 $v = Get-FixItDisplayVerdict -Facts (New-Facts -Power 2 -Whea 1)
-Assert ($v.Extra -match '3 time' -and $v.Extra -match 'call Trey') 'sudden stops and hardware errors are added up in one short line'
+Assert ($v.Extra -match '2 times' -and $v.Extra -match '1 hardware error' -and $v.Extra -match 'call Trey') 'sudden stops and hardware errors are said in one short passage (details in the 2.3.15 tests)'
 $v = Get-FixItDisplayVerdict -Facts $null
 Assert ($v.Kind -eq 'unknown') 'nothing could be read: says so'
 $v = Get-FixItDisplayVerdict -Facts ([pscustomobject]@{ Cards = @(); ScreenCount = $null; Resets = $null; PlugEvents = $null })
@@ -257,8 +257,8 @@ $lines = @(Get-FixItDisplayLines -Facts $fx -Verdict (Get-FixItDisplayVerdict -F
 $txt = $lines -join "`n"
 Assert ($txt -match 'Graphics card: NVIDIA - working, driver 1\.0 from 12 Mar 2025') 'the card line has the driver version and date'
 Assert ($txt -match 'Screens connected: 1 \(HDMI\)' -and $txt -match 'Screen size now: 1366 x 768 at 60 Hz' -and $txt -match 'Best size for this screen: 1920 x 1080') 'the screens, the connection type and the sizes are listed'
-Assert ($txt -match 'crashes and restarts, last 7 days: 4' -and $txt -match 'Windows stopped suddenly \(power\), last 7 days: 2' -and $txt -match 'LiveKernelEvent\), last 7 days: not available') 'the counts are listed; an unreadable one says "not available"'
-Assert ($lines[-2] -match '^It looks like: The graphics driver keeps crashing and restarting\.' -and $lines[-1] -match 'Windows also stopped suddenly') 'the plain verdict is near the end'
+Assert ($txt -match 'crashes and restarts, last 7 days: 4' -and $txt -match 'Computer turned off without shutting down, last 7 days: 2' -and $txt -match 'LiveKernelEvent\), last 7 days: not available') 'the counts are listed; an unreadable one says "not available"'
+Assert ($lines[-2] -match '^It looks like: The graphics driver keeps crashing and restarting\.' -and $lines[-1] -match 'turned off without shutting down') 'the plain verdict is near the end'
 $lt = Get-FixItDisplayLines -Facts $null -Verdict $null
 Assert (@($lt).Count -eq 1 -and @($lt)[0] -match 'could not be read') 'no facts: one short line'
 
