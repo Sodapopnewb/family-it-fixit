@@ -347,6 +347,7 @@ $pub = [IO.File]::ReadAllText((Join-Path $root 'tools/Publish-FixIt.ps1'))
 Assert ($pub.Contains("'tests/Test-FixIt-V2314.ps1'")) 'the publish tool carries the new test file'
 $rd = [IO.File]::ReadAllText((Join-Path $root 'README.md'))
 Assert ($rd -match 'Who helps you' -and $rd -match 'Quick Assist' -and $rd -match 'Your helper') 'the README explains the helper, Quick Assist and the Your helper item'
+Assert (($srcText -match "p2Title = 'Send my helper a report'") -and ($srcText -match "p1Title = 'Share my screen'")) 'the two big main buttons switch to short words when the helper name is long or not Trey'
 
 Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host ''

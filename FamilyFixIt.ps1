@@ -8898,7 +8898,9 @@ function Show-FixItWindowOnce {
     $p1Title = 'Let Trey see my screen'; $p1Sub = 'Opens Zoho Assist. Trey gives you a code.'
     if (-not (Test-FixItHelperIsTrey)) { $p1Title = 'Share my screen'; $p1Sub = 'Opens Quick Assist for your helper.' }   # short words: a long helper name would not fit on the button
     $p1 = New-FixItTile -Run 'Screen' -Title $p1Title -Sub $p1Sub -IconKey 'mon' -Style 'primary' -IconBg '#3F8BCB' -X $MX -Y $lay.PrimaryY -W 332 -H 76 -Wide $true
-    $p2 = New-FixItTile -Run 'Report' -Title 'Send Trey a report' -Sub 'Something else is wrong' -IconKey 'send' -Style 'outline' -IconBg '#E6F0FA' -X ($MX + 347) -Y $lay.PrimaryY -W 332 -H 76 -Wide $true
+    $p2Title = 'Send Trey a report'
+    if (-not (Test-FixItHelperIsTrey) -and ([string](Get-FixItHelper).Name).Length -gt 8) { $p2Title = 'Send my helper a report' }   # a long name would not fit on the button
+    $p2 = New-FixItTile -Run 'Report' -Title $p2Title -Sub 'Something else is wrong' -IconKey 'send' -Style 'outline' -IconBg '#E6F0FA' -X ($MX + 347) -Y $lay.PrimaryY -W 332 -H 76 -Wide $true
     $form.Controls.Add($p1); $form.Controls.Add($p2); [void]$script:FixButtons.Add($p1); [void]$script:FixButtons.Add($p2)
     [void](Add-FixItHelpDot -Tile $p1 -Key 'Screen'); [void](Add-FixItHelpDot -Tile $p2 -Key 'Report')
 
