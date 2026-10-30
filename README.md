@@ -21,7 +21,7 @@ The main buttons:
 - **Clean up my browser**, **Fix Windows Update**, **Fix OneDrive**
 - **I see a scary pop-up** (red) - tells you not to call the number, to turn off Wi-Fi, to click nothing and to call Trey, and sends Trey an alert report. Trey never asks for codes or remote tools unless *you* called him.
 - **If a web page takes over your whole screen** you do not have to find a button. A small box appears in the bottom right corner: *"Are you OK? Is a website scaring you?"* Click **Get me out of here** (or press **Ctrl + Shift + F** at any time). The browser is closed, you see *"You're safe. Don't call any number that page showed. Trey has been told."*, and Trey gets an alert. Click **I'm fine** if it is just a video you chose to watch full screen. When you open the browser again, do not click **Restore** if it asks.
-- **Let Trey see my screen** - opens Zoho's page. Trey gives you a code; type it in and click Join. Only do this if YOU called Trey. (If your helper is someone else, this opens Windows Quick Assist instead: they give you a 6-digit code, you type it in, click Submit and then Allow.)
+- **Let Trey see my screen** - opens Zoho's page. Trey gives you a code; type it in and click Join. Only do this if YOU called Trey. (If your helper is someone else, the button is called **Share my screen** and it opens Windows Quick Assist instead: they give you a 6-digit code, you type it in, click Submit and then Allow.)
 - **Send Trey a report** - saves a copy in the **Family Fix-It Reports** folder in Documents and sends it to Trey ("Report sent to Trey"). If sending fails it says to send the saved file to Trey yourself.
 
 The left side bar (**Your helper** is the last item; it shows who helps you and lets you change it):

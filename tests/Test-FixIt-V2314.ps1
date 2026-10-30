@@ -79,7 +79,7 @@ Assert ((ConvertTo-FixItHelperText "Trey's help; ask him; he can see; call him")
 Assert ((ConvertTo-FixItHelperText ("Went to $Mark for now. Trey")) -eq 'Went to Trey for now. Mike') 'the Trey mark stays Trey, other Treys change'
 Assert ((ConvertTo-FixItHelperText 'Treyvon is fine') -eq 'Treyvon is fine') 'only the whole word Trey changes'
 $tbl = Get-FixItActionTable
-Assert ($tbl['Report'].Title -eq 'Send Mike a report' -and $tbl['Screen'].Title -eq 'Let Mike see my screen' -and $tbl['Donate'].Title -eq 'Thank Mike') 'the button names say Mike'
+Assert ($tbl['Report'].Title -eq 'Send Mike a report' -and $tbl['Screen'].Title -eq 'Share my screen' -and $tbl['Donate'].Title -eq 'Thank Mike') 'the button names say Mike'
 Assert ($tbl.ContainsKey('YourHelper') -and $tbl['YourHelper'].Fn -eq 'Invoke-FixItYourHelper') 'there is a "Your helper" action'
 Assert ((Get-FixItHelpText -Key 'Report').Text -notmatch 'Trey' -and (Get-FixItHelpText -Key 'Report').Text -match 'Mike') 'the ? help for the report names Mike'
 Assert ((Get-FixItHelpText -Key 'Screen').Text -match 'Quick Assist' -and (Get-FixItHelpText -Key 'Screen').Text -notmatch 'Zoho|Trey') 'the ? help for the screen is about Quick Assist and Mike'

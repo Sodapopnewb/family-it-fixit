@@ -4884,6 +4884,7 @@ function Get-FixItActionTable {
                 'Nothing is installed ahead of time, and Trey cannot see your screen until you do this.',
                 'Only do this if YOU called Trey. If someone else asked you to, say no.')
             Restart = ''; SignIn = '' }
+        $tbl.Screen.Title = 'Share my screen'   # not "Let <name> see my screen": a long name would not fit on the button (screen check)
         foreach ($k in @($tbl.Keys)) { $tbl[$k].Title = ConvertTo-FixItHelperText ([string]$tbl[$k].Title) }
     }
     return $tbl
@@ -8521,6 +8522,7 @@ function Get-FixItHelpTable {
         Report = @{ Title = 'Send Trey a report'; Text = ("I collect facts that help Trey, such as your Windows version, printers and recent problems. I save a copy $rw and send it to Trey. It has no files or passwords, and I change nothing.") }
     }
     if (-not (Test-FixItHelperIsTrey)) {
+        $tb.Screen.Title = 'Share my screen'
         $tb.Screen.Text = 'I open Windows Quick Assist, a free Microsoft program. Only when you type the 6-digit code from Trey, click Submit and then Allow can Trey see your screen. Only do this if you called Trey.'
     }
     return $tb
@@ -8893,7 +8895,9 @@ function Show-FixItWindowOnce {
     }
     $scam = New-FixItTile -Run 'Scam' -Title 'I see a scary pop-up' -Sub "A warning telling me to call a number? Don't call it. Click here." -IconKey 'warn' -Style 'scam' -IconBg '#D9473C' -X $MX -Y $lay.ScamY -W 679 -H 72 -Wide $true
     $form.Controls.Add($scam); [void]$script:FixButtons.Add($scam); [void](Add-FixItHelpDot -Tile $scam -Key 'Scam')
-    $p1 = New-FixItTile -Run 'Screen' -Title 'Let Trey see my screen' -Sub $(if (Test-FixItHelperIsTrey) { 'Opens Zoho Assist. Trey gives you a code.' } else { 'Opens Quick Assist. Trey gives you a code.' }) -IconKey 'mon' -Style 'primary' -IconBg '#3F8BCB' -X $MX -Y $lay.PrimaryY -W 332 -H 76 -Wide $true
+    $p1Title = 'Let Trey see my screen'; $p1Sub = 'Opens Zoho Assist. Trey gives you a code.'
+    if (-not (Test-FixItHelperIsTrey)) { $p1Title = 'Share my screen'; $p1Sub = 'Opens Quick Assist for your helper.' }   # short words: a long helper name would not fit on the button
+    $p1 = New-FixItTile -Run 'Screen' -Title $p1Title -Sub $p1Sub -IconKey 'mon' -Style 'primary' -IconBg '#3F8BCB' -X $MX -Y $lay.PrimaryY -W 332 -H 76 -Wide $true
     $p2 = New-FixItTile -Run 'Report' -Title 'Send Trey a report' -Sub 'Something else is wrong' -IconKey 'send' -Style 'outline' -IconBg '#E6F0FA' -X ($MX + 347) -Y $lay.PrimaryY -W 332 -H 76 -Wide $true
     $form.Controls.Add($p1); $form.Controls.Add($p2); [void]$script:FixButtons.Add($p1); [void]$script:FixButtons.Add($p2)
     [void](Add-FixItHelpDot -Tile $p1 -Key 'Screen'); [void](Add-FixItHelpDot -Tile $p2 -Key 'Report')
@@ -9565,7 +9569,7 @@ function Show-FixItHelperForm {
     $pn.Location = New-Object System.Drawing.Point(0, 0)
     $f.Controls.Add($pn)
     $lf = New-Object System.Drawing.Font('Segoe UI', [single](13 * $S), [System.Drawing.FontStyle]::Regular, $px)
-    $tf = New-Object System.Drawing.Font('Segoe UI', [single](16 * $S), [System.Drawing.FontStyle]::Regular, $px)
+    $tbFont = New-Object System.Drawing.Font('Segoe UI', [single](16 * $S), [System.Drawing.FontStyle]::Regular, $px)
     $qf = New-Object System.Drawing.Font('Segoe UI', [single](18 * $S), [System.Drawing.FontStyle]::Bold, $px)
     $rf = New-Object System.Drawing.Font('Segoe UI', [single](17 * $S), [System.Drawing.FontStyle]::Regular, $px)
     $noteTrey = "You can change this later with 'Your helper' on the left."
@@ -9601,7 +9605,7 @@ function Show-FixItHelperForm {
     $l1.Location = New-Object System.Drawing.Point([int](56 * $S), ([int](166 * $S) + $dy)); $l1.Size = New-Object System.Drawing.Size([int](480 * $S), [int](22 * $S))
     $pn.Controls.Add($l1)
     $tn = New-Object System.Windows.Forms.TextBox
-    $tn.Font = $tf; $tn.MaxLength = $script:HelperNameMax
+    $tn.Font = $tbFont; $tn.MaxLength = $script:HelperNameMax
     $tn.Location = New-Object System.Drawing.Point([int](56 * $S), ([int](190 * $S) + $dy)); $tn.Size = New-Object System.Drawing.Size([int](480 * $S), [int](36 * $S))
     $tn.AccessibleName = 'Their first name'
     $pn.Controls.Add($tn)
@@ -9610,7 +9614,7 @@ function Show-FixItHelperForm {
     $l2.Location = New-Object System.Drawing.Point([int](56 * $S), ([int](236 * $S) + $dy)); $l2.Size = New-Object System.Drawing.Size([int](480 * $S), [int](22 * $S))
     $pn.Controls.Add($l2)
     $te = New-Object System.Windows.Forms.TextBox
-    $te.Font = $tf; $te.MaxLength = $script:HelperEmailMax
+    $te.Font = $tbFont; $te.MaxLength = $script:HelperEmailMax
     $te.Location = New-Object System.Drawing.Point([int](56 * $S), ([int](260 * $S) + $dy)); $te.Size = New-Object System.Drawing.Size([int](480 * $S), [int](36 * $S))
     $te.AccessibleName = 'Their email address'
     $pn.Controls.Add($te)
