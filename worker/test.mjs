@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { handleRequest, clientKey } from './index.js';
+import { handleRequest, clientKey, resetMailCache } from './index.js';
+import { addGoogle } from './mock-google.mjs';
 
 let pass = 0;
 async function t(name, fn) { await fn(); pass++; console.log('PASS ' + name); }
@@ -9,13 +10,14 @@ function mkEnv(opts) {
   const rl = new Map();
   const sent = [];
   const env = {
-    REPORTS: { put: async (k, v, o) => { (k.startsWith('rl/') ? rl : store).set(k, { v, o }); }, get: async (k) => { const e = (k.startsWith('rl/') ? rl : store).get(k); return e ? e.v : null; } },
+    REPORTS: { put: async (k, v, o) => { ((k.startsWith('rl/') || k.startsWith('gmail/')) ? rl : store).set(k, { v, o }); }, get: async (k) => { const e = ((k.startsWith('rl/') || k.startsWith('gmail/')) ? rl : store).get(k); return e ? e.v : null; } },
     RL: { limit: async () => ({ success: !(opts && opts.limited) }) },
     _store: store, _rl: rl, _sent: sent
   };
   if (opts && opts.email) {
-    env.EMAIL = { send: async (m) => { if (opts.emailFails) { throw new Error('x'); } sent.push(m); } };
-    env.REPORT_TO = 'to@example.com'; env.REPORT_FROM = 'from@example.com';
+    resetMailCache();
+    const g = addGoogle(env, { sendFails: opts.emailFails ? 500 : 0 }); env._sent = g.sent;
+    env.REPORT_TO = 'to@example.com';
   }
   return env;
 }

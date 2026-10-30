@@ -1,6 +1,10 @@
 // Family Fix-It report receiver. Deploy from this folder:  wrangler deploy
 // The ids below are the ones already in use by the deployed worker (KV "family-fixit-reports", Durable Object RateLimiter).
-// Email is OFF until the lines marked EMAIL are filled in (see README.md "Who helps you? deploy steps").
+// Email goes out through the Gmail API as the Family Fix-It Gmail account (OAuth refresh token). It stays OFF until the three
+// secrets exist, and nothing is emailed without them (every report is then kept in KV for Trey, as before). Set them once:
+//   wrangler secret put GMAIL_CLIENT_ID
+//   wrangler secret put GMAIL_CLIENT_SECRET
+//   wrangler secret put GMAIL_REFRESH_TOKEN      (made by ./get-gmail-token, see GMAIL-SETUP.md)
 {
   "name": "fixit-report",
   "main": "index.js",
@@ -15,16 +19,18 @@
     { "tag": "v1", "new_sqlite_classes": [ "RateLimiter" ] }
   ],
   "vars": {
-    // EMAIL: the address reports and confirm emails are sent from. Its domain must be onboarded to Cloudflare Email Sending.
-    // "REPORT_FROM": "Family Fix-It <fixit@YOUR-DOMAIN>",
-    // EMAIL: Trey's own address (reports for Trey go here too, and a helper with this address is treated as Trey). Optional.
+    // The From line of every email. Must be the Gmail account whose refresh token is stored in GMAIL_REFRESH_TOKEN.
+    "MAIL_FROM": "Family Fix-It <familyfixit.help@gmail.com>",
+    // Trey's own address (reports for Trey go here too, and a helper with this address is treated as Trey). Optional.
     // "REPORT_TO": "trey@example.com",
-    // EMAIL: the public address of this worker, used in the links in the emails. Default: the address the request came in on.
+    // Extra addresses treated as Trey (comma separated). Optional; default is REPORT_TO.
+    // "OPERATOR_EMAILS": "trey@example.com",
+    // The public address of this worker, used in the links in the emails. Default: the address the request came in on.
     // "PUBLIC_URL": "https://fixit-report.hg-fixit.workers.dev",
-    // Optional caps (defaults: 150 confirm emails a day, 500 report emails a day).
-    "MAX_CONFIRMS_PER_DAY": "150",
-    "MAX_MAILS_PER_DAY": "500"
+    // Daily caps. A consumer Gmail account may send about 500 messages a day, so these stay well under it:
+    // 100 confirm emails, 200 helper report emails, 300 emails in all (Trey's own copies may use 50 more).
+    "MAX_CONFIRMS_PER_DAY": "100",
+    "MAX_MAILS_PER_DAY": "200",
+    "MAX_TOTAL_MAILS_PER_DAY": "300"
   }
-  // EMAIL: uncomment after the domain is onboarded:
-  // "send_email": [ { "name": "EMAIL" } ]
 }

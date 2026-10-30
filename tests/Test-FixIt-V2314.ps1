@@ -331,7 +331,7 @@ Assert ($srcText -match "DefaultReportUrl = 'https://fixit-report\.hg-fixit\.wor
 $bytes = [IO.File]::ReadAllBytes($src)
 Assert (-not ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB)) 'the program has no byte order mark'
 Assert (-not ($bytes | Where-Object { $_ -gt 127 } | Select-Object -First 1)) 'the program is plain ASCII'
-foreach ($f in @('tests/Test-FixIt-V2314.ps1', 'README.md', 'guides.json', 'worker/index.js', 'worker/test.mjs', 'worker/test-helper.mjs', 'worker/wrangler.jsonc', 'worker/README.md')) {
+foreach ($f in @('tests/Test-FixIt-V2314.ps1', 'README.md', 'guides.json', 'worker/index.js', 'worker/test.mjs', 'worker/test-helper.mjs', 'worker/wrangler.jsonc', 'worker/README.md', 'worker/GMAIL-SETUP.md', 'worker/get-gmail-token', 'worker/mock-google.mjs', 'worker/test-gmail.mjs', 'worker/test-token-script.mjs')) {
     $fp = Join-Path $root $f
     if (-not (Test-Path -LiteralPath $fp)) { if ($f -notlike 'worker/*') { Assert $false "$f exists" }; continue }   # the service folder is only in the full repository, not in the family's download
     $b = [IO.File]::ReadAllBytes($fp)

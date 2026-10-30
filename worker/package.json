@@ -2,5 +2,5 @@
   "name": "fixit-report-worker",
   "private": true,
   "type": "module",
-  "scripts": { "test": "node test.mjs && node test-helper.mjs" }
+  "scripts": { "test": "node test.mjs && node test-helper.mjs && node test-gmail.mjs && node test-token-script.mjs" }
 }

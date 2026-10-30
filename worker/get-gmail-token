@@ -1,0 +1,151 @@
+#!/usr/bin/env node
+// get-gmail-token - one-time helper for Trey's Linux box. It gets a Gmail "refresh token" for the Family Fix-It
+// Gmail account (permission to SEND mail only) and saves it in a private file. The token is never printed.
+//
+//   export GMAIL_CLIENT_ID='...apps.googleusercontent.com'
+//   export GMAIL_CLIENT_SECRET='...'
+//   ./get-gmail-token            # prints a link; you open it in ANY browser (even on another computer)
+//   ./get-gmail-token --check    # later: proves the saved token still works (prints only ok / the error)
+//
+// Options:  --port N   port in the redirect address (default 8085; must be the same in both steps)
+//           --listen   catch the redirect right here (only when the browser runs on THIS machine)
+//           --out FILE where to save (default /workspace/family-it-fixit/secrets/gmail-refresh-token.txt)
+//
+// How the sign-in works: the link asks Google for the "send email" permission only (access_type=offline,
+// prompt=consent so Google really hands out a refresh token). After you allow it, Google sends the browser to
+// http://127.0.0.1:<port>/?code=... . If the browser is on another computer that page says "can't connect" -
+// that is expected. Copy the whole address from the address bar and paste it here.
+// The request uses PKCE and a random "state", so a pasted address from some other sign-in is refused.
+// Works as CommonJS or ES module; needs Node 18 or newer (built-in fetch).
+
+(async () => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const crypto = await import('node:crypto');
+  const readline = await import('node:readline');
+  const http = await import('node:http');
+
+  const SCOPE = 'https://www.googleapis.com/auth/gmail.send';
+  const AUTH_URL = process.env.GMAIL_AUTH_URL || 'https://accounts.google.com/o/oauth2/v2/auth';
+  const TOKEN_URL = process.env.GMAIL_TOKEN_URL || 'https://oauth2.googleapis.com/token';
+  const DEFAULT_OUT = '/workspace/family-it-fixit/secrets/gmail-refresh-token.txt';
+
+  const args = process.argv.slice(2);
+  function opt(name) { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined; }
+  if (args.includes('-h') || args.includes('--help')) {
+    console.log('Usage: GMAIL_CLIENT_ID=... GMAIL_CLIENT_SECRET=... get-gmail-token [--listen] [--port N] [--out FILE] [--check]');
+    return 0;
+  }
+  const port = parseInt(opt('--port') || '8085', 10);
+  const out = path.resolve(opt('--out') || process.env.GMAIL_TOKEN_FILE || DEFAULT_OUT);
+  const clientId = (process.env.GMAIL_CLIENT_ID || '').trim();
+  const clientSecret = (process.env.GMAIL_CLIENT_SECRET || '').trim();
+  if (!(port > 0 && port < 65536)) { console.error('That --port is not a port number.'); return 2; }
+  if (!clientId || !clientSecret) {
+    console.error('Set GMAIL_CLIENT_ID and GMAIL_CLIENT_SECRET first (from the Google Cloud "OAuth client" you created), e.g.:\n  export GMAIL_CLIENT_ID=\'...\'\n  export GMAIL_CLIENT_SECRET=\'...\'');
+    return 2;
+  }
+  const redirect = 'http://127.0.0.1:' + port;
+
+  async function tokenPost(fields) {
+    let res;
+    try { res = await fetch(TOKEN_URL, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(fields).toString() }); }
+    catch (e) { return { ok: false, error: 'could not reach Google (' + (e && e.message ? e.message : 'network error') + ')' }; }
+    let j = {};
+    try { j = await res.json(); } catch (e) { j = {}; }
+    if (!res.ok) { return { ok: false, error: (j.error || ('HTTP ' + res.status)) + (j.error_description ? ' - ' + j.error_description : '') }; }
+    return { ok: true, j: j };
+  }
+
+  function saveToken(token) {
+    const dir = path.dirname(out);
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    try { fs.chmodSync(dir, 0o700); } catch (e) { /* a directory we do not own: leave it */ }
+    const ign = path.join(dir, '.gitignore');
+    if (!fs.existsSync(ign)) { fs.writeFileSync(ign, '*\n', { mode: 0o600 }); }
+    const tmp = out + '.tmp-' + process.pid;
+    fs.writeFileSync(tmp, token + '\n', { mode: 0o600, flag: 'wx' });
+    fs.chmodSync(tmp, 0o600);
+    fs.renameSync(tmp, out);
+    fs.chmodSync(out, 0o600);
+  }
+
+  // ---- --check: does the saved token still work?
+  if (args.includes('--check')) {
+    let saved = '';
+    try { saved = fs.readFileSync(out, 'utf8').trim(); } catch (e) { console.error('No saved token at ' + out + ' - run this script without --check first.'); return 1; }
+    const r = await tokenPost({ client_id: clientId, client_secret: clientSecret, refresh_token: saved, grant_type: 'refresh_token' });
+    if (!r.ok) { console.error('The saved token does NOT work: ' + r.error + '\nRun this script again (without --check) to get a new one.'); return 1; }
+    console.log('OK - Google accepted the saved token (it can send mail as the Family Fix-It Gmail account).' + (r.j.scope && r.j.scope.indexOf(SCOPE) < 0 ? '\nNote: the permission it carries is: ' + r.j.scope : ''));
+    return 0;
+  }
+
+  // ---- step 1: the link
+  const b64u = (buf) => buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  const verifier = b64u(crypto.randomBytes(48));
+  const challenge = b64u(crypto.createHash('sha256').update(verifier).digest());
+  const state = b64u(crypto.randomBytes(18));
+  const url = AUTH_URL + '?' + new URLSearchParams({
+    client_id: clientId, redirect_uri: redirect, response_type: 'code', scope: SCOPE,
+    access_type: 'offline', prompt: 'consent', code_challenge: challenge, code_challenge_method: 'S256', state: state
+  }).toString();
+
+  const listen = args.includes('--listen');
+  console.log('1. Open this link in a browser and sign in as the Family Fix-It Gmail account:\n\n' + url + '\n');
+  console.log('2. Google may say "Google hasn\'t verified this app". That is our own app: click Advanced, then');
+  console.log('   "Go to <app name> (unsafe)", then Continue / Allow.\n');
+
+  function readCode(text) {
+    text = String(text || '').trim();
+    if (!text) { return { error: 'Nothing was pasted.' }; }
+    let q = null;
+    if (/^https?:\/\//i.test(text) || text.indexOf('?') >= 0 || text.indexOf('code=') >= 0) {
+      try { q = new URL(/^https?:\/\//i.test(text) ? text : 'http://127.0.0.1/?' + text.replace(/^[^?]*\?/, '')).searchParams; } catch (e) { return { error: 'That does not look like the address from the browser.' }; }
+      if (q.get('error')) { return { error: 'Google said: ' + q.get('error') + (q.get('error_description') ? ' - ' + q.get('error_description') : '') }; }
+      if (q.get('state') !== state) { return { error: 'That address is from a different sign-in (the "state" does not match). Use the link printed above, in this run.' }; }
+      if (!q.get('code')) { return { error: 'The address has no code= part.' }; }
+      return { code: q.get('code') };
+    }
+    return { code: text }; // a bare code pasted on its own (cannot be checked against the state, Google still checks the PKCE proof)
+  }
+
+  let got;
+  if (listen) {
+    console.log('3. Waiting here for Google to send the browser back to ' + redirect + ' (5 minutes) ...');
+    got = await new Promise((resolve) => {
+      const srv = http.createServer((req, res) => {
+        const u = new URL(req.url, redirect);
+        if (u.pathname !== '/' && u.pathname !== '') { res.writeHead(404); res.end(); return; }
+        const r = readCode(redirect + '/' + u.search);
+        res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
+        res.end(r.code ? 'Done. You can close this tab and go back to the terminal.' : 'Not accepted: ' + r.error);
+        if (r.code || u.searchParams.get('error')) { clearTimeout(timer); srv.close(); resolve(r); }
+      });
+      const timer = setTimeout(() => { srv.close(); resolve({ error: 'Timed out after 5 minutes.' }); }, 300000);
+      srv.on('error', (e) => { clearTimeout(timer); resolve({ error: 'Could not listen on 127.0.0.1:' + port + ' (' + e.message + '). Try --port with another number, or leave out --listen.' }); });
+      srv.listen(port, '127.0.0.1');
+    });
+  } else {
+    console.log('3. After you allow it, the browser goes to a page that says "This site can\'t be reached" (or "unable to connect").');
+    console.log('   That is normal. Copy the WHOLE address from the address bar (it starts with ' + redirect + '/?code=) and paste it here.\n');
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    const line = await new Promise((resolve) => { rl.once('line', (a) => { resolve(a); rl.close(); }); rl.on('close', () => resolve('')); process.stdout.write('Paste the address (or just the code) and press Enter: '); });
+    got = readCode(line);
+  }
+  if (!got || !got.code) { console.error('\nStopped: ' + ((got && got.error) || 'no code received') + '\nNothing was saved. Run the script again for a fresh link.'); return 1; }
+
+  // ---- step 2: swap the code for the token
+  const r = await tokenPost({ client_id: clientId, client_secret: clientSecret, code: got.code, redirect_uri: redirect, grant_type: 'authorization_code', code_verifier: verifier });
+  if (!r.ok) { console.error('\nGoogle did not accept the code: ' + r.error + '\nCodes work once and only for a few minutes. Nothing was saved. Run the script again for a fresh link.'); return 1; }
+  if (!r.j.refresh_token) {
+    console.error('\nGoogle signed you in but did not hand out a refresh token. Nothing was saved.\nFix: go to https://myaccount.google.com/permissions , remove "Family Fix-It" (the app), then run this script again.');
+    return 1;
+  }
+  const granted = String(r.j.scope || '');
+  if (granted && granted.split(/\s+/).some((s) => s !== SCOPE)) { console.error('\nGoogle granted more than the send-only permission (' + granted + '). Nothing was saved. Check the OAuth consent screen scopes.'); return 1; }
+  saveToken(r.j.refresh_token);
+  console.log('\nSaved the refresh token (not shown) to:\n  ' + out + '\n  permissions: 600 (only you can read it); the folder is 700 and has a .gitignore that ignores everything.');
+  console.log('\nIf the Google app is still in "Testing" this token stops working after 7 days. Publish the app ("In production") FIRST, then run this script, so the token lasts.');
+  console.log('\nTo give it to the worker WITHOUT showing it (only when Trey says go):\n  npx wrangler secret put GMAIL_REFRESH_TOKEN < ' + out);
+  return 0;
+})().then((code) => { process.exitCode = code || 0; }, (e) => { console.error('Unexpected error: ' + (e && e.message ? e.message : e)); process.exitCode = 1; });

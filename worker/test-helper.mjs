@@ -1,6 +1,7 @@
 // Tests for the "Who helps you?" paths of the worker. Run:  node test-helper.mjs   (no network, no Cloudflare account)
 import assert from 'node:assert/strict';
-import { handleRequest, cleanName, cleanEmail, RateLimiter } from './index.js';
+import { handleRequest, cleanName, cleanEmail, RateLimiter, resetMailCache } from './index.js';
+import { addGoogle } from './mock-google.mjs';
 
 let pass = 0;
 let clock = 1000000; Date.now = () => clock; // the counters read the clock; the tests move it
@@ -10,12 +11,13 @@ function mkEnv(o) {
   o = o || {};
   const kv = new Map(); const sent = []; const objs = new Map();
   const env = {
-    REPORTS: { get: async (k) => { const e = kv.get(k); return e ? e.v : null; }, put: async (k, v, opt) => { kv.set(k, { v: v, o: opt }); } },
+    REPORTS: { get: async (k) => { const e = kv.get(k); return e ? e.v : null; }, put: async (k, v, opt) => { kv.set(k, { v: v, o: opt }); }, delete: async (k) => { kv.delete(k); } },
     LIMITER: { idFromName: (n) => n, get: (id) => { if (!objs.has(id)) { const m = new Map(); objs.set(id, new RateLimiter({ storage: { get: async (k) => m.get(k), put: async (k, v) => { m.set(k, v); } } })); } return { fetch: (u) => objs.get(id).fetch(new Request(u)) }; } },
-    REPORT_FROM: 'fixit@mail.example.org', PUBLIC_URL: 'https://w.example',
+    PUBLIC_URL: 'https://w.example',
     _kv: kv, _sent: sent
   };
-  if (o.email !== false) { env.EMAIL = { send: async (m) => { if (o.emailFails) { throw new Error('boom'); } sent.push(m); } }; }
+  resetMailCache();
+  if (o.email !== false) { addGoogle(env, { sendFails: o.emailFails ? 500 : 0 }); }
   if (o.trey) { env.REPORT_TO = 'trey@example.com'; }
   return env;
 }
@@ -60,9 +62,9 @@ await t('hello sends one confirm email to the helper, stores no report, never ma
   const env = mkEnv({ trey: true }); const g = await go(env, hello());
   assert.equal(g.r.status, 200); assert.deepEqual([g.j.delivery, g.j.helperStatus, g.j.confirmSent, g.j.confirmReason], ['trey', 'pending', true, 'sent']);
   assert.equal(env._sent.length, 1); const m = env._sent[0];
-  assert.equal(m.to, 'mike@example.net'); assert.equal(m.from, 'fixit@mail.example.org'); assert.equal(m.subject, 'Ann wants you as their Fix-It helper');
+  assert.equal(m.to, 'mike@example.net'); assert.equal(m.from, '"Family Fix-It" <familyfixit.help@gmail.com>'); assert.equal(m.subject, 'Ann wants you as their Fix-It helper');
   assert.ok(linkIn(m.text, '/confirm')); assert.ok(linkIn(m.text, '/stop'));
-  assert.ok([...env._kv.keys()].every((k) => k.startsWith('hp/'))); // nothing under report/
+  assert.ok([...env._kv.keys()].every((k) => k.startsWith('hp/') || k.startsWith('gmail/'))); // nothing under report/
 });
 await t('a report before the helper confirms goes to the operator, says so, and does not ask again within a day', async () => {
   const env = mkEnv({ trey: true }); await go(env, hello()); env._sent.length = 0;
@@ -142,7 +144,7 @@ await t('sending limits for a confirmed PC: 12 an hour, then the operator keeps 
   assert.ok([...env._kv.keys()].filter((k) => k.startsWith('report/')).length === 2);
 });
 await t('if the helper email fails, the report goes to the operator and the answer says so', async () => {
-  const env = mkEnv({ trey: true }); await confirmFlow(env); env.EMAIL = { send: async (m) => { if (m.to === 'mike@example.net') { throw new Error('x'); } env._sent.push(m); } }; env._sent.length = 0;
+  const env = mkEnv({ trey: true }); await confirmFlow(env); env._google.failTo = 'mike@example.net'; env._sent.length = 0;
   const g = await go(env, rep()); assert.equal(g.r.status, 202); assert.deepEqual([g.j.delivery, g.j.helperStatus, g.j.reason], ['trey', 'confirmed', 'send-failed']); assert.equal(g.j.stored, true);
 });
 await t('email not set up on the worker: reports keep going to the operator, hello says why', async () => {

@@ -15,6 +15,11 @@
 // Anti-abuse: every route is rate limited per client address and in total; the confirm email is limited per client address, per helper email
 // (1 a day, 3 in 30 days) and in total per day; a confirmed pair can send a bounded number of emails an hour; names are stripped of anything
 // that could make a link or a header; the confirm and stop pages change nothing on GET (so mail scanners cannot confirm for anyone).
+//
+// Email goes out through the Gmail API as the one Gmail account of the operator (secrets GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET and
+// GMAIL_REFRESH_TOKEN, variable MAIL_FROM; the scope is gmail.send only). Gmail allows about 500 messages a day, so the daily totals below
+// stay well under that. When the Google token cannot be had, nothing is lost: reports go to the operator's own delivery path (KV) as before,
+// the error is logged (wrangler tail) and the last error is kept in KV under gmail/last-error.
 
 const MAX_BODY_BYTES = 512 * 1024 - 1; // reports must be smaller than 512 KB
 const MAX_FORM_BYTES = 2048; // the confirm and stop pages post tiny forms
@@ -28,10 +33,16 @@ const GLOBAL_PER_MINUTE = 30; // all clients together: a family of a few PCs nev
 const CONFIRM_PER_IP_HOUR = 5; // confirm emails one client address can cause in an hour
 const CONFIRM_PER_HELPER_DAY = 1; // confirm emails to one helper address in a day (all PCs together)
 const CONFIRM_PER_HELPER_MONTH = 3; // ... and in 30 days
-const CONFIRM_PER_DAY_DEFAULT = 150; // confirm emails in total per day (env MAX_CONFIRMS_PER_DAY)
+const CONFIRM_PER_DAY_DEFAULT = 100; // confirm emails in total per day (env MAX_CONFIRMS_PER_DAY)
 const REPORT_MAILS_PER_PC_HOUR = 12; // report emails for one confirmed (helper, PC) pair
 const REPORT_MAILS_PER_HELPER_HOUR = 60; // report emails to one helper address in an hour
-const REPORT_MAILS_PER_DAY_DEFAULT = 500; // report emails in total per day (env MAX_MAILS_PER_DAY)
+const REPORT_MAILS_PER_DAY_DEFAULT = 200; // report emails to helpers in total per day (env MAX_MAILS_PER_DAY)
+const MAIL_TOTAL_PER_DAY_DEFAULT = 300; // every email the worker sends in a day, all kinds together (env MAX_TOTAL_MAILS_PER_DAY); Gmail's own limit is about 500
+const MAIL_OPERATOR_RESERVE = 50; // emails to the operator may go this far past the total (a scam alert must still arrive)
+const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
+const GMAIL_SEND_URL = 'https://gmail.googleapis.com/gmail/v1/users/me/messages/send';
+const TOKEN_MARGIN_MS = 120 * 1000; // ask Google for a new access token when less than this is left
+const TOKEN_ERROR_PAUSE_SECONDS = 300; // after a token error, do not ask Google again for this long (the reports go to the operator meanwhile)
 const NAME_MAX = 40; // helper and owner names
 const EMAIL_MAX = 120;
 
@@ -237,7 +248,162 @@ async function mailAllowed(env, nowMs, checks) {
 }
 
 function intEnv(v, dflt) { const n = parseInt(v, 10); return (n >= 0 && n < 1e9) ? n : dflt; }
-function mailReady(env) { return !!(env.EMAIL && env.REPORT_FROM); }
+function mailReady(env) { return !!(env.GMAIL_CLIENT_ID && env.GMAIL_CLIENT_SECRET && env.GMAIL_REFRESH_TOKEN && env.MAIL_FROM); }
+// ---------- email through the Gmail API ----------
+const encoder = new TextEncoder();
+function toBase64(bytes) {
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) { bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000)); }
+  return btoa(bin);
+}
+function base64Url(bytes) { return toBase64(bytes).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); }
+function wrap76(b64) { return b64.replace(/(.{76})/g, '$1\r\n'); }
+function oneLine(s) { return String(s).replace(/[\r\n\u2028\u2029]+/g, ' ').trim(); }
+
+// A header value that may hold non-ASCII text, as RFC 2047 encoded words (each at most 45 bytes of UTF-8, so a word stays under 75 characters).
+export function encodeHeaderText(text) {
+  const t = oneLine(text);
+  if (/^[\x20-\x7e]*$/.test(t)) { return t; }
+  const words = [];
+  let cur = '';
+  let curBytes = 0;
+  for (const ch of t) {
+    const n = encoder.encode(ch).length;
+    if (curBytes + n > 45) { words.push(cur); cur = ''; curBytes = 0; }
+    cur += ch; curBytes += n;
+  }
+  if (cur) { words.push(cur); }
+  return words.map(function (w) { return '=?UTF-8?B?' + toBase64(encoder.encode(w)) + '?='; }).join('\r\n ');
+}
+
+// "Name <address>" -> a safe From header. Returns { header, address }.
+function parseFrom(from) {
+  const f = oneLine(from);
+  const m = /^(.*?)\s*<([^<>\s,;"]+@[^<>\s,;"]+)>$/.exec(f);
+  if (m) {
+    const name = m[1].replace(/^"|"$/g, '');
+    if (!name) { return { header: '<' + m[2] + '>', address: m[2] }; }
+    const shown = /^[\x20-\x7e]*$/.test(name) ? '"' + name.replace(/(["\\])/g, '\\$1') + '"' : encodeHeaderText(name);
+    return { header: shown + ' <' + m[2] + '>', address: m[2] };
+  }
+  if (/^[^<>\s,;"]+@[^<>\s,;"]+$/.test(f)) { return { header: f, address: f }; }
+  throw new Error('MAIL_FROM is not a mail address');
+}
+
+// The text as a small, plain HTML page. Only links that start with linkBase (our own confirm and stop links) become clickable.
+export function htmlFromText(text, linkBase) {
+  let h = esc(text);
+  if (linkBase) {
+    const b = esc(linkBase);
+    const re = new RegExp(b.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '[^\\s<]*', 'g');
+    h = h.replace(re, function (u) { return '<a href="' + u + '">' + u + '</a>'; });
+  }
+  return '<div style="font-family:Segoe UI,Arial,sans-serif;font-size:15px;line-height:1.5;color:#1a1a1a;white-space:pre-wrap">' + h + '</div>';
+}
+
+// The whole message (RFC 2822, UTF-8, plain text plus HTML) as base64url, which is what the Gmail API wants in "raw".
+export function buildRawMessage(env, msg) {
+  const from = parseFrom(env.MAIL_FROM);
+  const to = oneLine(msg.to);
+  if (!/^[^\s<>,;"()\\]+@[^\s<>,;"()\\]+$/.test(to)) { throw new Error('the recipient is not a mail address'); }
+  const boundary = 'fixit-' + crypto.randomUUID().replace(/-/g, '');
+  const lines = [
+    'From: ' + from.header,
+    'To: ' + to,
+    'Subject: ' + encodeHeaderText(msg.subject),
+    'MIME-Version: 1.0',
+    'Auto-Submitted: auto-generated'
+  ];
+  if (msg.unsubscribe && /^https:\/\/[^\s<>]+$/.test(msg.unsubscribe)) {
+    lines.push('List-Unsubscribe: <' + msg.unsubscribe + '>');
+    lines.push('List-Unsubscribe-Post: List-Unsubscribe=One-Click');
+  }
+  lines.push('Content-Type: multipart/alternative; boundary="' + boundary + '"');
+  const part = function (type, body) {
+    return '--' + boundary + '\r\nContent-Type: ' + type + '; charset="UTF-8"\r\nContent-Transfer-Encoding: base64\r\n\r\n' + wrap76(toBase64(encoder.encode(body))) + '\r\n';
+  };
+  const text = String(msg.text).replace(/\r?\n/g, '\r\n');
+  const raw = lines.join('\r\n') + '\r\n\r\n' + part('text/plain', text) + part('text/html', htmlFromText(msg.text, msg.linkBase)) + '--' + boundary + '--\r\n';
+  return base64Url(encoder.encode(raw));
+}
+
+let tokenMemory = null; // { token, exp }
+let tokenErrorUntil = 0;
+export function resetMailCache() { tokenMemory = null; tokenErrorUntil = 0; }
+
+async function noteTokenError(env, nowMs, what) {
+  console.error('Gmail: ' + what);
+  tokenErrorUntil = nowMs + TOKEN_ERROR_PAUSE_SECONDS * 1000;
+  tokenMemory = null;
+  if (env.REPORTS) {
+    try {
+      await env.REPORTS.put('gmail/err', what, { expirationTtl: TOKEN_ERROR_PAUSE_SECONDS });
+      await env.REPORTS.put('gmail/last-error', JSON.stringify({ at: new Date(nowMs).toISOString(), error: what }), { expirationTtl: 60 * 60 * 24 * 30 });
+    } catch (e) { /* the log line above is enough */ }
+  }
+}
+
+// An access token for the one Gmail account: from memory, then from KV, then from Google (refresh-token flow). Throws when Google says no.
+async function getAccessToken(env, nowMs, force) {
+  if (!force) {
+    if (tokenMemory && tokenMemory.exp - nowMs > TOKEN_MARGIN_MS) { return tokenMemory.token; }
+    if (env.REPORTS) {
+      const c = await getJson(env, 'gmail/token');
+      if (c && c.t && c.exp - nowMs > TOKEN_MARGIN_MS) { tokenMemory = { token: c.t, exp: c.exp }; return c.t; }
+    }
+    if (nowMs < tokenErrorUntil) { throw new Error('Google refused the token a moment ago; not asking again yet'); }
+    if (env.REPORTS) {
+      const e = await env.REPORTS.get('gmail/err');
+      if (e) { tokenErrorUntil = nowMs + 30000; throw new Error('Google refused the token a moment ago (' + e + '); not asking again yet'); }
+    }
+  }
+  let r;
+  try {
+    r = await fetch(GOOGLE_TOKEN_URL, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ client_id: env.GMAIL_CLIENT_ID, client_secret: env.GMAIL_CLIENT_SECRET, refresh_token: env.GMAIL_REFRESH_TOKEN, grant_type: 'refresh_token' }).toString()
+    });
+  } catch (e) {
+    await noteTokenError(env, nowMs, 'could not reach Google for a token');
+    throw new Error('could not reach Google for a token');
+  }
+  let body = null;
+  try { body = await r.json(); } catch (e) { body = null; }
+  if (!r.ok || !body || typeof body.access_token !== 'string' || !body.access_token) {
+    const what = 'token request refused (' + r.status + (body && body.error ? ' ' + String(body.error).slice(0, 60) : '') + (body && body.error_description ? ': ' + String(body.error_description).slice(0, 120) : '') + ')';
+    await noteTokenError(env, nowMs, what);
+    throw new Error(what);
+  }
+  const secs = Math.max(60, Math.min(Number(body.expires_in) || 3600, 3600));
+  tokenMemory = { token: body.access_token, exp: nowMs + secs * 1000 };
+  tokenErrorUntil = 0;
+  if (env.REPORTS) {
+    try { await env.REPORTS.put('gmail/token', JSON.stringify({ t: body.access_token, exp: tokenMemory.exp }), { expirationTtl: Math.max(60, secs - 60) }); } catch (e) { /* memory is enough */ }
+  }
+  return body.access_token;
+}
+
+// Sends one message. msg = { to, subject, text, unsubscribe?, linkBase? }. Throws on any problem (the callers fall back to the operator path).
+async function sendMail(env, nowMs, msg, opts) {
+  if (!mailReady(env)) { throw new Error('email is not set up'); }
+  const total = intEnv(env.MAX_TOTAL_MAILS_PER_DAY, MAIL_TOTAL_PER_DAY_DEFAULT) + (opts && opts.operator ? MAIL_OPERATOR_RESERVE : 0);
+  if (!(await mailAllowed(env, nowMs, [['gd', 86400, total]]))) { throw new Error('the daily total of emails is reached'); }
+  const raw = buildRawMessage(env, msg);
+  const post = async function (token) {
+    return await fetch(GMAIL_SEND_URL, { method: 'POST', headers: { authorization: 'Bearer ' + token, 'content-type': 'application/json' }, body: JSON.stringify({ raw: raw }) });
+  };
+  let res = await post(await getAccessToken(env, nowMs, false));
+  if (res.status === 401) {
+    if (env.REPORTS) { try { await env.REPORTS.delete('gmail/token'); } catch (e) { /* fine */ } }
+    res = await post(await getAccessToken(env, nowMs, true));
+  }
+  if (!res.ok) {
+    console.error('Gmail: send refused (' + res.status + ')');
+    throw new Error('Gmail refused the message (' + res.status + ')');
+  }
+}
+
 function baseUrl(env, request) { return String(env.PUBLIC_URL || new URL(request.url).origin).replace(/\/+$/, ''); }
 function isOperator(env, email) {
   const list = String(env.OPERATOR_EMAILS || env.REPORT_TO || '').toLowerCase().split(/[\s,;]+/).filter(Boolean);
@@ -252,7 +418,7 @@ async function getJson(env, key) {
 function linkFor(base, path, hid, token) { return base + path + '?id=' + hid + '&t=' + token; }
 
 // ---------- the report path ----------
-async function storeAndMailOperator(env, rec, textLen, receivedAt, id, note) {
+async function storeAndMailOperator(env, rec, textLen, receivedAt, id, note, nowMs) {
   let stored = false;
   let emailed = false;
   if (env.REPORTS) {
@@ -262,11 +428,11 @@ async function storeAndMailOperator(env, rec, textLen, receivedAt, id, note) {
     });
     stored = true;
   }
-  // Optional email delivery to the operator. Dormant until a send_email binding named EMAIL and the REPORT_TO / REPORT_FROM variables exist.
-  if (env.EMAIL && env.REPORT_TO && env.REPORT_FROM) {
+  // Optional email copy to the operator. Dormant until the Gmail secrets, MAIL_FROM and REPORT_TO exist. A failure here never loses the report (it is in KV).
+  if (env.REPORT_TO && mailReady(env)) {
     try {
       const mail = buildEmail(rec, note);
-      await env.EMAIL.send({ from: env.REPORT_FROM, to: env.REPORT_TO, subject: mail.subject, text: mail.text });
+      await sendMail(env, nowMs, { to: env.REPORT_TO, subject: mail.subject, text: mail.text }, { operator: true });
       emailed = true;
     } catch (e) { emailed = false; }
   }
@@ -310,7 +476,7 @@ async function handleReport(request, env, nowMs, ip) {
   }
   if (!helper) {
     const id = recordId(kind, receivedAt);
-    const d = await storeAndMailOperator(env, rec, text.length, receivedAt, id, '');
+    const d = await storeAndMailOperator(env, rec, text.length, receivedAt, id, '', nowMs);
     if (!d.stored && !d.emailed) { return json(500, { ok: false, error: 'Could not save the report.' }); }
     return json(202, { ok: true, id: id, stored: d.stored, emailed: d.emailed, delivery: 'trey', helperStatus: 'none' });
   }
@@ -337,7 +503,7 @@ async function handleReport(request, env, nowMs, ip) {
     else {
       try {
         const mail = buildHelperEmail(rec, owner, pcSafe, hp.name || helper.name, linkFor(base, '/stop', hid, hp.token));
-        await env.EMAIL.send({ from: env.REPORT_FROM, to: helper.email, subject: mail.subject, text: mail.text });
+        await sendMail(env, nowMs, { to: helper.email, subject: mail.subject, text: mail.text, unsubscribe: linkFor(base, '/stop', hid, hp.token), linkBase: base });
         sent = true;
       } catch (e) { why = 'send-failed'; }
     }
@@ -348,7 +514,7 @@ async function handleReport(request, env, nowMs, ip) {
     // The helper could not be reached right now: never lose the report, give it to the operator and say so.
     const id = recordId(kind, receivedAt);
     rec.helper = { name: helper.name, status: 'confirmed-but-' + why };
-    const d = await storeAndMailOperator(env, rec, text.length, receivedAt, id, 'Note: ' + (owner || rec.pcName) + ' chose ' + helper.name + ' as helper, but the email to them could not go out (' + why + ').');
+    const d = await storeAndMailOperator(env, rec, text.length, receivedAt, id, 'Note: ' + (owner || rec.pcName) + ' chose ' + helper.name + ' as helper, but the email to them could not go out (' + why + ').', nowMs);
     if (!d.stored && !d.emailed) { return json(500, { ok: false, error: 'Could not save the report.' }); }
     return json(202, { ok: true, id: id, stored: d.stored, emailed: d.emailed, delivery: 'trey', helperStatus: 'confirmed', reason: why });
   }
@@ -370,7 +536,7 @@ async function handleReport(request, env, nowMs, ip) {
         const token = randomToken();
         try {
           const mail = buildConfirmEmail(owner, pcSafe, helper.name, linkFor(base, '/confirm', hid, token), linkFor(base, '/stop', hid, token));
-          await env.EMAIL.send({ from: env.REPORT_FROM, to: helper.email, subject: mail.subject, text: mail.text });
+          await sendMail(env, nowMs, { to: helper.email, subject: mail.subject, text: mail.text, unsubscribe: linkFor(base, '/stop', hid, token), linkBase: base });
           await env.REPORTS.put('hp/' + hid, JSON.stringify({ status: 'pending', token: token, name: helper.name, eh: eh, owner: owner, pcName: pcSafe, asked: nowMs }), { expirationTtl: PENDING_TTL_SECONDS });
           confirmSent = true; confirmReason = 'sent'; status = 'pending';
         } catch (e) { confirmReason = 'send-failed'; }
@@ -383,7 +549,7 @@ async function handleReport(request, env, nowMs, ip) {
   const id = recordId(kind, receivedAt);
   rec.helper = { name: helper.name, status: status };
   const note = 'Note: ' + (owner || rec.pcName) + ' chose ' + helper.name + ' as their helper, who has not said yes yet (' + status + '). This report came to you for now.';
-  const d = await storeAndMailOperator(env, rec, text.length, receivedAt, id, note);
+  const d = await storeAndMailOperator(env, rec, text.length, receivedAt, id, note, nowMs);
   if (!d.stored && !d.emailed) { return json(500, { ok: false, error: 'Could not save the report.' }); }
   return json(202, { ok: true, id: id, stored: d.stored, emailed: d.emailed, delivery: 'trey', helperStatus: status, confirmSent: confirmSent, confirmReason: confirmReason });
 }
