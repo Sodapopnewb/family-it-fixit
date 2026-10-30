@@ -37,7 +37,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 # Settings
 # ---------------------------------------------------------------------------
-$script:FixItVersion = '2.3.13'
+$script:FixItVersion = '2.3.14'
 $script:GuideFont = $null; $script:FilesMsg = $null; $script:FilesPanel = $null; $script:FilesTip = $null; $script:FilesNameFont = $null   # My files window pieces (set when the window opens)
 $script:DefaultManifestUrl = 'https://raw.githubusercontent.com/Sodapopnewb/family-it-fixit/main/manifest.json'
 $script:OwnerPlaceholder = ('<' + 'OWNER>')   # the guards compare with this; Publish never rewrites it
@@ -8823,7 +8823,7 @@ function Show-FixItWindowOnce {
     }
     if ($null -ne $lay.Helper) {   # who helps this person (the name is the second line)
         $hd = $lay.Helper
-        $ht = New-FixItTile -Run $hd[0] -Title $hd[1] -Sub (Get-FixItHelperStatusLine) -IconKey $hd[3] -Style 'nav' -IconBg '' -X 12 -Y $hd[4] -W 176 -H $hd[5]
+        $ht = New-FixItTile -Run $hd[0] -Title $hd[1] -Sub (Get-FixItHelperStatusLine) -IconKey $hd[3] -Style 'nav' -IconBg '' -X 12 -Y $hd[4] -W 184 -H $hd[5]
         $side.Controls.Add($ht); [void]$script:FixButtons.Add($ht)
     }
     $script:CheckInLinkText = $checkIn
@@ -9557,51 +9557,70 @@ function Show-FixItHelperForm {
     $f.FormBorderStyle = 'FixedDialog'
     $f.MaximizeBox = $false; $f.MinimizeBox = $false; $f.ShowInTaskbar = $true
     $f.BackColor = (Get-FixItColor $script:UiBack)
-    $f.ClientSize = New-Object System.Drawing.Size([int](560 * $S), [int](486 * $S))
-    $q = New-Object System.Windows.Forms.Label
-    $q.AutoSize = $false; $q.Text = $script:HelperQuestion
-    $q.Font = New-Object System.Drawing.Font('Segoe UI', [single](18 * $S), [System.Drawing.FontStyle]::Bold, $px)
-    $q.ForeColor = (Get-FixItColor $cText)
-    $q.Location = New-Object System.Drawing.Point([int](24 * $S), [int](20 * $S)); $q.Size = New-Object System.Drawing.Size([int](512 * $S), [int](52 * $S))
-    $f.Controls.Add($q)
-    $rf = New-Object System.Drawing.Font('Segoe UI', [single](17 * $S), [System.Drawing.FontStyle]::Regular, $px)
-    $r1 = New-Object System.Windows.Forms.RadioButton
-    $r1.Text = 'Trey'; $r1.Font = $rf; $r1.AutoSize = $false; $r1.ForeColor = (Get-FixItColor $cText)
-    $r1.Location = New-Object System.Drawing.Point([int](28 * $S), [int](80 * $S)); $r1.Size = New-Object System.Drawing.Size([int](500 * $S), [int](36 * $S))
-    $r1.AccessibleName = 'Trey helps me'
-    $f.Controls.Add($r1)
-    $r2 = New-Object System.Windows.Forms.RadioButton
-    $r2.Text = 'Someone else'; $r2.Font = $rf; $r2.AutoSize = $false; $r2.ForeColor = (Get-FixItColor $cText)
-    $r2.Location = New-Object System.Drawing.Point([int](28 * $S), [int](118 * $S)); $r2.Size = New-Object System.Drawing.Size([int](500 * $S), [int](36 * $S))
-    $r2.AccessibleName = 'Someone else helps me'
-    $f.Controls.Add($r2)
+    $fw = [int](560 * $S)
+    # Everything except Save and Cancel sits in a scrolling panel, so on a small screen or with big text the window is cut to the screen
+    # and the buttons stay in view (the 2.3.13 rule, Limit-FixItDialogToScreen).
+    $pn = New-Object System.Windows.Forms.Panel
+    $pn.AutoScroll = $true; $pn.BackColor = (Get-FixItColor $script:UiBack)
+    $pn.Location = New-Object System.Drawing.Point(0, 0)
+    $f.Controls.Add($pn)
     $lf = New-Object System.Drawing.Font('Segoe UI', [single](13 * $S), [System.Drawing.FontStyle]::Regular, $px)
     $tf = New-Object System.Drawing.Font('Segoe UI', [single](16 * $S), [System.Drawing.FontStyle]::Regular, $px)
-    $l1 = New-Object System.Windows.Forms.Label
-    $l1.AutoSize = $false; $l1.Text = 'Their first name'; $l1.Font = $lf; $l1.ForeColor = (Get-FixItColor $cMuted)
-    $l1.Location = New-Object System.Drawing.Point([int](56 * $S), [int](166 * $S)); $l1.Size = New-Object System.Drawing.Size([int](480 * $S), [int](22 * $S))
-    $f.Controls.Add($l1)
-    $tn = New-Object System.Windows.Forms.TextBox
-    $tn.Font = $tf; $tn.MaxLength = $script:HelperNameMax
-    $tn.Location = New-Object System.Drawing.Point([int](56 * $S), [int](190 * $S)); $tn.Size = New-Object System.Drawing.Size([int](480 * $S), [int](36 * $S))
-    $tn.AccessibleName = 'Their first name'
-    $f.Controls.Add($tn)
-    $l2 = New-Object System.Windows.Forms.Label
-    $l2.AutoSize = $false; $l2.Text = 'Their email address'; $l2.Font = $lf; $l2.ForeColor = (Get-FixItColor $cMuted)
-    $l2.Location = New-Object System.Drawing.Point([int](56 * $S), [int](236 * $S)); $l2.Size = New-Object System.Drawing.Size([int](480 * $S), [int](22 * $S))
-    $f.Controls.Add($l2)
-    $te = New-Object System.Windows.Forms.TextBox
-    $te.Font = $tf; $te.MaxLength = $script:HelperEmailMax
-    $te.Location = New-Object System.Drawing.Point([int](56 * $S), [int](260 * $S)); $te.Size = New-Object System.Drawing.Size([int](480 * $S), [int](36 * $S))
-    $te.AccessibleName = 'Their email address'
-    $f.Controls.Add($te)
-    if ($hc) { foreach ($tbx in @($tn, $te)) { $tbx.BackColor = [System.Drawing.Color]::Black; $tbx.ForeColor = [System.Drawing.Color]::White } }
-    $msg = New-Object System.Windows.Forms.Label
-    $msg.AutoSize = $false; $msg.Font = $lf; $msg.ForeColor = (Get-FixItColor $cMuted)
-    $msg.Location = New-Object System.Drawing.Point([int](24 * $S), [int](312 * $S)); $msg.Size = New-Object System.Drawing.Size([int](512 * $S), [int](84 * $S))
-    $f.Controls.Add($msg)
+    $qf = New-Object System.Drawing.Font('Segoe UI', [single](18 * $S), [System.Drawing.FontStyle]::Bold, $px)
+    $rf = New-Object System.Drawing.Font('Segoe UI', [single](17 * $S), [System.Drawing.FontStyle]::Regular, $px)
     $noteTrey = "You can change this later with 'Your helper' on the left."
     $noteOther = "A new helper gets one email asking them to say yes. Until they do, reports go to Trey. You can change this later with 'Your helper' on the left."
+    $warnTexts = @("Please type your helper's first name.", "Please type your helper's whole email address, with the @ sign in it.")
+    $qH = [int](52 * $S); $mH = [int](84 * $S)
+    try {
+        $qH = Get-FixItLabelHeight -Text ([string]$script:HelperQuestion) -Font $qf -Width ([int](512 * $S)) -Scale $S -Min ([int](52 * $S)) -PadUnits 8
+        foreach ($mt in (@($noteTrey, $noteOther) + $warnTexts)) {
+            $mh1 = Get-FixItLabelHeight -Text (ConvertTo-FixItHelperText $mt) -Font $lf -Width ([int](512 * $S)) -Scale $S -Min ([int](84 * $S)) -PadUnits 8
+            if ($mh1 -gt $mH) { $mH = $mh1 }
+        }
+    } catch { Write-FixItLog ('Your helper window: could not measure the text: {0}' -f $_.Exception.Message) 'WARN' }
+    $dy = $qH - [int](52 * $S)
+    $q = New-Object System.Windows.Forms.Label
+    $q.AutoSize = $false; $q.UseMnemonic = $false; $q.Text = $script:HelperQuestion
+    $q.Font = $qf
+    $q.ForeColor = (Get-FixItColor $cText)
+    $q.Location = New-Object System.Drawing.Point([int](24 * $S), [int](20 * $S)); $q.Size = New-Object System.Drawing.Size([int](512 * $S), $qH)
+    $pn.Controls.Add($q)
+    $r1 = New-Object System.Windows.Forms.RadioButton
+    $r1.Text = 'Trey'; $r1.Font = $rf; $r1.AutoSize = $false; $r1.ForeColor = (Get-FixItColor $cText)
+    $r1.Location = New-Object System.Drawing.Point([int](28 * $S), ([int](80 * $S) + $dy)); $r1.Size = New-Object System.Drawing.Size([int](500 * $S), [int](36 * $S))
+    $r1.AccessibleName = 'Trey helps me'
+    $pn.Controls.Add($r1)
+    $r2 = New-Object System.Windows.Forms.RadioButton
+    $r2.Text = 'Someone else'; $r2.Font = $rf; $r2.AutoSize = $false; $r2.ForeColor = (Get-FixItColor $cText)
+    $r2.Location = New-Object System.Drawing.Point([int](28 * $S), ([int](118 * $S) + $dy)); $r2.Size = New-Object System.Drawing.Size([int](500 * $S), [int](36 * $S))
+    $r2.AccessibleName = 'Someone else helps me'
+    $pn.Controls.Add($r2)
+    $l1 = New-Object System.Windows.Forms.Label
+    $l1.AutoSize = $false; $l1.UseMnemonic = $false; $l1.Text = 'Their first name'; $l1.Font = $lf; $l1.ForeColor = (Get-FixItColor $cMuted)
+    $l1.Location = New-Object System.Drawing.Point([int](56 * $S), ([int](166 * $S) + $dy)); $l1.Size = New-Object System.Drawing.Size([int](480 * $S), [int](22 * $S))
+    $pn.Controls.Add($l1)
+    $tn = New-Object System.Windows.Forms.TextBox
+    $tn.Font = $tf; $tn.MaxLength = $script:HelperNameMax
+    $tn.Location = New-Object System.Drawing.Point([int](56 * $S), ([int](190 * $S) + $dy)); $tn.Size = New-Object System.Drawing.Size([int](480 * $S), [int](36 * $S))
+    $tn.AccessibleName = 'Their first name'
+    $pn.Controls.Add($tn)
+    $l2 = New-Object System.Windows.Forms.Label
+    $l2.AutoSize = $false; $l2.UseMnemonic = $false; $l2.Text = 'Their email address'; $l2.Font = $lf; $l2.ForeColor = (Get-FixItColor $cMuted)
+    $l2.Location = New-Object System.Drawing.Point([int](56 * $S), ([int](236 * $S) + $dy)); $l2.Size = New-Object System.Drawing.Size([int](480 * $S), [int](22 * $S))
+    $pn.Controls.Add($l2)
+    $te = New-Object System.Windows.Forms.TextBox
+    $te.Font = $tf; $te.MaxLength = $script:HelperEmailMax
+    $te.Location = New-Object System.Drawing.Point([int](56 * $S), ([int](260 * $S) + $dy)); $te.Size = New-Object System.Drawing.Size([int](480 * $S), [int](36 * $S))
+    $te.AccessibleName = 'Their email address'
+    $pn.Controls.Add($te)
+    if ($hc) { foreach ($tbx in @($tn, $te)) { $tbx.BackColor = [System.Drawing.Color]::Black; $tbx.ForeColor = [System.Drawing.Color]::White } }
+    $msg = New-Object System.Windows.Forms.Label
+    $msg.AutoSize = $false; $msg.UseMnemonic = $false; $msg.Font = $lf; $msg.ForeColor = (Get-FixItColor $cMuted)
+    $msg.Location = New-Object System.Drawing.Point([int](24 * $S), ([int](312 * $S) + $dy)); $msg.Size = New-Object System.Drawing.Size([int](512 * $S), $mH)
+    $pn.Controls.Add($msg)
+    $panelH = [int]$msg.Bottom + [int](12 * $S)
+    $pn.Size = New-Object System.Drawing.Size($fw, $panelH)
     $f.Tag = @{ R2 = $r2; N = $tn; E = $te; Msg = $msg; NoteTrey = $noteTrey; NoteOther = $noteOther; Calm = (Get-FixItColor $cMuted); Warn = (Get-FixItColor $(if ($hc) { '#FFFF00' } else { '#B3261E' })) }
     $tog = { param($s, $e)
         $t = $s.FindForm().Tag
@@ -9626,13 +9645,15 @@ function Show-FixItHelperForm {
     })
     $skipText = 'Cancel'; $skipName = 'Cancel. Keep my helper as it is.'
     if ($FirstRun) { $skipText = 'Skip'; $skipName = 'Skip. Trey is my helper.' }
-    $save = New-FixItTile -Run '' -Title 'Save' -Sub '' -IconKey '' -Style 'yes' -IconBg '' -X 24 -Y 408 -W 240 -H 56
-    $skip = New-FixItTile -Run '' -Title $skipText -Sub '' -IconKey '' -Style 'outline' -IconBg '' -X 296 -Y 408 -W 240 -H 56
+    $btnY = $panelH
+    $save = New-FixItTile -Run '' -Title 'Save' -Sub '' -IconKey '' -Style 'yes' -IconBg '' -X 24 -Y ([int]($btnY / $S)) -W 240 -H 56
+    $skip = New-FixItTile -Run '' -Title $skipText -Sub '' -IconKey '' -Style 'outline' -IconBg '' -X 296 -Y ([int]($btnY / $S)) -W 240 -H 56
     $save.DialogResult = 'Yes'; $skip.DialogResult = 'No'
     $save.AccessibleName = 'Save my helper.'; $skip.AccessibleName = $skipName
     $f.Controls.Add($save); $f.Controls.Add($skip)
     $f.AcceptButton = $save; $f.CancelButton = $skip
-    Expand-FixItLabelsToFit -Form $f -Labels @($q, $msg) -Scale $S
+    $f.ClientSize = New-Object System.Drawing.Size($fw, ($btnY + [int](56 * $S) + [int](22 * $S)))
+    [void](Limit-FixItDialogToScreen -Form $f -Panel $pn -Pinned @($save, $skip) -Scale $S)
     $r = $null; $other = $false; $nm = ''; $em = ''
     try { $r = $f.ShowDialog(); $other = [bool]$r2.Checked; $nm = [string]$tn.Text; $em = [string]$te.Text } finally { $f.Dispose() }
     if ($r -eq 'Yes') { return (Save-FixItHelper -Other $other -Name $nm -Email $em) }

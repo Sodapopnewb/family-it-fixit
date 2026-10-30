@@ -799,6 +799,17 @@ Add-Scenario 'main-window' { $script:H_Simple = $false; $script:H_Guardian = $tr
 Add-Scenario 'main-window-simple' { $script:H_Simple = $true; $script:H_Guardian = $false; $script:H_CheckIn = $false; $script:H_Pill = [pscustomobject]@{ Ok = $false; Text = 'Needs a look: backup needs a look, restart waiting' }; Show-FixItWindowOnce -FirstTime $false } -Settle 3 -Ready $pillReady
 Add-Scenario 'main-window-attention' { $script:H_Simple = $false; $script:H_Guardian = $false; $script:H_CheckIn = $false; $script:H_Pill = [pscustomobject]@{ Ok = $false; Text = 'Needs a look: low disk space, restart waiting' }; Show-FixItWindowOnce -FirstTime $false } -Settle 3 -Ready $pillReady
 
+# "Who helps you?" (2.3.14): the first-run question, the change window with Trey and with someone else, and the main window when the helper is not Trey
+# (no Thank Trey item, the helper's name and "(waiting)" under Your helper, Quick Assist wording on the screen-share button)
+function Set-HarnessHelper { param([string]$Name, [string]$Email, [string]$Status) Set-FixItSetting -Name 'HelperName' -Value $Name; Set-FixItSetting -Name 'HelperEmail' -Value $Email; Set-FixItSetting -Name 'HelperStatus' -Value $Status }
+Add-Scenario 'helper-question-first-run' { [void](Show-FixItHelperForm -FirstRun $true) }
+Add-Scenario 'helper-change-trey' { [void](Show-FixItHelperForm -FirstRun $false) }
+Add-Scenario 'helper-change-someone-else' { Set-HarnessHelper 'Christopher' 'christopher.longname@example.com' ''; try { [void](Show-FixItHelperForm -FirstRun $false) } finally { Set-HarnessHelper '' '' '' } }
+Add-Scenario 'main-window-other-helper' { Set-HarnessHelper 'Christopher' 'christopher.longname@example.com' ''; try { $script:H_Simple = $false; $script:H_Guardian = $true; $script:H_CheckIn = $true; $script:H_Pill = [pscustomobject]@{ Ok = $true; Text = 'Your computer looks healthy ' + [string][char]0x00B7 + ' backup partly on' }; Show-FixItWindowOnce -FirstTime $false } finally { Set-HarnessHelper '' '' '' } } -Settle 3 -Ready $pillReady
+Add-Scenario 'main-window-other-helper-simple' { Set-HarnessHelper 'Christopher' 'christopher.longname@example.com' 'confirmed'; try { $script:H_Simple = $true; $script:H_Guardian = $false; $script:H_CheckIn = $false; $script:H_Pill = [pscustomobject]@{ Ok = $true; Text = 'Your computer looks healthy' }; Show-FixItWindowOnce -FirstTime $false } finally { Set-HarnessHelper '' '' '' } } -Settle 3 -Ready $pillReady
+Add-Scenario 'share-with-a-friend-other-helper' { Set-HarnessHelper 'Christopher' 'christopher.longname@example.com' ''; try { Show-FixItShareForm } finally { Set-HarnessHelper '' '' '' } }
+Add-Scenario 'whats-shared-other-helper' { Set-HarnessHelper 'Christopher' 'christopher.longname@example.com' ''; try { Show-FixItPrivacyForm -FirstRun $false } finally { Set-HarnessHelper '' '' '' } }
+
 # every "?" help window
 foreach ($k in @((Get-FixItHelpTable).Keys | Sort-Object)) { $kk = [string]$k; Add-Scenario ('help-' + $kk) ({ Show-FixItHelp -Key $kk }.GetNewClosure()) }
 # every "Here is what I will do" window

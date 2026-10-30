@@ -304,7 +304,7 @@ foreach ($pair in @(@('full', $lt), @('simple', $ls))) {
 Assert ($lt.FullH -gt $ls.FullH) 'the simple window is still shorter than the full one'
 $lt2 = Get-FixItLayout -Simple $false -HelperIsTrey $false
 $ls2 = Get-FixItLayout -Simple $true -HelperIsTrey $false
-Assert ($null -eq $lt2.Donate -and $lt2.Helper[4] -eq 772 -and $lt2.FullH -eq 830 -and $null -eq $ls2.Donate -and $ls2.Helper[4] -eq 472 -and $ls2.FullH -eq 530) 'with another helper there is no Thank Trey item (it would send money to Trey) and the helper item takes its place, same window height'
+Assert ($null -eq $lt2.Donate -and $lt2.Helper[4] -eq 784 -and $lt2.FullH -eq 990 -and $null -eq $ls2.Donate -and $ls2.Helper[4] -eq 472 -and $ls2.FullH -eq 530) 'with another helper there is no Thank Trey item (it would send money to Trey) and the helper item takes its place, same window height'
 $wf = Get-Fn 'Show-FixItWindowOnce'
 Assert ($wf -match 'HelperIsTrey' -and $wf -match 'Get-FixItHelperStatusLine' -and $wf -match "lay\.Helper") 'the window draws the item with the helper''s name under it'
 $gb = Get-Fn 'Invoke-GuiButton'
@@ -320,6 +320,12 @@ Assert ($hf -ne '' -and $hf -notmatch 'Start-Process|Invoke-WebRequest|Invoke-Re
 Assert ($hf -match 'Who helps you with your computer\?' -or $srcText -match 'Who helps you with your computer\?') 'the window asks "Who helps you with your computer?"'
 foreach ($t in @('Someone else', 'Their first name', 'Their email address', 'Skip', 'Cancel', 'Save')) { Assert ($hf.Contains($t)) ("the window has: $t") }
 Assert ($hf -match 'Until they do, reports go to Trey') 'the window says reports go to Trey until the helper says yes'
+# the 2.3.13 layout rules: sized text, a window that never gets taller than the screen, buttons that stay in view
+Assert ($hf -match 'Limit-FixItDialogToScreen -Form \$f -Panel \$pn -Pinned @\(\$save, \$skip\)') 'the helper window is cut to the screen and keeps Save and Cancel in view'
+Assert ($hf -match 'Get-FixItLabelHeight' -and $hf -match 'AutoScroll = \$true') 'the helper window measures its text with the shared helper and scrolls when the screen is small'
+Assert ($hf -notmatch 'Expand-FixItLabelsToFit') 'the helper window sizes its own text (the labels are inside the scrolling panel)'
+$ll = Get-FixItLayout -Simple $false -HelperIsTrey $true
+Assert ($ll.Helper[4] -ge ($ll.Donate[4] + $ll.Donate[5]) -and ($ll.Helper[4] + $ll.Helper[5]) -lt $ll.FullH) 'the Your helper item sits under Thank Trey and fits in the 2.3.13 full-size window'
 
 # ================================================================ 7. guards and files
 Section 'Guards and files'
