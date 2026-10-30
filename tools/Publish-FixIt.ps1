@@ -27,7 +27,7 @@ if (-not $ReleaseDir) { $ReleaseDir = Join-Path (Split-Path -Parent $OutDir) 're
 $runtimeFiles = @('FamilyFixIt.ps1', 'Start-FixIt.cmd', 'README.md', 'guides.json')   # what the family's copy downloads
 $assetFiles = @('FamilyFixIt.ico')   # pictures: listed under "assets" in manifest.json (not "files"; older versions refuse unknown names in "files")
 $installerFiles = @('Install-FixIt.ps1', 'Install-FamilyFixIt.cmd')   # the bootstrap installer (also zipped for the release)
-$extraFiles = @('.gitattributes', '.gitignore', 'apps.json', 'tools/Publish-FixIt.ps1', 'tests/Test-FixIt.ps1', 'tests/Test-FixIt-V234.ps1', 'tests/Test-FixIt-V235.ps1', 'tests/Test-FixIt-V236.ps1', 'tests/Test-FixIt-V237.ps1', 'tests/Test-FixIt-V238.ps1') + $installerFiles
+$extraFiles = @('.gitattributes', '.gitignore', 'apps.json', 'tools/Publish-FixIt.ps1', 'tests/Test-FixIt.ps1', 'tests/Test-FixIt-V234.ps1', 'tests/Test-FixIt-V235.ps1', 'tests/Test-FixIt-V236.ps1', 'tests/Test-FixIt-V237.ps1', 'tests/Test-FixIt-V238.ps1', 'tests/Test-FixIt-V239.ps1') + $installerFiles
 
 $main = Join-Path $SourceDir 'FamilyFixIt.ps1'
 $m = [regex]::Match([IO.File]::ReadAllText($main), "FixItVersion = '(\d+\.\d+\.\d+)'")
@@ -114,7 +114,24 @@ $appsRaw = [IO.File]::ReadAllText((Join-Path $SourceDir 'apps.json')) | ConvertF
 $apps = @()
 foreach ($a in @($appsRaw)) {
     if ([string]$a.id -notmatch '^[A-Za-z0-9][A-Za-z0-9+_\-]*(\.[A-Za-z0-9+_\-]+)+$' -or [string]$a.name -notmatch '^[A-Za-z0-9][A-Za-z0-9 .,+&()\-]{0,59}$') { throw ('apps.json has an entry that is not allowed: ' + $a.id) }
-    $apps += [ordered]@{ id = [string]$a.id; name = [string]$a.name }
+    $entry = [ordered]@{ id = [string]$a.id; name = [string]$a.name }
+    # section (optional): a short plain label the list is grouped under; apps without one are shown under "Other"
+    $secProp = $a.PSObject.Properties['section']
+    if ($null -ne $secProp -and [string]$secProp.Value -ne '') {
+        if ([string]$secProp.Value -notmatch '^[A-Za-z0-9][A-Za-z0-9 &,.\-]{0,39}$') { throw ('apps.json has a section that is not allowed: ' + $a.id) }
+        $entry['section'] = [string]$secProp.Value
+    }
+    # description (required): one plain line shown under the app's name
+    $descProp = $a.PSObject.Properties['description']
+    if ($null -eq $descProp -or [string]$descProp.Value -notmatch "^[A-Za-z0-9][A-Za-z0-9 .,'!&()\-]{0,89}$") { throw ('apps.json needs a plain one-line description for: ' + $a.id) }
+    $entry['description'] = [string]$descProp.Value
+    # elevationProhibited (optional, true or false): the installer refuses administrator rights, so it must be installed from a normal window
+    $evProp = $a.PSObject.Properties['elevationProhibited']
+    if ($null -ne $evProp) {
+        if ($evProp.Value -isnot [bool]) { throw ('apps.json elevationProhibited must be true or false: ' + $a.id) }
+        if ($evProp.Value) { $entry['elevationProhibited'] = $true }
+    }
+    $apps += $entry
 }
 if ($apps.Count -eq 0 -or $apps.Count -gt 20) { throw 'apps.json must list between 1 and 20 apps.' }
 # Help guides ('Help me with...'): checked here, then also put in the manifest so a fix to a guide shows up without a program update.

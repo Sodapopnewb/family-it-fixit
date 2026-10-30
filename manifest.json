@@ -1,11 +1,11 @@
 {
   "name": "family-it-fixit",
-  "version": "2.3.8",
+  "version": "2.3.9",
   "files": [
     {
       "path": "FamilyFixIt.ps1",
-      "sha256": "059afbcd9b2576378576b68388bfb6cffce5db2ea857ed690145521890653f89",
-      "size": 655899
+      "sha256": "e241be86163b1bce2b3574ea2a9cbcec1a9efebda4fdf359e2b1813a929742fb",
+      "size": 698882
     },
     {
       "path": "Start-FixIt.cmd",
@@ -14,8 +14,8 @@
     },
     {
       "path": "README.md",
-      "sha256": "76ef15233d8293b3d50f6a7db797258bd43a15102bbabc919888db14ee9366c1",
-      "size": 46138
+      "sha256": "ba1d77429c21ed52484cb952056b7b6006f33e61aed8a651782aa9f2845e7f95",
+      "size": 49906
     },
     {
       "path": "guides.json",
@@ -33,19 +33,76 @@
   "apps": [
     {
       "id": "Google.Chrome",
-      "name": "Google Chrome"
+      "name": "Google Chrome",
+      "section": "Browsers and chat",
+      "description": "A web browser from Google for visiting websites."
     },
     {
       "id": "Zoom.Zoom",
-      "name": "Zoom"
+      "name": "Zoom",
+      "section": "Browsers and chat",
+      "description": "Video calls and meetings with family, friends or work."
     },
     {
-      "id": "Adobe.Acrobat.Reader.64-bit",
-      "name": "Adobe Acrobat Reader"
+      "id": "Discord.Discord",
+      "name": "Discord",
+      "section": "Browsers and chat",
+      "description": "Chat with friends by text, voice and video."
     },
     {
       "id": "VideoLAN.VLC",
-      "name": "VLC media player"
+      "name": "VLC media player",
+      "section": "Media and photos",
+      "description": "Plays almost any video or music file."
+    },
+    {
+      "id": "Spotify.Spotify",
+      "name": "Spotify",
+      "section": "Media and photos",
+      "description": "Listen to music and podcasts online. You need an account.",
+      "elevationProhibited": true
+    },
+    {
+      "id": "Apple.iTunes",
+      "name": "iTunes",
+      "section": "Media and photos",
+      "description": "Apple's music app. Also used with an iPhone or iPad."
+    },
+    {
+      "id": "OBSProject.OBSStudio",
+      "name": "OBS Studio",
+      "section": "Media and photos",
+      "description": "Records your screen or streams video live."
+    },
+    {
+      "id": "Audacity.Audacity",
+      "name": "Audacity",
+      "section": "Media and photos",
+      "description": "Record and edit sound, such as voice recordings."
+    },
+    {
+      "id": "Adobe.Acrobat.Reader.64-bit",
+      "name": "Adobe Acrobat Reader",
+      "section": "Files and office",
+      "description": "Opens and fills in PDF files."
+    },
+    {
+      "id": "7zip.7zip",
+      "name": "7-Zip",
+      "section": "Files and office",
+      "description": "Opens and makes zip files and other compressed folders."
+    },
+    {
+      "id": "Google.GoogleDrive",
+      "name": "Google Drive",
+      "section": "Files and office",
+      "description": "Keeps your Google files in a folder on this computer."
+    },
+    {
+      "id": "Dropbox.Dropbox",
+      "name": "Dropbox",
+      "section": "Files and office",
+      "description": "Keeps your Dropbox files in a folder on this computer."
     }
   ],
   "guides": [

@@ -2,7 +2,7 @@
 Family Fix-It  -  a small self-repair tool for Windows.
 Fixes: printer, Acrobat in Outlook, Outlook, internet, slow computer, sound/mic/camera,
 browser clean-up, Windows Update, OneDrive; a red "scary pop-up" button; screen sharing with Trey
-(Zoho Assist); and a report that is saved on the Desktop and sent to Trey. See README.md.
+(Zoho Assist); and a report that is saved in the 'Family Fix-It Reports' folder in Documents and sent to Trey. See README.md.
 
 Run with no options to open the friendly window.
 Command-line use (for Trey):
@@ -13,7 +13,7 @@ Command-line use (for Trey):
   Guardian (runs at sign-in, hidden) watches for a full-screen browser page and offers a way out; GuardianOn/GuardianOff/GuardianDemo.
 #>
 param(
-    [ValidateSet('Gui', 'TestAll', 'Printer', 'Acrobat', 'AcrobatRepair', 'Outlook', 'Network', 'Slow', 'Sound', 'Browser', 'WinUpdate', 'OneDrive', 'Scam', 'Screen', 'Report', 'Pin', 'Update', 'Restart', 'Status', 'Undo', 'CheckIn', 'CheckInOn', 'CheckInOff', 'HealthCheck', 'History', 'Files', 'Install', 'Guardian', 'GuardianOn', 'GuardianOff', 'GuardianDemo', 'PCInfo', 'Guides', 'Simple', 'Donate', 'Privacy', 'YourName', 'FirstRunPending',
+    [ValidateSet('Gui', 'TestAll', 'Printer', 'Acrobat', 'AcrobatRepair', 'Outlook', 'Network', 'Slow', 'Sound', 'Browser', 'WinUpdate', 'OneDrive', 'Scam', 'Screen', 'Report', 'Pin', 'Update', 'Restart', 'Status', 'Undo', 'CheckIn', 'CheckInOn', 'CheckInOff', 'HealthCheck', 'History', 'Files', 'Install', 'Guardian', 'GuardianOn', 'GuardianOff', 'GuardianDemo', 'PCInfo', 'Guides', 'Simple', 'Donate', 'Privacy', 'YourName', 'Share', 'FirstRunPending',
         'PrinterAdmin', 'AcrobatAdmin', 'AcrobatRepairAdmin', 'NetworkAdmin', 'SlowAdmin', 'SoundAdmin', 'OutlookAdmin', 'DefenderScanAdmin', 'WinUpdateAdmin', 'WinUpdateDeepAdmin', 'UndoAdmin')]
     [string]$Action = 'Gui',
     [Alias('DryRun')][switch]$WhatIf,
@@ -37,7 +37,8 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 # Settings
 # ---------------------------------------------------------------------------
-$script:FixItVersion = '2.3.8'
+$script:FixItVersion = '2.3.9'
+$script:GuideFont = $null; $script:FilesMsg = $null; $script:FilesPanel = $null; $script:FilesTip = $null; $script:FilesNameFont = $null   # My files window pieces (set when the window opens)
 $script:DefaultManifestUrl = 'https://raw.githubusercontent.com/Sodapopnewb/family-it-fixit/main/manifest.json'
 $script:OwnerPlaceholder = ('<' + 'OWNER>')   # the guards compare with this; Publish never rewrites it
 # Where reports are sent (a small Cloudflare Worker that Trey runs). The app header is NOT a secret.
@@ -576,7 +577,7 @@ function Get-FixItPreflight {
         'Send-WebReport' {
             $url = [string]$A['Url']; $json = [string]$A['Json']
             $bytes = (New-Object Text.UTF8Encoding($false)).GetByteCount($json)
-            if (Test-FixItReportReachable -Url $url) { & $pass ('the report address answers ({0})' -f $url) } else { & $warn ('the report address did not answer just now ({0}); a real report would be saved on the Desktop instead' -f $url) }
+            if (Test-FixItReportReachable -Url $url) { & $pass ('the report address answers ({0})' -f $url) } else { & $warn ('the report address did not answer just now ({0}); a real report would be saved {1} instead' -f $url, $script:ReportsWhere) }
             $preview = ''
             try {
                 $obj = $json | ConvertFrom-Json
@@ -674,11 +675,12 @@ function Complete-FixItTestRecords {
 }
 
 # The buttons that "Test all buttons" runs (every fix, the report, the restart, the undo, the toggles and the update check).
-$script:TestAllKeys = @('Printer', 'Acrobat', 'AcrobatRepair', 'Outlook', 'Network', 'Slow', 'Sound', 'Browser', 'WinUpdate', 'OneDrive', 'Scam', 'Screen', 'Report', 'Update', 'Restart', 'Undo', 'CheckIn', 'Guardian', 'HealthCheck', 'PCInfo', 'Donate', 'Privacy', 'YourName')
+$script:TestAllKeys = @('Printer', 'Acrobat', 'AcrobatRepair', 'Outlook', 'Network', 'Slow', 'Sound', 'Browser', 'WinUpdate', 'OneDrive', 'Scam', 'Screen', 'Report', 'Update', 'Restart', 'Undo', 'CheckIn', 'Guardian', 'HealthCheck', 'PCInfo', 'Donate', 'Privacy', 'YourName', 'Share')
 
 function Get-FixItTestResultsPath {
+    param([switch]$Create)
     $dir = $OutputDir
-    if (-not $dir) { $dir = Get-DesktopFolder }
+    if (-not $dir) { $dir = Get-FixItSaveFolder -Create:$Create }
     return (Join-Path $dir ('FamilyFixIt-TestResults-{0}-{1}.txt' -f $env:COMPUTERNAME, (Get-Date -Format 'yyyyMMdd-HHmm')))
 }
 
@@ -733,10 +735,10 @@ function Format-FixItTestAllReport {
     return @($o)
 }
 
-# Saves the results next to the Desktop. This is the one file Test mode writes, and only because the person asked for it.
+# Saves the results in the 'Family Fix-It Reports' folder in Documents. This is the one file Test mode writes, and only because the person asked for it.
 function Save-FixItTestResults {
     param($Results)
-    $path = Get-FixItTestResultsPath
+    $path = Get-FixItTestResultsPath -Create
     $text = (Format-FixItTestAllReport -Results $Results) -join "`r`n"
     [IO.File]::WriteAllText($path, $text, (New-Object Text.UTF8Encoding($true)))
     Write-FixItLog ('Test mode: results saved to {0}' -f $path)
@@ -1208,6 +1210,45 @@ function Get-FixItOsInfo {
 }
 
 function Get-DesktopFolder { return [Environment]::GetFolderPath('Desktop') }
+
+# ----- Where the tool saves what it makes (v2.3.9) ----------------------------------------------------------------
+# Reports, Test mode results and other files the person may want to look at go in the folder 'Family Fix-It Reports' inside
+# Documents (the real Documents folder, so a OneDrive-redirected Documents works). The folder is made when it is missing. Only if
+# Documents cannot be written does the file go to the Desktop instead. Files saved earlier are never moved.
+$script:ReportsFolderName = 'Family Fix-It Reports'
+$script:ReportsWhere = "in the 'Family Fix-It Reports' folder in your Documents"   # for sentences: "A copy is saved ..."
+function Get-FixItDocumentsFolder { try { return [string][Environment]::GetFolderPath('MyDocuments') } catch { return '' } }
+function Get-FixItReportsFolderPath {
+    $docs = Get-FixItDocumentsFolder
+    if ([string]::IsNullOrWhiteSpace($docs)) { return '' }
+    return (Join-Path $docs $script:ReportsFolderName)
+}
+# -Create: make the folder and prove a file can be written there; if not, use the Desktop. Without -Create nothing is touched.
+function Get-FixItSaveFolder {
+    param([switch]$Create)
+    $p = Get-FixItReportsFolderPath
+    if ($p) {
+        if (-not $Create) { return $p }
+        try {
+            if (-not (Test-Path -LiteralPath $p)) { New-Item -ItemType Directory -Path $p -Force -ErrorAction Stop | Out-Null; Write-FixItLog ('Made the folder {0}' -f $p) }
+            $probe = Join-Path $p ('.write-test-' + [guid]::NewGuid().ToString('N'))
+            [IO.File]::WriteAllText($probe, 'ok')
+            Remove-Item -LiteralPath $probe -Force -ErrorAction SilentlyContinue
+            return $p
+        } catch { Write-FixItLog ('Could not save in {0} ({1}); using the Desktop instead' -f $p, $_.Exception.Message) 'WARN' }
+    } elseif ($Create) { Write-FixItLog 'No Documents folder found; using the Desktop instead' 'WARN' }
+    return (Get-DesktopFolder)
+}
+# "in the 'Family Fix-It Reports' folder in your Documents" (or "on your Desktop" if that is where this file went)
+function Get-FixItSavedWhere {
+    param([string]$Path = '')
+    if ($Path) {
+        $parent = ''; try { $parent = Split-Path -Parent $Path } catch { }
+        $desk = Get-DesktopFolder
+        if ($parent -and $desk -and ($parent.TrimEnd('\', '/') -eq $desk.TrimEnd('\', '/'))) { return 'on your Desktop' }
+    }
+    return $script:ReportsWhere
+}
 
 function Open-FixItFile { param([string]$Path)
     if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Open-FixItFile' -Arguments $PSBoundParameters; return }
@@ -2709,7 +2750,7 @@ function Get-FixItReportText {
     $o.Add('Made: ' + (Get-Date -Format 'yyyy-MM-dd HH:mm') + '   Tool version: ' + $script:FixItVersion)
     foreach ($l in (Invoke-ReportItem 'PC code' { Get-FixItPcCodeLine })) { $o.Add([string]$l) }
     $o.Add((Get-FixItNameLine))
-    $o.Add('This report is saved on the Desktop and sent to Trey by the tool.')
+    $o.Add('This report is saved ' + $script:ReportsWhere + ' and sent to Trey by the tool.')
     $o.Add('(It includes your name if you gave it, the computer name, the Windows user name and the printer names.)')
     if ($Note) { $o.Add(''); $o.Add('NOTE: ' + $Note) }
 
@@ -2913,7 +2954,7 @@ function Send-FixItReport {
 function Save-FixItReportFile {
     param([string]$Text, [string]$Prefix)
     $dir = $OutputDir
-    if (-not $dir) { $dir = Get-DesktopFolder }
+    if (-not $dir) { $dir = Get-FixItSaveFolder -Create:(-not ($script:DryRun -or $script:TestMode)) }
     $name = '{0}-{1}-{2}.txt' -f $Prefix, $env:COMPUTERNAME, (Get-Date -Format 'yyyyMMdd-HHmm')
     $path = Join-Path $dir $name
     $ok = Invoke-FixItStep ('Save report to {0}' -f $path) { Write-FixItTextFile -Path $path -Text $Text }
@@ -2934,7 +2975,7 @@ function Invoke-FixItReport {
     }
     if ($sent) {
         Write-FixItLog 'Finished: report for Trey (sent)'
-        return New-FixItResult $true 'Report sent' 'Report sent to Trey' $(if ($f.Ok) { @('A copy is saved on your Desktop.') } else { @() }) @{ ReportPath = $f.Path; Sent = $true }
+        return New-FixItResult $true 'Report sent' 'Report sent to Trey' $(if ($f.Ok) { @('A copy is saved ' + (Get-FixItSavedWhere -Path $f.Path) + '.') } else { @() }) @{ ReportPath = $f.Path; Sent = $true }
     }
     if (-not $f.Ok) {
         Write-FixItLog 'Finished: report for Trey (could not save or send)' 'ERROR'
@@ -2942,7 +2983,7 @@ function Invoke-FixItReport {
     }
     try { Open-FixItFile -Path $f.Path } catch { Write-FixItLog ('Could not open the report: {0}' -f $_.Exception.Message) 'WARN' }
     Write-FixItLog 'Finished: report for Trey (saved, not sent)' 'WARN'
-    return New-FixItResult $false 'Report not sent' ("Couldn't send" + [string][char]0x2014 + 'please send the file on your Desktop to Trey') @() @{ ReportPath = $f.Path; Sent = $false }
+    return New-FixItResult $false 'Report not sent' ("Couldn't send" + [string][char]0x2014 + 'please send the file ' + (Get-FixItSavedWhere -Path $f.Path) + ' to Trey') @() @{ ReportPath = $f.Path; Sent = $false }
 }
 
 # ---------------------------------------------------------------------------
@@ -2964,7 +3005,7 @@ function Invoke-ScamAlert {
         'Trey never asks you for codes or to install remote-control programs unless YOU contacted him first.'
     $sentLine = 'A report about this computer was sent to Trey.'
     if ($script:DryRun) { $sentLine = 'Practice run: a report would be saved and sent to Trey.' }
-    elseif (-not $sent) { $sentLine = "The report could not be sent, so tell Trey on the phone. A copy is saved on your Desktop." }
+    elseif (-not $sent) { $sentLine = ("The report could not be sent, so tell Trey on the phone. A copy is saved " + (Get-FixItSavedWhere -Path $f.Path) + '.') }
     Write-FixItLog ('Finished: scam alert (report sent: {0})' -f $sent) 'WARN'
     return New-FixItResult $true 'Do not call that number' ($msg + "`r`n`r`n" + $sentLine) @() @{ Scam = $true; Sent = [bool]$sent; ReportPath = $f.Path }
 }
@@ -3264,15 +3305,15 @@ function Invoke-NetworkFix {
         return New-FixItResult $true 'Internet fixed' ("Your internet is working again.`r`n`r`nRestarting the router did it. Your router answers, the internet answers and websites open.") $report @{ SkipFollowUp = $true }
     }
     Write-FixItLog 'Finished: Fix my internet - still not working after the router restart' 'WARN'
-    $sent = $false
+    $sent = $false; $rf = $null
     try {
         $note = 'Fix my internet did NOT work, even after the router was unplugged and plugged back in and about {0} seconds had passed. Test results: {1}' -f $script:RouterWaitSeconds, ((Format-FixItConnection $final) -join '; ')
         $text = Get-FixItReportText -Kind 'report' -Note $note
-        [void](Save-FixItReportFile -Text $text -Prefix 'Report-for-Trey')
+        $rf = Save-FixItReportFile -Text $text -Prefix 'Report-for-Trey'
         $sent = [bool](Send-FixItReport -Text $text -Kind 'report')
     } catch { Write-FixItLog ('The internet report could not be made: {0}' -f $_.Exception.Message) 'ERROR' }
     $sentLine = 'I have sent Trey a report with everything I found, so he can see what happened.'
-    if (-not $sent) { $sentLine = "I tried to send Trey a report, but that needs the internet, and the internet is not working. A copy of the report is saved on your Desktop - please tell Trey when you call." }
+    if (-not $sent) { $sentLine = ("I tried to send Trey a report, but that needs the internet, and the internet is not working. A copy of the report is saved " + (Get-FixItSavedWhere -Path $(if ($rf) { $rf.Path } else { '' })) + " - please tell Trey when you call.") }
     $msg = "Your internet is still not working, even after restarting the router.`r`n`r`nPlease call Trey.`r`n`r`n" + $sentLine
     foreach ($h in $restartHint) { $msg += "`r`n`r`n" + $h }
     return New-FixItResult $false 'Please call Trey' $msg $report @{ SkipFollowUp = $true; ReportSent = $sent }
@@ -4345,7 +4386,7 @@ function Get-FixItActionTable {
             Time = 'A few seconds'
             Does = @(
                 'I gather basic facts about this computer, such as what is running and what was installed or downloaded lately.',
-                'I send Trey a report right away and save a copy on your Desktop.',
+                "I send Trey a report right away and save a copy $($script:ReportsWhere).",
                 'I tell you what to do next.')
             Heads = @(
                 'I do not change anything on your computer.',
@@ -4364,7 +4405,7 @@ function Get-FixItActionTable {
             Time = 'A few seconds'
             Does = @(
                 'I collect information about this computer that helps Trey: your Windows version, printers, Outlook and Acrobat, a health check and recent problems.',
-                'I save a copy on your Desktop and send it to Trey.')
+                "I save a copy $($script:ReportsWhere) and send it to Trey.")
             Heads = @(
                 'The report does not include your files or your passwords.',
                 'I do not change anything on your computer.')
@@ -4384,6 +4425,7 @@ function Get-FixItActionTable {
         Donate = @{ Fn = 'Invoke-FixItDonate'; Title = 'Thank Trey'; Fix = $false }
         Privacy = @{ Fn = 'Invoke-FixItPrivacy'; Title = "What's shared"; Fix = $false }
         YourName = @{ Fn = 'Invoke-FixItYourName'; Title = 'Your name'; Fix = $false }
+        Share = @{ Fn = 'Invoke-FixItShare'; Title = 'Share with a friend'; Fix = $false }
         Guides = @{ Fn = 'Invoke-GuidesHelper'; Title = 'Help me with...'; Fix = $false }
         Simple = @{ Fn = 'Invoke-SimpleToggle'; Title = 'Simple mode'; Fix = $false }
     }
@@ -5580,13 +5622,86 @@ function Invoke-FilesHelper {
 # Install an app safely (only apps on Trey's approved list, through winget)
 # ---------------------------------------------------------------------------
 $script:DefaultApps = @(
-    @{ id = 'Google.Chrome'; name = 'Google Chrome' },
-    @{ id = 'Zoom.Zoom'; name = 'Zoom' },
-    @{ id = 'Adobe.Acrobat.Reader.64-bit'; name = 'Adobe Acrobat Reader' },
-    @{ id = 'VideoLAN.VLC'; name = 'VLC media player' })
+    @{ id = 'Google.Chrome'; name = 'Google Chrome'; section = 'Browsers and chat'; description = 'A web browser from Google for visiting websites.' },
+    @{ id = 'Zoom.Zoom'; name = 'Zoom'; section = 'Browsers and chat'; description = 'Video calls and meetings with family, friends or work.' },
+    @{ id = 'Discord.Discord'; name = 'Discord'; section = 'Browsers and chat'; description = 'Chat with friends by text, voice and video.' },
+    @{ id = 'VideoLAN.VLC'; name = 'VLC media player'; section = 'Media and photos'; description = 'Plays almost any video or music file.' },
+    @{ id = 'Spotify.Spotify'; name = 'Spotify'; section = 'Media and photos'; description = 'Listen to music and podcasts online. You need an account.'; elevationProhibited = $true },
+    @{ id = 'Apple.iTunes'; name = 'iTunes'; section = 'Media and photos'; description = 'Apple''s music app. Also used with an iPhone or iPad.' },
+    @{ id = 'OBSProject.OBSStudio'; name = 'OBS Studio'; section = 'Media and photos'; description = 'Records your screen or streams video live.' },
+    @{ id = 'Audacity.Audacity'; name = 'Audacity'; section = 'Media and photos'; description = 'Record and edit sound, such as voice recordings.' },
+    @{ id = 'Adobe.Acrobat.Reader.64-bit'; name = 'Adobe Acrobat Reader'; section = 'Files and office'; description = 'Opens and fills in PDF files.' },
+    @{ id = '7zip.7zip'; name = '7-Zip'; section = 'Files and office'; description = 'Opens and makes zip files and other compressed folders.' },
+    @{ id = 'Google.GoogleDrive'; name = 'Google Drive'; section = 'Files and office'; description = 'Keeps your Google files in a folder on this computer.' },
+    @{ id = 'Dropbox.Dropbox'; name = 'Dropbox'; section = 'Files and office'; description = 'Keeps your Dropbox files in a folder on this computer.' })
 function Test-FixItAppEntry {
     param($Id, $Name)
     return (([string]$Id) -match '^[A-Za-z0-9][A-Za-z0-9+_\-]*(\.[A-Za-z0-9+_\-]+)+$' -and ([string]$Id).Length -le 80 -and ([string]$Name) -match '^[A-Za-z0-9][A-Za-z0-9 .,+&()\-]{0,59}$')
+}
+# The optional extras of an app entry. A section or description that looks wrong is dropped (the app itself stays, under "Other" or with no description).
+$script:AppSectionPattern = '^[A-Za-z0-9][A-Za-z0-9 &,.\-]{0,39}$'
+$script:AppDescriptionPattern = "^[A-Za-z0-9][A-Za-z0-9 .,'!&()\-]{0,89}$"
+$script:AppOtherSection = 'Other'
+# Turns one list entry (from apps.json, the manifest or the built-in list) into the app the window uses, or $null when the id or name is not allowed.
+# elevationProhibited: the app's installer refuses to run with administrator rights (Spotify), so it must be installed from a normal window.
+function Get-FixItEntryValue {
+    param($Entry, [string]$Name, $Default = $null)
+    if ($Entry -is [System.Collections.IDictionary]) { if ($Entry.Contains($Name)) { return $Entry[$Name] }; return $Default }
+    return (Get-FixItProp $Entry $Name $Default)
+}
+function ConvertTo-FixItApp {
+    param($Entry)
+    $id = [string](Get-FixItEntryValue $Entry 'id' ''); $nm = [string](Get-FixItEntryValue $Entry 'name' '')
+    if (-not (Test-FixItAppEntry $id $nm)) { return $null }
+    $sec = ([string](Get-FixItEntryValue $Entry 'section' '')).Trim()
+    if ($sec -and $sec -notmatch $script:AppSectionPattern) { $sec = '' }
+    $desc = ([string](Get-FixItEntryValue $Entry 'description' '')).Trim()
+    if ($desc -and $desc -notmatch $script:AppDescriptionPattern) { $desc = '' }
+    $noElev = $false; $ev = Get-FixItEntryValue $Entry 'elevationProhibited' $false
+    if ($ev -is [bool] -and $ev) { $noElev = $true }
+    return [pscustomobject]@{ Id = $id; Name = $nm; Section = $sec; Description = $desc; ElevationProhibited = $noElev }
+}
+# Groups the apps under their section names for the window: sections in the order they first appear in the list, apps with no section under
+# "Other" at the end. Returns a list of @{ Section; Apps }.
+function Get-FixItAppSections {
+    param($Apps)
+    $order = New-Object System.Collections.ArrayList
+    $map = @{}
+    foreach ($a in @($Apps)) {
+        $sec = [string](Get-FixItProp $a 'Section' ''); if (-not $sec.Trim()) { $sec = $script:AppOtherSection }
+        $key = $sec.ToLowerInvariant()
+        if (-not $map.ContainsKey($key)) { $map[$key] = @{ Section = $sec; Apps = (New-Object System.Collections.ArrayList) }; if ($key -ne $script:AppOtherSection.ToLowerInvariant()) { [void]$order.Add($key) } }
+        [void]$map[$key].Apps.Add($a)
+    }
+    $out = @()
+    foreach ($k in $order) { $out += [pscustomobject]@{ Section = $map[$k].Section; Apps = @($map[$k].Apps) } }
+    $ok = $script:AppOtherSection.ToLowerInvariant()
+    if ($map.ContainsKey($ok)) { $out += [pscustomobject]@{ Section = $map[$ok].Section; Apps = @($map[$ok].Apps) } }
+    return @($out)
+}
+# Window sizes for "Install an app" (96-dpi units unless it says pixels). The list sits in a scrolling panel, and the window is never taller than
+# the screen's usable height minus the title bar and a margin (so it fits a 768 pixel screen, and the list scrolls instead).
+function Get-FixItAppsDialogSize {
+    param([double]$ContentUnits, [double]$Scale = 1.0, [int]$WorkingAreaHeightPx = 0)
+    if ($Scale -le 0) { $Scale = 1.0 }
+    $headerUnits = 70; $footerUnits = 14
+    $want = [int][math]::Ceiling(($headerUnits + $ContentUnits + $footerUnits) * $Scale)
+    $capPx = [int][math]::Floor(640 * $Scale)
+    if ($WorkingAreaHeightPx -gt 0) { $capPx = [int][math]::Min($capPx, [math]::Max(300, $WorkingAreaHeightPx - 80)) } else { $capPx = [int][math]::Min($capPx, 648) }
+    $clientH = [int][math]::Min($want, $capPx)
+    $panelY = [int][math]::Round($headerUnits * $Scale)
+    $panelH = [int][math]::Max(120, $clientH - $panelY - [int][math]::Round($footerUnits * $Scale))
+    return [pscustomobject]@{ ClientH = $clientH; PanelY = $panelY; PanelH = $panelH; Scrolls = ($want -gt $capPx) }
+}
+# One app row, in units: the name, the one-line description under it (DescHeight is its measured wrapped height in units) and the Install button.
+function Get-FixItAppRowLayout {
+    param([double]$DescHeight = 18)
+    $nameY = 6; $nameH = 26
+    $descY = $nameY + $nameH
+    $dh = [int][math]::Ceiling([math]::Max(0, $DescHeight))
+    $rowH = [int][math]::Max(64, $descY + $dh + 12)
+    $btnH = 36; $btnY = [int][math]::Floor(($rowH - $btnH) / 2)
+    return [pscustomobject]@{ NameY = $nameY; NameH = $nameH; DescY = $descY; DescH = $dh; RowH = $rowH; BtnY = $btnY; BtnH = $btnH }
 }
 function Get-FixItApprovedApps {
     $apps = @()
@@ -5596,13 +5711,13 @@ function Get-FixItApprovedApps {
     }
     if ($json -and (Test-FixItHas $json 'apps')) {
         foreach ($a in @($json.apps | Select-Object -First 20)) {
-            $id = Get-FixItProp $a 'id' ''; $nm = Get-FixItProp $a 'name' ''
-            if (Test-FixItAppEntry $id $nm) { $apps += [pscustomobject]@{ Id = [string]$id; Name = [string]$nm } }
-            else { Write-FixItLog ('Ignored an app list entry that looks wrong: {0}' -f $id) 'WARN' }
+            $ca = ConvertTo-FixItApp $a
+            if ($null -ne $ca) { $apps += $ca }
+            else { Write-FixItLog ('Ignored an app list entry that looks wrong: {0}' -f (Get-FixItEntryValue $a 'id' '')) 'WARN' }
         }
         if ($apps.Count -gt 0) { return $apps }
     }
-    foreach ($a in $script:DefaultApps) { $apps += [pscustomobject]@{ Id = $a.id; Name = $a.name } }
+    foreach ($a in $script:DefaultApps) { $ca = ConvertTo-FixItApp $a; if ($null -ne $ca) { $apps += $ca } }
     return $apps
 }
 function Test-FixItWinget { return [bool](Get-Command 'winget.exe' -ErrorAction SilentlyContinue) }
@@ -5633,7 +5748,17 @@ function Invoke-InstallApp {
     $already = $false
     try { $already = Test-FixItAppInstalled -Id $app.Id } catch { Write-FixItLog ('Could not check if {0} is installed: {1}' -f $app.Name, $_.Exception.Message) 'WARN' }
     if ($already) { return New-FixItResult $true 'Already installed' ('{0} is already installed on this computer. Nothing was changed. Look for it in the Start menu.' -f $app.Name) }
-    if (-not (Confirm-FixItStep ('Install {0}? It comes from Microsoft''s official app list (winget). Windows may ask for permission.' -f $app.Name))) { return New-FixItResult $true 'Not installed' ('OK, {0} was not installed.' -f $app.Name) }
+    if ($app.ElevationProhibited) {
+        # this app's installer refuses to run with administrator rights, so it is only ever installed from a normal window (winget runs as the person, never elevated)
+        $elev = $false; try { $elev = [bool](Test-FixItAdmin) } catch { }
+        if ($elev) {
+            Write-FixItLog ('{0} was not installed: its installer will not run with administrator rights, and this window has them' -f $app.Name) 'WARN'
+            return New-FixItResult $false 'Open me the usual way' ('{0} can only be installed from a normal window, and this one was opened with administrator rights. Close Family Fix-It, open it again by double-clicking its icon (not "Run as administrator"), and try again.' -f $app.Name)
+        }
+    }
+    $askText = 'Install {0}? It comes from Microsoft''s official app list (winget). Windows may ask for permission.'
+    if ($app.ElevationProhibited) { $askText = 'Install {0}? It comes from Microsoft''s official app list (winget). It installs just for you.' }
+    if (-not (Confirm-FixItStep ($askText -f $app.Name))) { return New-FixItResult $true 'Not installed' ('OK, {0} was not installed.' -f $app.Name) }
     $code = 0
     $okRun = Invoke-FixItStep ('Install {0} with winget (id {1}, source winget)' -f $app.Name, $app.Id) { $script:__InstallCode = Install-FixItApp -Id $app.Id; if ($script:__InstallCode -ne 0 -and $script:__InstallCode -ne -1978335135) { throw ('winget finished with code {0}' -f $script:__InstallCode) } }
     if ($script:DryRun) { return New-FixItResult $true 'Practice run' 'Practice run only - nothing was installed. Details are in the log file.' }
@@ -5851,7 +5976,7 @@ function Invoke-GuardianClose {
     return [pscustomobject]@{ Details = $details; Closed = $closed; Sessions = $sess; Reason = $Reason; Demo = [bool]$Demo }
 }
 
-# Phase 2: tell Trey (a SCAM alert report). A copy goes on the Desktop only if sending fails.
+# Phase 2: tell Trey (a SCAM alert report). A copy is saved (in the Family Fix-It Reports folder) only if sending fails.
 function Invoke-GuardianAlert {
     param($Close)
     $sn = ''
@@ -7080,12 +7205,45 @@ function Invoke-FixItYourName {
     return (New-FixItResult $true 'Your name' ('Your name: ' + $(if (Get-FixItOwnerName) { Get-FixItOwnerName } else { 'not given' })))
 }
 
+# ----- Share with a friend (v2.3.9) ------------------------------------------------------------------------------
+# A small link at the bottom of the window opens a window with a link to send to a friend. The link is the stable "latest release"
+# download: it always gives the newest Install-FamilyFixIt.zip (the same download link the README gives for the family). Nothing is
+# sent or saved; Copy puts the link on the clipboard.
+$script:ShareUrl = 'https://github.com/Sodapopnewb/family-it-fixit/releases/latest/download/Install-FamilyFixIt.zip'
+$script:ShareIntro = 'Want to share Family Fix-It? Copy this link and send it to a friend. When they open it, it downloads Family Fix-It to their computer.'
+$script:ShareHow = 'To install it, they open the downloaded file, choose Extract All, and double-click Install-FamilyFixIt.'
+# The link to hand out. Empty until the program was published with the owner's name (so a practice copy never shares a broken link).
+function Get-FixItShareUrl {
+    $u = [string]$script:ShareUrl
+    if ([string]::IsNullOrWhiteSpace($u) -or $u.Contains($script:OwnerPlaceholder) -or $u -notmatch '^https://') { return '' }
+    return $u
+}
+# What the Copy link button says: normally "Copy link", "Copied!" for a moment after a click, "Could not copy" if Windows refused.
+function Get-FixItShareButtonText {
+    param([string]$State = 'Idle')
+    if ($State -eq 'Copied') { return 'Copied!' }
+    if ($State -eq 'Failed') { return 'Could not copy' }
+    return 'Copy link'
+}
+function Invoke-FixItShare {
+    Write-FixItLog 'Share with a friend opened'
+    $url = Get-FixItShareUrl
+    if ($script:TestMode) {
+        if ($url) { Add-FixItTestNote -Step 'Share with a friend' -Status 'PASS' -Text ('a click would open a small window with this link in a read-only box: {0}  - a Copy link button (it changes to "Copied!" for a moment) and a Close button; nothing is sent or saved' -f $url) }
+        else { Add-FixItTestNote -Step 'Share with a friend' -Status 'WARN' -Text 'the share link is not set up in this copy (it is filled in when the program is published), so the window would say so' }
+        return (New-FixItResult $true 'Share with a friend' 'Test mode only checked it.' @() @{ Silent = $true })
+    }
+    if ($script:GuiActive) { Show-FixItShareForm; return (New-FixItResult $true 'Share with a friend' 'Shown.' @() @{ Silent = $true }) }
+    if (-not $url) { return (New-FixItResult $false 'Share with a friend' 'The link to share is not ready yet. Please ask Trey.') }
+    return (New-FixItResult $true 'Share with a friend' ($script:ShareIntro + "`r`n`r`n" + $url + "`r`n`r`n" + $script:ShareHow))
+}
+
 # What the window shows. Pure data (no drawing), so it can be tested. Positions are in 96-dpi pixels.
 $script:SimpleTileIds = @('Printer', 'Network', 'Slow', 'Scam', 'Screen', 'Report')
 function Get-FixItLayout {
     param([bool]$Simple = $false, [bool]$GuardianOn = $false, [bool]$BigText = $false, [bool]$HighContrast = $false, [bool]$CheckInOn = $false)
     # small links on the bottom row, next to "Check for a newer version" (always shown, in both layouts): Run, text, x
-    $footer = @(@('Privacy', "What's shared", 262), @('YourName', 'Your name', 384))
+    $footer = @(@('Privacy', "What's shared", 262), @('YourName', 'Your name', 364), @('Share', 'Share with a friend', 444))
     $tiles1 = @(@('Printer', 'Fix my printer', "Won't print or is stuck", 'printer'), @('Acrobat', 'Fix Acrobat in Outlook', 'Acrobat buttons are missing', 'pdf'), @('Outlook', 'Fix Outlook', "Freezes or won't open", 'mail'))
     $tiles2 = @(@('Network', 'Fix my internet', "Wi-Fi or websites won't work", 'wifi'), @('Slow', 'My computer is slow', 'Clean up and speed up', 'slow'), @('Sound', 'Fix sound/mic/camera', "Video calls aren't working", 'cam'))
     $tiles3 = @(@('Browser', 'Clean up my browser', 'Pop-ups or a new homepage', 'globe'), @('WinUpdate', 'Fix Windows Update', 'Updates are stuck', 'upd'), @('OneDrive', 'Fix OneDrive', 'Files have disappeared', 'cloud'))
@@ -7312,7 +7470,8 @@ function Invoke-FixItTilePaint {
         $isz = [int](($(if ($style -eq 'scam') { 44 } else { 40 })) * $S)
         $ix = [int](18 * $S); $iy = [int](($h - $isz) / 2)
         $tx = $ix + $isz + [int](14 * $S)
-        $r1 = New-Object System.Drawing.Rectangle($tx, [int]($h / 2 - 24 * $S), ($w - $tx - [int](12 * $S)), [int](24 * $S))
+        $rsv = [int](12 * $S); if ($t.Help) { $rsv = Get-FixItHelpTextReserve -Scale $S }   # keep the title clear of the "?" in the top right corner
+        $r1 = New-Object System.Drawing.Rectangle($tx, [int]($h / 2 - 24 * $S), ($w - $tx - $rsv), [int](24 * $S))
         $r2 = New-Object System.Drawing.Rectangle($tx, [int]($h / 2 + 1 * $S), ($w - $tx - [int](12 * $S)), [int](20 * $S))
         $f1 = $script:UiFonts.Big; $f2 = $script:UiFonts.Small
         if ($style -eq 'scam') { $f1 = $script:UiFonts.BigScam }
@@ -7399,6 +7558,162 @@ function Invoke-FixItSidePaint {
     }
 }
 
+# ----- The small "?" on every main button (v2.3.9) --------------------------------------------------------------------
+# Every big button in the main window (the grid, the red pop-up button and the two buttons at the bottom) has a small "?" in a circle in its top
+# right corner. Clicking it opens a short plain description of what that button does. The "?" is its own small button placed on top of the
+# tile, so a click on it never reaches the tile (it cannot run the fix). F1 on a focused tile opens the same description.
+# ALL the descriptions are in this one table. Each is 2 to 4 short sentences and follows what the real code does (see the fix functions).
+function Get-FixItHelpTable {
+    $rw = $script:ReportsWhere
+    return @{
+        Printer = @{ Title = 'Fix my printer'; Text = ("I look at the printers on this computer and ask if you know which one you want. You pick it from a list, or I test them and choose one that is ready, and I make it your main printer. I restart the part of Windows that handles printing, clear out stuck print jobs (anything waiting has to be printed again) and reconnect shared printers. Nothing starts until you agree on the 'Here is what I will do' window, Windows asks your permission with a shield box, and your documents and files are never touched.") }
+        Acrobat = @{ Title = 'Fix Acrobat in Outlook'; Text = ("Use this when the Acrobat buttons are missing in Outlook. I close Outlook completely and open it again, then ask if Acrobat is back, and I stop there if it is. If not, I switch the Acrobat add-in back on, which can make Windows ask your permission, and only then offer a repair, after asking you. Your email accounts, passwords and sign-ins are never touched.") }
+        Outlook = @{ Title = 'Fix Outlook'; Text = ("Use this when Outlook freezes or will not open. I close Outlook completely and open it again, then ask if it works now, and I stop there if it does. If not, I ask before each next step: turning off add-ins that look like trouble (you can turn them back on), rebuilding the Outlook search (Windows asks your permission), or opening Outlook in safe mode. Your email accounts, passwords, sign-ins and Outlook profiles are never cleared or changed.") }
+        Network = @{ Title = 'Fix my internet'; Text = ("I test your router, the internet and opening a website, and if all three work I change nothing. If something is wrong, I get a fresh internet address from your router, clear the saved website addresses, switch off a setting that can block websites if it is on, and reset the network settings (Windows asks your permission). If it still fails, I ask you to unplug the router and plug it back in, wait with a countdown, and test again. Your internet drops for a few seconds, and your files are never touched.") }
+        Slow = @{ Title = 'My computer is slow'; Text = ("If a program has frozen, I offer to close it, and I ask first. I empty your temporary files and the Recycle Bin for good, and the temporary files Windows keeps (Windows asks your permission). I ask before clearing the saved website files in your browser, which can sign you out of websites. Your Documents, Desktop, Pictures and Downloads are never touched.") }
+        Sound = @{ Title = 'Fix sound, mic and camera'; Text = ("I check your speakers, microphone and camera. If the speakers or microphone are muted or almost silent I turn them on (speakers quietly at 25%, microphone at 70%), and a volume that is fine stays as it is. I ask before allowing apps to use a blocked microphone or camera, and I may restart the part of Windows that handles sound (Windows asks your permission). Then I open the Windows page where you pick the right devices, and I change nothing else.") }
+        Browser = @{ Title = 'Clean up my browser'; Text = ("I make a safe copy of your browser settings and bookmarks first. Then I look for a changed home page or search engine, extensions you do not know, and websites allowed to send you pop-up notices. I ask before I open each browser page where you can fix things yourself, and I never change the browser myself. I also offer a quick Microsoft Defender virus scan (I ask first, and Windows asks your permission), and your passwords, bookmarks and history are not touched.") }
+        WinUpdate = @{ Title = 'Fix Windows Update'; Text = ("I pause Windows Update, set aside the folders where it keeps its update files (nothing is deleted), start it again and open the Windows Update page. Windows asks your permission with a shield box. If updates are still stuck I offer a deeper repair of Windows that takes 20 to 40 minutes, and I ask first. I only restart the computer if you say yes, and your own files are not touched.") }
+        OneDrive = @{ Title = 'Fix OneDrive'; Text = ("I check whether OneDrive is installed, signed in and running, and whether your Desktop, Documents and Pictures are backed up to it. I tell you what I find and change nothing unless you say yes to a reset. A reset makes OneDrive restart and check all of your files again, which can take a few minutes. Your files are not deleted.") }
+        Scam = @{ Title = 'I see a scary pop-up'; Text = ("This does not fix anything. I gather basic facts about this computer, send Trey a report right away and save a copy $rw. Then I tell you what to do next: do not call the number on the screen, turn off your Wi-Fi and call Trey. I do not change or close anything on your computer.") }
+        Screen = @{ Title = 'Let Trey see my screen'; Text = ("I open the Zoho Assist web page where you type in a code. Trey gives you the code on the phone, and only when you type it in and click Join can he see your screen. Nothing is installed ahead of time. Only do this if you called Trey.") }
+        Report = @{ Title = 'Send Trey a report'; Text = ("I collect information that helps Trey: your Windows version, printers, Outlook and Acrobat, a health check and recent problems. I save a copy $rw and send it to Trey. The report does not include your files or your passwords, and I do not change anything on your computer.") }
+    }
+}
+# The title and text for one button, or $null when it has no description.
+function Get-FixItHelpText {
+    param([string]$Key)
+    $t = Get-FixItHelpTable
+    if ($Key -and $t.ContainsKey($Key)) { return [pscustomobject]@{ Key = $Key; Title = [string]$t[$Key].Title; Text = [string]$t[$Key].Text } }
+    return $null
+}
+# The main buttons of a window layout (the grid tiles, then the red pop-up button and the two bottom buttons). These are the ones that get a "?".
+function Get-FixItMainTileKeys {
+    param($Layout)
+    $keys = @()
+    foreach ($g in @($Layout.Groups)) { foreach ($t in @($g.Tiles)) { $keys += [string]$t[0] } }
+    return @($keys + @('Scam', 'Screen', 'Report'))
+}
+# Where the "?" sits on a tile, in real pixels (the tile's own size and the screen scale are given). The circle is 22 units across, 8 units from the
+# top and right edge. The hit area (the little button on top of the tile) is the circle plus 3 units all round, so a finger or a shaky mouse still lands.
+function Get-FixItHelpDotRect {
+    param([int]$TileW, [int]$TileH, [double]$Scale = 1.0)
+    if ($Scale -le 0) { $Scale = 1.0 }
+    $d = [int][math]::Round(22 * $Scale); $m = [int][math]::Round(8 * $Scale); $pad = [int][math]::Round(3 * $Scale)
+    $x = $TileW - $d - $m; $y = $m
+    return [pscustomobject]@{ X = $x; Y = $y; D = $d; HitX = ($x - $pad); HitY = ($y - $pad); HitW = ($d + 2 * $pad); HitH = ($d + 2 * $pad); Margin = $m }
+}
+# How much room a wide tile keeps free at the right of its title line, so a long title never runs under the "?".
+function Get-FixItHelpTextReserve {
+    param([double]$Scale = 1.0)
+    $g = Get-FixItHelpDotRect -TileW 1000 -TileH 100 -Scale $Scale
+    return [int](1000 - $g.HitX + [math]::Round(4 * $Scale))
+}
+# True when a point (relative to the tile) is inside the "?" hit area. Used for tests and for deciding where a click belongs.
+function Test-FixItHelpHit {
+    param([int]$X, [int]$Y, [int]$TileW, [int]$TileH, [double]$Scale = 1.0)
+    $g = Get-FixItHelpDotRect -TileW $TileW -TileH $TileH -Scale $Scale
+    return ($X -ge $g.HitX -and $X -lt ($g.HitX + $g.HitW) -and $Y -ge $g.HitY -and $Y -lt ($g.HitY + $g.HitH))
+}
+# Draws the "?" (a ring and a question mark; filled when the mouse is over it). Colors come from the tile's own style, so it is easy to read on
+# every tile, in Big text and in High contrast.
+function Invoke-FixItHelpDotPaint {
+    param($Dot, [System.Drawing.Graphics]$G)
+    $S = $script:UiScale; $hc = [bool]$script:UiHighContrast
+    $tile = $Dot.Tag.Parent; $tt = $tile.Tag
+    $parentHover = ([bool]$tt.Hover -or $tile.Focused)
+    $col = Get-FixItTileColors -Style $tt.Style -Hover $parentHover -HighContrast $hc -IconBg $tt.IconBg
+    $G.SmoothingMode = 'AntiAlias'
+    $G.Clear((Get-FixItColor $col.Fill))
+    $gm = Get-FixItHelpDotRect -TileW $tile.Width -TileH $tile.Height -Scale $S
+    $rx = $gm.X - $gm.HitX; $ry = $gm.Y - $gm.HitY
+    $hov = [bool]$Dot.Tag.Hover
+    $lw = 1.5; if ($hc) { $lw = 2.5 }
+    $half = ($lw * $S) / 2
+    $rect = New-Object System.Drawing.RectangleF(($rx + $half), ($ry + $half), ($gm.D - 2 * $half), ($gm.D - 2 * $half))
+    $ink = Get-FixItColor $col.Title
+    $glyph = $ink
+    if ($hov) { $fb = New-Object System.Drawing.SolidBrush($ink); $G.FillEllipse($fb, $rect); $fb.Dispose(); $glyph = (Get-FixItColor $col.Fill) }
+    $pen = New-Object System.Drawing.Pen($ink, [single]($lw * $S))
+    $G.DrawEllipse($pen, $rect); $pen.Dispose()
+    $font = New-Object System.Drawing.Font('Segoe UI', [single](14 * $S), [System.Drawing.FontStyle]::Bold, [System.Drawing.GraphicsUnit]::Pixel)
+    $tf = [System.Windows.Forms.TextFormatFlags]
+    [System.Windows.Forms.TextRenderer]::DrawText($G, '?', $font, (New-Object System.Drawing.Rectangle($rx, $ry, $gm.D, $gm.D)), $glyph, ($tf::HorizontalCenter -bor $tf::VerticalCenter -bor $tf::SingleLine -bor $tf::NoPadding -bor $tf::NoPrefix))
+    $font.Dispose()
+}
+# Puts the "?" on a tile and lets F1 open the same description. Returns the little button (or $null when the key has no description).
+function Add-FixItHelpDot {
+    param($Tile, [string]$Key)
+    $h = Get-FixItHelpText -Key $Key
+    if ($null -eq $h) { return $null }
+    $S = $script:UiScale
+    $g = Get-FixItHelpDotRect -TileW $Tile.Width -TileH $Tile.Height -Scale $S
+    $d = New-Object System.Windows.Forms.Button
+    $d.FlatStyle = 'Flat'; $d.FlatAppearance.BorderSize = 0; $d.UseVisualStyleBackColor = $false
+    $d.TabStop = $false
+    $d.Cursor = [System.Windows.Forms.Cursors]::Hand
+    $d.AccessibleName = 'What does this button do?'
+    $d.AccessibleDescription = ('Explains the button {0}.' -f $h.Title)
+    $d.Location = New-Object System.Drawing.Point($g.HitX, $g.HitY)
+    $d.Size = New-Object System.Drawing.Size($g.HitW, $g.HitH)
+    $d.Tag = @{ Key = $Key; Hover = $false; Parent = $Tile }
+    try { [System.Windows.Forms.Control].GetProperty('DoubleBuffered', [Reflection.BindingFlags]'NonPublic,Instance').SetValue($d, $true, $null) } catch { }
+    $d.Add_Paint({ param($s, $e) Invoke-FixItHelpDotPaint -Dot $s -G $e.Graphics })
+    $d.Add_MouseEnter({ param($s, $e) $s.Tag.Hover = $true; $s.Invalidate() })
+    $d.Add_MouseLeave({ param($s, $e) $s.Tag.Hover = $false; $s.Invalidate() })
+    $d.Add_Click({ param($s, $e) Show-FixItHelp -Key ([string]$s.Tag.Key) })
+    $d.Add_HelpRequested({ param($s, $e) $e.Handled = $true; Show-FixItHelp -Key ([string]$s.Tag.Key) })
+    $Tile.Tag['Help'] = $Key
+    $Tile.AccessibleDescription = 'Press F1 for a short description of what this button does.'
+    $Tile.Add_HelpRequested({ param($s, $e) $e.Handled = $true; Show-FixItHelp -Key ([string]$s.Tag.Help) })
+    $Tile.Controls.Add($d)
+    return $d
+}
+# Opens the description window for one button. Never runs anything.
+function Show-FixItHelp {
+    param([string]$Key)
+    Write-FixItLog ('Help "?" clicked: {0}' -f $Key)
+    $h = Get-FixItHelpText -Key $Key
+    if ($null -eq $h) { Write-FixItLog ('No description for the button {0}' -f $Key) 'WARN'; return }
+    try { Show-FixItHelpForm -Title $h.Title -Text $h.Text } catch { Write-FixItLog ('Could not show the description: {0}' -f $_.Exception.Message) 'ERROR' }
+}
+function Show-FixItHelpForm {
+    param([string]$Title, [string]$Text)
+    $S = $script:UiScale; if (-not $S) { $S = 1.0 }
+    $hc = [bool]$script:UiHighContrast
+    $px = [System.Drawing.GraphicsUnit]::Pixel
+    $cText = '#1A1A1A'; if ($hc) { $cText = '#FFFFFF' }
+    $f = New-Object System.Windows.Forms.Form
+    Set-FixItFormIcon $f
+    $f.Text = 'Family Fix-It - What does this button do?'
+    $f.StartPosition = 'CenterParent'; $f.FormBorderStyle = 'FixedDialog'; $f.MaximizeBox = $false; $f.MinimizeBox = $false; $f.ShowInTaskbar = $false
+    $f.BackColor = (Get-FixItColor $script:UiBack)
+    $w = [int](520 * $S); $inner = [int](472 * $S)
+    $tfont = New-Object System.Drawing.Font('Segoe UI', [single](20 * $S), [System.Drawing.FontStyle]::Bold, $px)
+    $bfont = New-Object System.Drawing.Font('Segoe UI', [single](16 * $S), [System.Drawing.FontStyle]::Regular, $px)
+    $th = 30 * $S; $bh = 120 * $S
+    try { $th = [math]::Ceiling([double](Measure-FixItText -Text $Title -Font $tfont -Width $inner).Height) + 6; $bh = [math]::Ceiling([double](Measure-FixItText -Text $Text -Font $bfont -Width $inner).Height) + 8 } catch { Write-FixItLog ('Help window: could not measure the text: {0}' -f $_.Exception.Message) 'WARN' }
+    $y = [int](20 * $S)
+    $lt = New-Object System.Windows.Forms.Label
+    $lt.AutoSize = $false; $lt.UseMnemonic = $false; $lt.Text = $Title; $lt.Font = $tfont; $lt.ForeColor = (Get-FixItColor $cText)
+    $lt.Location = New-Object System.Drawing.Point([int](24 * $S), $y); $lt.Size = New-Object System.Drawing.Size($inner, [int]$th)
+    $f.Controls.Add($lt)
+    $y += [int]$th + [int](10 * $S)
+    $lb = New-Object System.Windows.Forms.Label
+    $lb.AutoSize = $false; $lb.UseMnemonic = $false; $lb.Text = $Text; $lb.Font = $bfont; $lb.ForeColor = (Get-FixItColor $cText)
+    $lb.Location = New-Object System.Drawing.Point([int](24 * $S), $y); $lb.Size = New-Object System.Drawing.Size($inner, [int]$bh)
+    $f.Controls.Add($lb)
+    $y += [int]$bh + [int](20 * $S)
+    $ok = New-FixItTile -Run '' -Title 'OK, got it' -Sub '' -IconKey '' -Style 'yes' -IconBg '' -X 24 -Y 0 -W 472 -H 52
+    $ok.Location = New-Object System.Drawing.Point([int](24 * $S), $y)
+    $ok.AccessibleName = 'OK, got it. Closes this window.'
+    $ok.DialogResult = 'OK'
+    $f.Controls.Add($ok)
+    $f.AcceptButton = $ok; $f.CancelButton = $ok
+    $f.ClientSize = New-Object System.Drawing.Size($w, ($y + [int](52 * $S) + [int](20 * $S)))
+    try { [void]$f.ShowDialog($script:Form) } finally { $f.Dispose(); $tfont.Dispose(); $bfont.Dispose() }
+}
+
 function New-FixItTile {
     param([string]$Run, [string]$Title, [string]$Sub, [string]$IconKey, [string]$Style, [string]$IconBg, [int]$X, [int]$Y, [int]$W, [int]$H, [bool]$Wide = $false, [bool]$On = $false)
     $S = $script:UiScale
@@ -7418,7 +7733,7 @@ function New-FixItTile {
     $b.Size = New-Object System.Drawing.Size([int]($W * $S), [int]($H * $S))
     $icon = $null; if ($script:UiIcons.ContainsKey($IconKey)) { $icon = $script:UiIcons[$IconKey] }
     $iconW = $null; if ($script:UiIcons.ContainsKey($IconKey + 'W')) { $iconW = $script:UiIcons[$IconKey + 'W'] }
-    $b.Tag = @{ Run = $Run; Title = $Title; Sub = $Sub; Style = $Style; IconBg = $IconBg; Icon = $icon; IconW = $iconW; Hover = $false; Wide = $Wide; On = $On }
+    $b.Tag = @{ Run = $Run; Title = $Title; Sub = $Sub; Style = $Style; IconBg = $IconBg; Icon = $icon; IconW = $iconW; Hover = $false; Wide = $Wide; On = $On; Help = '' }
     try { [System.Windows.Forms.Control].GetProperty('DoubleBuffered', [Reflection.BindingFlags]'NonPublic,Instance').SetValue($b, $true, $null) } catch { }
     $b.Add_Paint({ param($s, $e) Invoke-FixItTilePaint -Btn $s -G $e.Graphics })
     $b.Add_MouseEnter({ param($s, $e) $s.Tag.Hover = $true; $s.Invalidate() })
@@ -7589,14 +7904,15 @@ function Show-FixItWindowOnce {
         $i = 0
         foreach ($t in $grp.Tiles) {
             $tile = New-FixItTile -Run $t[0] -Title $t[1] -Sub $t[2] -IconKey $t[3] -Style 'card' -IconBg $grp.Bg -X ($MX + $i * 231) -Y ($grp.Y + 22) -W 217 -H 112
-            $form.Controls.Add($tile); [void]$script:FixButtons.Add($tile); $i++
+            $form.Controls.Add($tile); [void]$script:FixButtons.Add($tile); [void](Add-FixItHelpDot -Tile $tile -Key $t[0]); $i++
         }
     }
     $scam = New-FixItTile -Run 'Scam' -Title 'I see a scary pop-up' -Sub "A warning telling me to call a number? Don't call it. Click here." -IconKey 'warn' -Style 'scam' -IconBg '#D9473C' -X $MX -Y $lay.ScamY -W 679 -H 72 -Wide $true
-    $form.Controls.Add($scam); [void]$script:FixButtons.Add($scam)
+    $form.Controls.Add($scam); [void]$script:FixButtons.Add($scam); [void](Add-FixItHelpDot -Tile $scam -Key 'Scam')
     $p1 = New-FixItTile -Run 'Screen' -Title 'Let Trey see my screen' -Sub 'Opens Zoho Assist. Trey gives you a code.' -IconKey 'mon' -Style 'primary' -IconBg '#3F8BCB' -X $MX -Y $lay.PrimaryY -W 332 -H 76 -Wide $true
     $p2 = New-FixItTile -Run 'Report' -Title 'Send Trey a report' -Sub 'Something else is wrong' -IconKey 'send' -Style 'outline' -IconBg '#E6F0FA' -X ($MX + 347) -Y $lay.PrimaryY -W 332 -H 76 -Wide $true
     $form.Controls.Add($p1); $form.Controls.Add($p2); [void]$script:FixButtons.Add($p1); [void]$script:FixButtons.Add($p2)
+    [void](Add-FixItHelpDot -Tile $p1 -Key 'Screen'); [void](Add-FixItHelpDot -Tile $p2 -Key 'Report')
 
     $script:StatusLabel = New-Object System.Windows.Forms.Label
     $script:StatusLabel.Text = (Get-FixItIdleStatus)
@@ -7615,7 +7931,7 @@ function Show-FixItWindowOnce {
     $ver.Text = 'Version ' + $script:FixItVersion
     $ver.Font = $lf
     $ver.ForeColor = (Get-FixItColor $cFaint); $ver.AutoSize = $false; $ver.TextAlign = 'MiddleRight'
-    $ver.Location = New-Object System.Drawing.Point([int](($MX + 479) * $S), [int]($lay.LinksY * $S)); $ver.Size = New-Object System.Drawing.Size([int](200 * $S), [int](20 * $S))
+    $ver.Location = New-Object System.Drawing.Point([int](($MX + 579) * $S), [int]($lay.LinksY * $S)); $ver.Size = New-Object System.Drawing.Size([int](100 * $S), [int](20 * $S))
     $form.Controls.Add($ver)
 
     $form.Tag = $FirstTime
@@ -8236,6 +8552,70 @@ function Show-FixItNameForm {
     return [pscustomobject]@{ Saved = $false; Name = (Get-FixItOwnerName) }
 }
 
+# ---- "Share with a friend": plain words, a read-only box with the link, Copy link and Close. Nothing is sent or saved.
+function Show-FixItShareForm {
+    $S = $script:UiScale; if (-not $S) { $S = 1.0 }
+    $hc = [bool]$script:UiHighContrast
+    $px = [System.Drawing.GraphicsUnit]::Pixel
+    $cText = '#1A1A1A'; $cMuted = '#555555'; if ($hc) { $cText = '#FFFFFF'; $cMuted = '#FFFFFF' }
+    $url = Get-FixItShareUrl
+    $f = New-Object System.Windows.Forms.Form
+    Set-FixItFormIcon $f
+    $f.Text = 'Family Fix-It - Share with a friend'
+    $f.StartPosition = 'CenterScreen'
+    $f.FormBorderStyle = 'FixedDialog'
+    $f.MaximizeBox = $false; $f.MinimizeBox = $false; $f.ShowInTaskbar = $true
+    $f.BackColor = (Get-FixItColor $script:UiBack)
+    $f.ClientSize = New-Object System.Drawing.Size([int](560 * $S), [int](400 * $S))
+    $intro = New-Object System.Windows.Forms.Label
+    $intro.AutoSize = $false
+    $intro.Text = $(if ($url) { $script:ShareIntro } else { 'The link to share is not ready yet. Please ask Trey.' })
+    $intro.Font = New-Object System.Drawing.Font('Segoe UI', [single](16 * $S), [System.Drawing.FontStyle]::Regular, $px)
+    $intro.ForeColor = (Get-FixItColor $cText)
+    $intro.Location = New-Object System.Drawing.Point([int](24 * $S), [int](20 * $S)); $intro.Size = New-Object System.Drawing.Size([int](512 * $S), [int](124 * $S))
+    $f.Controls.Add($intro)
+    $tb = New-Object System.Windows.Forms.TextBox
+    $tb.ReadOnly = $true
+    $tb.Font = New-Object System.Drawing.Font('Segoe UI', [single](13 * $S), [System.Drawing.FontStyle]::Regular, $px)
+    $tb.Text = $url
+    $tb.Location = New-Object System.Drawing.Point([int](24 * $S), [int](152 * $S)); $tb.Size = New-Object System.Drawing.Size([int](512 * $S), [int](36 * $S))
+    $tb.AccessibleName = 'The link to send to a friend'
+    if ($hc) { $tb.BackColor = [System.Drawing.Color]::Black; $tb.ForeColor = [System.Drawing.Color]::White }
+    $tb.Add_GotFocus({ param($s, $e) $s.SelectAll() })
+    $f.Controls.Add($tb)
+    $how = New-Object System.Windows.Forms.Label
+    $how.AutoSize = $false; $how.Text = $(if ($url) { $script:ShareHow } else { '' })
+    $how.Font = New-Object System.Drawing.Font('Segoe UI', [single](13 * $S), [System.Drawing.FontStyle]::Regular, $px)
+    $how.ForeColor = (Get-FixItColor $cMuted)
+    $how.Location = New-Object System.Drawing.Point([int](24 * $S), [int](200 * $S)); $how.Size = New-Object System.Drawing.Size([int](512 * $S), [int](84 * $S))
+    $f.Controls.Add($how)
+    $cp = New-FixItTile -Run '' -Title (Get-FixItShareButtonText -State 'Idle') -Sub '' -IconKey '' -Style 'yes' -IconBg '' -X 24 -Y 316 -W 240 -H 56
+    $cp.Tag['Url'] = $url
+    $cp.AccessibleName = 'Copy link. Puts the link on the clipboard so you can paste it into a message.'
+    $cp.Enabled = [bool]$url
+    $cp.Add_Click({ param($s, $e)
+        $ok = $false
+        try { $ok = [bool](Set-FixItClipboard -Text ([string]$s.Tag['Url'])) } catch { }
+        if ($ok) { Write-FixItLog 'Share link copied' } else { Write-FixItLog 'Share link could not be copied' 'WARN' }
+        $s.Tag.Title = (Get-FixItShareButtonText -State $(if ($ok) { 'Copied' } else { 'Failed' }))
+        $s.Invalidate()
+        $tm = New-Object System.Windows.Forms.Timer
+        $tm.Interval = 2000; $tm.Tag = $s
+        $tm.Add_Tick({ param($ts, $te)
+            $ts.Stop(); $b = $ts.Tag; $ts.Dispose()
+            try { if ($null -ne $b -and -not $b.IsDisposed) { $b.Tag.Title = (Get-FixItShareButtonText -State 'Idle'); $b.Invalidate() } } catch { }
+        })
+        $tm.Start()
+    })
+    $cl = New-FixItTile -Run '' -Title 'Close' -Sub '' -IconKey '' -Style 'outline' -IconBg '' -X 296 -Y 316 -W 240 -H 56
+    $cl.AccessibleName = 'Close this window.'
+    $cl.DialogResult = 'Cancel'
+    $f.Controls.Add($cp); $f.Controls.Add($cl)
+    $f.AcceptButton = $cp; $f.CancelButton = $cl
+    try { [void]$f.ShowDialog() } finally { $f.Dispose() }
+    Write-FixItLog 'Share with a friend window closed'
+}
+
 # "Did that fix it?" - a friendly two-button question.
 function Show-FixItFixedDialog {
     param([string]$Title, [string]$Detail)
@@ -8545,7 +8925,7 @@ function Update-FixItFilesList {
     param([string]$Query)
     if ($script:FilesJob) { return }
     $script:FilesPanel.Controls.Clear()
-    $script:FilesMsg.Text = 'Looking... you can click Cancel at any time.'
+    Set-FixItFilesMessage -Text 'Looking... you can click Cancel at any time.'
     Set-FixItFilesBusy $true
     $script:FilesQuery = $Query
     $script:FilesJob = Start-FixItFileSearch -Query $Query -Max 8
@@ -8558,7 +8938,7 @@ function Invoke-FixItFilesPoll {
     $status = 'Running'
     try { $status = Get-FixItFileSearchStatus -Job $job } catch { Write-FixItLog ('My files: could not check the search: {0}' -f $_.Exception.Message) 'WARN'; $status = 'Done' }
     if ($status -eq 'Running') {
-        $script:FilesMsg.Text = ('Looking... {0} files checked so far. You can click Cancel.' -f $job.State.Files)
+        Set-FixItFilesMessage -Text ('Looking... {0} files checked so far. You can click Cancel.' -f $job.State.Files)
         return
     }
     if ($script:FilesTimer) { $script:FilesTimer.Stop() }
@@ -8570,6 +8950,75 @@ function Invoke-FixItFilesPoll {
     Set-FixItFilesBusy $false
     Show-FixItFilesResults -Found $found -Query $script:FilesQuery -Reason $reason
 }
+# ---- My files: the size math (pure, so it is tested; the window only supplies measured text sizes) -------------
+# A name that is too wide for one line goes onto a second line. $Measure is a script block that returns the width in pixels of a piece of
+# text. Breaks go after an underscore, dash, dot or space when one is near the end of the line; if there is none the line is cut where it
+# stops fitting. Only a name that is still too long after MaxLines lines ends with "...". Returns Lines and Truncated.
+function Split-FixItNameLines {
+    param([string]$Name, [int]$MaxWidth, [scriptblock]$Measure, [int]$MaxLines = 2)
+    $lines = New-Object System.Collections.ArrayList
+    $rest = $Name; $truncated = $false
+    for ($li = 1; $li -le $MaxLines; $li++) {
+        if ([int](& $Measure $rest) -le $MaxWidth) { [void]$lines.Add($rest); $rest = ''; break }
+        if ($li -eq $MaxLines) {
+            $t = $rest
+            while ($t.Length -gt 1 -and [int](& $Measure ($t + '...')) -gt $MaxWidth) { $t = $t.Substring(0, $t.Length - 1) }
+            [void]$lines.Add($t.TrimEnd() + '...'); $truncated = $true; $rest = ''; break
+        }
+        $n = $rest.Length - 1
+        while ($n -gt 1 -and [int](& $Measure $rest.Substring(0, $n)) -gt $MaxWidth) { $n-- }
+        $cut = $n
+        $least = [math]::Max(1, [int][math]::Floor($n * 0.4))
+        for ($k = $n; $k -ge $least; $k--) { if ('_- .'.IndexOf($rest[$k - 1]) -ge 0) { $cut = $k; break } }
+        [void]$lines.Add($rest.Substring(0, $cut).TrimEnd())
+        $rest = $rest.Substring($cut).TrimStart(' ')
+        if ($rest.Length -eq 0) { break }
+    }
+    return [pscustomobject]@{ Lines = @($lines | ForEach-Object { [string]$_ }); Truncated = $truncated }
+}
+# One result row, in 96-dpi units (the window multiplies by the screen scale). One line of name = the old 96 unit row.
+function Get-FixItFileRowLayout {
+    param([int]$NameLines = 1, [double]$LineH = 20)
+    $nameY = 4
+    $nameH = 22
+    if ($NameLines -gt 1) { $nameH = [int][math]::Ceiling($NameLines * $LineH) + 2 }
+    $infoY = $nameY + $nameH + 2; $infoH = 18
+    $btnY = $infoY + $infoH + 6; $btnH = 32
+    return [pscustomobject]@{ NameY = $nameY; NameH = $nameH; InfoY = $infoY; InfoH = $infoH; BtnY = $btnY; BtnH = $btnH; RowH = ($btnY + $btnH + 12) }
+}
+# The note under the search box and the list below it, in 96-dpi units. NoteHeightPx is the wrapped text height in real pixels.
+function Get-FixItFilesTopLayout {
+    param([double]$NoteHeightPx = 0, [double]$Scale = 1.0, [int]$ClientH = 620)
+    if ($Scale -le 0) { $Scale = 1.0 }
+    $noteTop = 108
+    $noteH = [int][math]::Max(22, [math]::Ceiling($NoteHeightPx / $Scale) + 4)
+    $panelY = $noteTop + $noteH + 8
+    $panelH = [int][math]::Max(120, $ClientH - $panelY - 16)
+    return [pscustomobject]@{ NoteY = $noteTop; NoteH = $noteH; PanelY = $panelY; PanelH = $panelH }
+}
+# Windows' own text measuring (the same engine the labels draw with). Width 0 = one line; a width = wrapped at that width.
+function Measure-FixItText {
+    param([string]$Text, $Font, [int]$Width = 0)
+    $tf = [System.Windows.Forms.TextFormatFlags]
+    if ($Width -gt 0) { return [System.Windows.Forms.TextRenderer]::MeasureText($Text, $Font, (New-Object System.Drawing.Size($Width, [int]::MaxValue)), ($tf::WordBreak -bor $tf::NoPrefix)) }
+    return [System.Windows.Forms.TextRenderer]::MeasureText($Text, $Font, (New-Object System.Drawing.Size([int]::MaxValue, [int]::MaxValue)), $tf::NoPrefix)
+}
+# Sets the note under the search box, makes the label as tall as its wrapped text, and moves the list down to match.
+function Set-FixItFilesMessage {
+    param([string]$Text)
+    $m = $script:FilesMsg
+    if (-not $m) { return }
+    $S = $script:UiScale; if (-not $S) { $S = 1.0 }
+    $m.Text = $Text
+    $hpx = 0
+    try { $hpx = [int](Measure-FixItText -Text $Text -Font $m.Font -Width ([int](552 * $S))).Height } catch { Write-FixItLog ('My files: could not measure the note: {0}' -f $_.Exception.Message) 'WARN' }
+    $lay = Get-FixItFilesTopLayout -NoteHeightPx $hpx -Scale $S
+    $m.Size = New-Object System.Drawing.Size([int](552 * $S), [int]($lay.NoteH * $S))
+    if ($script:FilesPanel) {
+        $script:FilesPanel.Location = New-Object System.Drawing.Point([int](24 * $S), [int]($lay.PanelY * $S))
+        $script:FilesPanel.Size = New-Object System.Drawing.Size([int](560 * $S), [int]($lay.PanelH * $S))
+    }
+}
 function Show-FixItFilesResults {
     param($Found, [string]$Query, [string]$Reason = '')
     $S = $script:UiScale; $hc = [bool]$script:UiHighContrast
@@ -8579,34 +9028,51 @@ function Show-FixItFilesResults {
     $pn.Controls.Clear()
     $found = @($Found)
     $partial = ''
-    if ($Reason -eq 'cancelled') { $partial = ' (You stopped the search, so this may not be everything.)' }
-    elseif ($Reason) { $partial = ' (I looked in the nearest folders only, so this may not be everything.)' }
+    if ($Reason -eq 'cancelled') { $partial = ' You stopped the search early, so some files may be missing.' }
+    elseif ($Reason) { $partial = ' I only looked in the nearest folders, so some files may be missing.' }
     if ($found.Count -eq 0) {
-        if ($Query) { $script:FilesMsg.Text = ('No file with "{0}" in its name was found. Try fewer or different words.{1}' -f $Query, $partial) }
-        else { $script:FilesMsg.Text = ('No files were found in your Desktop, Documents, Downloads, Pictures or OneDrive folders.{0}' -f $partial) }
+        if ($Query) { Set-FixItFilesMessage -Text ('No file with "{0}" in its name was found. Try fewer or different words.{1}' -f $Query, $partial) }
+        else { Set-FixItFilesMessage -Text ('No files were found in your Desktop, Documents, Downloads, Pictures or OneDrive folders.{0}' -f $partial) }
         return
     }
-    if ($Query) { $script:FilesMsg.Text = ('Files with "{0}" in the name (newest first):{1}' -f $Query, $partial) } else { $script:FilesMsg.Text = ('Saved most recently (newest first). Type a name above to search.{0}' -f $partial) }
+    if ($Query) { Set-FixItFilesMessage -Text ('Files with "{0}" in the name (newest first):{1}' -f $Query, $partial) } else { Set-FixItFilesMessage -Text ('Your newest files. Type a name above to search.{0}' -f $partial) }
     $inv = [Globalization.CultureInfo]::InvariantCulture
+    $nameFont = New-Object System.Drawing.Font('Segoe UI', [single](15 * $S), [System.Drawing.FontStyle]::Bold, $px)
+    $nameWidth = [int](540 * $S)
+    $lineH = 20.0
+    try { $lineH = [double](Measure-FixItText -Text 'Ag' -Font $nameFont).Height / $S } catch { }
+    $script:FilesNameFont = $nameFont
+    $measure = { param($t) return [int](Measure-FixItText -Text $t -Font $script:FilesNameFont).Width }
     $y = 0
     foreach ($x in $found) {
+        # a long name wraps onto up to 2 lines (breaking after _ - . or a space where it can, anywhere if it must); only past 2 lines does it end with ...
+        $nm = [string]$x.Name
+        $sp = $null
+        try { $sp = Split-FixItNameLines -Name $nm -MaxWidth ($nameWidth - 4) -Measure $measure } catch { Write-FixItLog ('My files: could not wrap a long name: {0}' -f $_.Exception.Message) 'WARN' }
+        $nlines = 1; $ntext = $nm
+        if ($null -ne $sp) { $nlines = @($sp.Lines).Count; $ntext = (@($sp.Lines) -join "`r`n") }
+        $rl = Get-FixItFileRowLayout -NameLines $nlines -LineH $lineH
         $n = New-Object System.Windows.Forms.Label
-        $n.Text = [string]$x.Name; $n.AutoSize = $false; $n.AutoEllipsis = $true
-        $n.Font = New-Object System.Drawing.Font('Segoe UI', [single](15 * $S), [System.Drawing.FontStyle]::Bold, $px)
+        $n.Text = $ntext; $n.AutoSize = $false; $n.UseMnemonic = $false; $n.AutoEllipsis = ($null -eq $sp)
+        $n.Font = $nameFont
         $n.ForeColor = (Get-FixItColor $cText)
-        $n.Location = New-Object System.Drawing.Point(0, [int](($y + 4) * $S)); $n.Size = New-Object System.Drawing.Size([int](540 * $S), [int](22 * $S))
+        $n.Location = New-Object System.Drawing.Point(0, [int](($y + $rl.NameY) * $S)); $n.Size = New-Object System.Drawing.Size($nameWidth, [int]($rl.NameH * $S))
+        $n.AccessibleName = $nm
+        if ($script:FilesTip) { $script:FilesTip.SetToolTip($n, $nm) }
         $pn.Controls.Add($n)
         $i = New-Object System.Windows.Forms.Label
-        $i.Text = ('{0}   saved {1}' -f $x.Folder, ([datetime]$x.Modified).ToString('ddd MMM d, h:mm tt', $inv)); $i.AutoSize = $false; $i.AutoEllipsis = $true
+        $i.Text = ('{0}   saved {1}' -f $x.Folder, ([datetime]$x.Modified).ToString('ddd MMM d, h:mm tt', $inv)); $i.AutoSize = $false; $i.AutoEllipsis = $true; $i.UseMnemonic = $false
         $i.Font = New-Object System.Drawing.Font('Segoe UI', [single](12 * $S), [System.Drawing.FontStyle]::Regular, $px)
         $i.ForeColor = (Get-FixItColor $cMuted)
-        $i.Location = New-Object System.Drawing.Point(0, [int](($y + 28) * $S)); $i.Size = New-Object System.Drawing.Size([int](540 * $S), [int](18 * $S))
+        $i.Location = New-Object System.Drawing.Point(0, [int](($y + $rl.InfoY) * $S)); $i.Size = New-Object System.Drawing.Size($nameWidth, [int]($rl.InfoH * $S))
+        if ($script:FilesTip) { $script:FilesTip.SetToolTip($i, [string]$x.FullName) }
         $pn.Controls.Add($i)
-        $b1 = New-FixItTile -Run ('OpenFile:' + $x.FullName) -Title 'Open the file' -Sub '' -IconKey '' -Style 'btn' -IconBg '' -X 0 -Y ($y + 52) -W 160 -H 32
-        $b2 = New-FixItTile -Run ('ShowFile:' + $x.FullName) -Title 'Show me where it is' -Sub '' -IconKey '' -Style 'btn' -IconBg '' -X 172 -Y ($y + 52) -W 200 -H 32
+        $b1 = New-FixItTile -Run ('OpenFile:' + $x.FullName) -Title 'Open the file' -Sub '' -IconKey '' -Style 'btn' -IconBg '' -X 0 -Y ($y + $rl.BtnY) -W 160 -H $rl.BtnH
+        $b2 = New-FixItTile -Run ('ShowFile:' + $x.FullName) -Title 'Show me where it is' -Sub '' -IconKey '' -Style 'btn' -IconBg '' -X 172 -Y ($y + $rl.BtnY) -W 200 -H $rl.BtnH
         $pn.Controls.Add($b1); $pn.Controls.Add($b2)
-        $y += 96
+        $y += $rl.RowH
     }
+    $nameFont = $null
 }
 function Show-FixItFilesDialog {
     $S = $script:UiScale; $hc = [bool]$script:UiHighContrast
@@ -8619,6 +9085,7 @@ function Show-FixItFilesDialog {
     $f.BackColor = (Get-FixItColor $script:UiBack)
     $f.ClientSize = New-Object System.Drawing.Size([int](600 * $S), [int](620 * $S))
     $script:FilesDialog = $f
+    $script:FilesTip = New-Object System.Windows.Forms.ToolTip
     $l = New-Object System.Windows.Forms.Label
     $l.Text = 'Type part of the file name, then click Search. Leave it empty to see what you saved lately.'
     $l.AutoSize = $false; $l.Font = New-Object System.Drawing.Font('Segoe UI', [single](13 * $S), [System.Drawing.FontStyle]::Regular, $px)
@@ -8642,7 +9109,7 @@ function Show-FixItFilesDialog {
     $tm.Add_Tick({ Invoke-FixItFilesPoll })
     $script:FilesTimer = $tm
     $msg = New-Object System.Windows.Forms.Label
-    $msg.AutoSize = $false; $msg.Font = New-Object System.Drawing.Font('Segoe UI', [single](12.5 * $S), [System.Drawing.FontStyle]::Bold, $px)
+    $msg.AutoSize = $false; $msg.UseMnemonic = $false; $msg.Font = New-Object System.Drawing.Font('Segoe UI', [single](12.5 * $S), [System.Drawing.FontStyle]::Bold, $px)
     $msg.ForeColor = (Get-FixItColor $cMuted)
     $msg.Location = New-Object System.Drawing.Point([int](24 * $S), [int](108 * $S)); $msg.Size = New-Object System.Drawing.Size([int](552 * $S), [int](22 * $S))
     $f.Controls.Add($msg); $script:FilesMsg = $msg
@@ -8659,6 +9126,7 @@ function Show-FixItFilesDialog {
     Write-FixItLog 'My files: window opened'
     [void]$f.ShowDialog($script:Form)
     if ($script:FilesTimer) { $script:FilesTimer.Dispose(); $script:FilesTimer = $null }
+    if ($script:FilesTip) { $script:FilesTip.Dispose(); $script:FilesTip = $null }
     $f.Dispose()
 }
 
@@ -8666,7 +9134,7 @@ function Show-FixItFilesDialog {
 function Show-FixItAppsDialog {
     $S = $script:UiScale; $hc = [bool]$script:UiHighContrast
     $px = [System.Drawing.GraphicsUnit]::Pixel
-    $cText = '#1A1A1A'; $cMuted = '#555555'; if ($hc) { $cText = '#FFFFFF'; $cMuted = '#FFFFFF' }
+    $cText = '#1A1A1A'; $cMuted = '#555555'; $cHead = '#0F6CBD'; if ($hc) { $cText = '#FFFFFF'; $cMuted = '#FFFFFF'; $cHead = '#FFFF00' }
     $script:Form.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
     $apps = @()
     try { $apps = @(Get-FixItApprovedApps) } catch { Write-FixItLog ('App list failed: {0}' -f $_.Exception.Message) 'ERROR' }
@@ -8676,28 +9144,73 @@ function Show-FixItAppsDialog {
     $f.Text = 'Family Fix-It - Install an app'
     $f.StartPosition = 'CenterParent'; $f.FormBorderStyle = 'FixedDialog'; $f.MaximizeBox = $false; $f.MinimizeBox = $false; $f.ShowInTaskbar = $false
     $f.BackColor = (Get-FixItColor $script:UiBack)
-    $f.ClientSize = New-Object System.Drawing.Size([int](520 * $S), [int]((120 + 60 * $apps.Count) * $S))
+    $nfont = New-Object System.Drawing.Font('Segoe UI', [single](16 * $S), [System.Drawing.FontStyle]::Bold, $px)
+    $dfont = New-Object System.Drawing.Font('Segoe UI', [single](13 * $S), [System.Drawing.FontStyle]::Regular, $px)
+    $hfont = New-Object System.Drawing.Font('Segoe UI', [single](14 * $S), [System.Drawing.FontStyle]::Bold, $px)
+    $introFont = New-Object System.Drawing.Font('Segoe UI', [single](13 * $S), [System.Drawing.FontStyle]::Regular, $px)
+    $descW = [int](320 * $S)
+    # first lay everything out in units, so the window height is known before anything is created
+    $items = @(); $y = 4
+    foreach ($sec in @(Get-FixItAppSections -Apps $apps)) {
+        $items += [pscustomobject]@{ Kind = 'head'; Y = $y; Text = [string]$sec.Section }
+        $y += 40
+        foreach ($a in @($sec.Apps)) {
+            $dh = 18
+            if ([string]$a.Description) { try { $dh = [math]::Ceiling([double](Measure-FixItText -Text ([string]$a.Description) -Font $dfont -Width $descW).Height / $S) + 2 } catch { $dh = 18 * 2 } }
+            else { $dh = 0 }
+            $rl = Get-FixItAppRowLayout -DescHeight $dh
+            $items += [pscustomobject]@{ Kind = 'app'; Y = $y; App = $a; Row = $rl }
+            $y += $rl.RowH
+        }
+        $y += 6
+    }
+    $wa = 0; try { $wa = [int][System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea.Height } catch { }
+    $sz = Get-FixItAppsDialogSize -ContentUnits $y -Scale $S -WorkingAreaHeightPx $wa
+    $f.ClientSize = New-Object System.Drawing.Size([int](520 * $S), $sz.ClientH)
     $l = New-Object System.Windows.Forms.Label
     $l.Text = 'These apps are safe to install. Trey picked them. I will not install anything else.'
-    $l.AutoSize = $false; $l.Font = New-Object System.Drawing.Font('Segoe UI', [single](13 * $S), [System.Drawing.FontStyle]::Regular, $px)
+    $l.AutoSize = $false; $l.UseMnemonic = $false; $l.Font = $introFont
     $l.ForeColor = (Get-FixItColor $cText)
-    $l.Location = New-Object System.Drawing.Point([int](24 * $S), [int](16 * $S)); $l.Size = New-Object System.Drawing.Size([int](472 * $S), [int](40 * $S))
+    $l.Location = New-Object System.Drawing.Point([int](24 * $S), [int](14 * $S)); $l.Size = New-Object System.Drawing.Size([int](472 * $S), [int](46 * $S))
     $f.Controls.Add($l)
-    $y = 70
-    foreach ($a in $apps) {
-        $n = New-Object System.Windows.Forms.Label
-        $n.Text = [string]$a.Name; $n.AutoSize = $false
-        $n.Font = New-Object System.Drawing.Font('Segoe UI', [single](16 * $S), [System.Drawing.FontStyle]::Bold, $px)
-        $n.ForeColor = (Get-FixItColor $cText); $n.TextAlign = 'MiddleLeft'
-        $n.Location = New-Object System.Drawing.Point([int](24 * $S), [int]($y * $S)); $n.Size = New-Object System.Drawing.Size([int](320 * $S), [int](40 * $S))
-        $f.Controls.Add($n)
-        $b = New-FixItTile -Run ('InstallApp:' + $a.Name) -Title 'Install' -Sub '' -IconKey '' -Style 'btn' -IconBg '' -X 366 -Y ($y + 2) -W 130 -H 36
-        $f.Controls.Add($b)
-        $y += 60
+    $pn = New-Object System.Windows.Forms.Panel
+    $pn.AutoScroll = $true; $pn.BorderStyle = 'None'; $pn.BackColor = (Get-FixItColor $script:UiBack)
+    $pn.Location = New-Object System.Drawing.Point(0, $sz.PanelY); $pn.Size = New-Object System.Drawing.Size([int](520 * $S), $sz.PanelH)
+    $pn.AccessibleName = 'List of apps you can install'
+    $pn.Add_MouseEnter({ param($s, $e) try { $s.Focus() | Out-Null } catch { } })
+    $f.Controls.Add($pn)
+    foreach ($it in $items) {
+        if ($it.Kind -eq 'head') {
+            $h = New-Object System.Windows.Forms.Label
+            $h.Text = $it.Text; $h.AutoSize = $false; $h.UseMnemonic = $false; $h.Font = $hfont; $h.ForeColor = (Get-FixItColor $cHead); $h.TextAlign = 'BottomLeft'
+            $h.Location = New-Object System.Drawing.Point([int](24 * $S), [int]($it.Y * $S)); $h.Size = New-Object System.Drawing.Size([int](472 * $S), [int](30 * $S))
+            $h.AccessibleName = ('Section: ' + $it.Text)
+            $pn.Controls.Add($h)
+            $ln = New-Object System.Windows.Forms.Label
+            $ln.Text = ''; $ln.AutoSize = $false; $ln.BackColor = (Get-FixItColor $cMuted); $ln.TabStop = $false
+            $ln.Location = New-Object System.Drawing.Point([int](24 * $S), [int](($it.Y + 32) * $S)); $ln.Size = New-Object System.Drawing.Size([int](472 * $S), [Math]::Max(1, [int]$S))
+            $pn.Controls.Add($ln)
+        } else {
+            $a = $it.App; $rl = $it.Row
+            $n = New-Object System.Windows.Forms.Label
+            $n.Text = [string]$a.Name; $n.AutoSize = $false; $n.UseMnemonic = $false
+            $n.Font = $nfont; $n.ForeColor = (Get-FixItColor $cText); $n.TextAlign = 'MiddleLeft'
+            $n.Location = New-Object System.Drawing.Point([int](24 * $S), [int](($it.Y + $rl.NameY) * $S)); $n.Size = New-Object System.Drawing.Size([int](320 * $S), [int]($rl.NameH * $S))
+            $pn.Controls.Add($n)
+            if ([string]$a.Description) {
+                $d = New-Object System.Windows.Forms.Label
+                $d.Text = [string]$a.Description; $d.AutoSize = $false; $d.UseMnemonic = $false
+                $d.Font = $dfont; $d.ForeColor = (Get-FixItColor $cMuted)
+                $d.Location = New-Object System.Drawing.Point([int](24 * $S), [int](($it.Y + $rl.DescY) * $S)); $d.Size = New-Object System.Drawing.Size($descW, [int]($rl.DescH * $S))
+                $pn.Controls.Add($d)
+            }
+            $b = New-FixItTile -Run ('InstallApp:' + $a.Name) -Title 'Install' -Sub '' -IconKey '' -Style 'btn' -IconBg '' -X 366 -Y ($it.Y + $rl.BtnY) -W 130 -H $rl.BtnH
+            $b.AccessibleName = ('Install {0}. {1}' -f $a.Name, $a.Description)
+            $pn.Controls.Add($b)
+        }
     }
     if ($apps.Count -eq 0) { $e0 = New-Object System.Windows.Forms.Label; $e0.Text = 'The list of apps is empty right now.'; $e0.AutoSize = $true; $e0.Location = New-Object System.Drawing.Point([int](24 * $S), [int](70 * $S)); $f.Controls.Add($e0) }
-    [void]$f.ShowDialog($script:Form)
-    $f.Dispose()
+    try { [void]$f.ShowDialog($script:Form) } finally { $f.Dispose(); $nfont.Dispose(); $dfont.Dispose(); $hfont.Dispose(); $introFont.Dispose() }
 }
 
 # ---- My PC info: big PC code, the facts about this computer (with bars for memory and drives), and a Copy button
@@ -8883,6 +9396,27 @@ function Show-FixItGuidesDialog {
 }
 
 # ---- One guide: big numbered steps, Back, and "this did not help - tell Trey"
+# Where each step of a guide goes, from the MEASURED height of its wrapped text. $Measure is called as & $Measure $text $width and returns the
+# wrapped height in pixels (the window passes TextRenderer with WordBreak). The text is measured a little narrower than its label, so the
+# label can never wrap to one more line than was measured, and the row gets padding below the last line. Rows are stacked by their own height.
+function Get-FixItGuideStepLayout {
+    param($Steps, [double]$Scale = 1.0, [int]$TextWidth, [int]$LineHeight = 26, [scriptblock]$Measure)
+    if ($Scale -le 0) { $Scale = 1.0 }
+    $safety = [int][math]::Ceiling(8 * $Scale)
+    $pad = [int][math]::Ceiling(12 * $Scale)
+    $minH = [int][math]::Ceiling(44 * $Scale)
+    $top = [int][math]::Ceiling(3 * $Scale)
+    $gap = [int][math]::Ceiling(14 * $Scale)
+    $rows = @(); $y = 0; $n = 1
+    foreach ($st in @($Steps)) {
+        $mh = [int][math]::Ceiling([double](& $Measure ([string]$st) ($TextWidth - $safety)))
+        $lines = 1; if ($LineHeight -gt 0) { $lines = [int][math]::Max(1, [math]::Round($mh / $LineHeight)) }
+        $h = [int][math]::Max($mh + $pad, $minH)
+        $rows += [pscustomobject]@{ Number = $n; Y = $y; TextY = ($y + $top); Height = $h; Lines = $lines; MeasuredHeight = $mh }
+        $y += $top + $h + $gap; $n++
+    }
+    return [pscustomobject]@{ Rows = @($rows); TotalHeight = $y }
+}
 function Show-FixItGuideSteps {
     param($Guide)
     $S = $script:UiScale; $hc = [bool]$script:UiHighContrast
@@ -8895,7 +9429,7 @@ function Show-FixItGuideSteps {
     $f.BackColor = (Get-FixItColor $script:UiBack)
     $f.ClientSize = New-Object System.Drawing.Size([int](660 * $S), [int](700 * $S))
     $h = New-Object System.Windows.Forms.Label
-    $h.Text = [string]$Guide.Title; $h.AutoSize = $false
+    $h.Text = [string]$Guide.Title; $h.AutoSize = $false; $h.UseMnemonic = $false
     $h.Font = New-Object System.Drawing.Font('Segoe UI', [single](24 * $S), [System.Drawing.FontStyle]::Bold, $px)
     $h.ForeColor = (Get-FixItColor $cText)
     $h.Location = New-Object System.Drawing.Point([int](24 * $S), [int](16 * $S)); $h.Size = New-Object System.Drawing.Size([int](612 * $S), [int](76 * $S))
@@ -8904,23 +9438,24 @@ function Show-FixItGuideSteps {
     $pn.AutoScroll = $true; $pn.BackColor = (Get-FixItColor $script:UiBack)
     $pn.Location = New-Object System.Drawing.Point([int](24 * $S), [int](100 * $S)); $pn.Size = New-Object System.Drawing.Size([int](620 * $S), [int](492 * $S))
     $f.Controls.Add($pn)
-    $font = New-Object System.Drawing.Font('Segoe UI', [single](19 * $S), [System.Drawing.FontStyle]::Regular, $px)
+    $script:GuideFont = New-Object System.Drawing.Font('Segoe UI', [single](19 * $S), [System.Drawing.FontStyle]::Regular, $px)
     $nfont = New-Object System.Drawing.Font('Segoe UI', [single](22 * $S), [System.Drawing.FontStyle]::Bold, $px)
     $tw = [int](540 * $S)
-    $tflags = [System.Windows.Forms.TextFormatFlags]::WordBreak -bor [System.Windows.Forms.TextFormatFlags]::NoPadding
-    $y = 0; $n = 1
-    foreach ($st in @($Guide.Steps)) {
-        $sz = [System.Windows.Forms.TextRenderer]::MeasureText([string]$st, $font, (New-Object System.Drawing.Size($tw, 0)), $tflags)
-        $hh = [math]::Max($sz.Height + [int](6 * $S), [int](44 * $S))
+    $lineH = 26; try { $lineH = [int][System.Windows.Forms.TextRenderer]::MeasureText('Ag', $script:GuideFont).Height } catch { }
+    $measure = { param($t, $w) [int](Measure-FixItText -Text $t -Font $script:GuideFont -Width $w).Height }
+    $lay = Get-FixItGuideStepLayout -Steps @($Guide.Steps) -Scale $S -TextWidth $tw -LineHeight $lineH -Measure $measure
+    $steps = @($Guide.Steps)
+    for ($k = 0; $k -lt $lay.Rows.Count; $k++) {
+        $r = $lay.Rows[$k]; $st = $steps[$k]
         $nl = New-Object System.Windows.Forms.Label
-        $nl.Text = [string]$n; $nl.AutoSize = $false; $nl.Font = $nfont; $nl.ForeColor = (Get-FixItColor $cNum); $nl.TextAlign = 'TopCenter'
-        $nl.Location = New-Object System.Drawing.Point(0, $y); $nl.Size = New-Object System.Drawing.Size([int](50 * $S), $hh)
+        $nl.Text = [string]$r.Number; $nl.AutoSize = $false; $nl.UseMnemonic = $false; $nl.Font = $nfont; $nl.ForeColor = (Get-FixItColor $cNum); $nl.TextAlign = 'TopCenter'
+        $nl.Location = New-Object System.Drawing.Point(0, $r.Y); $nl.Size = New-Object System.Drawing.Size([int](50 * $S), $r.Height)
         $pn.Controls.Add($nl)
         $tl = New-Object System.Windows.Forms.Label
-        $tl.Text = [string]$st; $tl.AutoSize = $false; $tl.Font = $font; $tl.ForeColor = (Get-FixItColor $cText)
-        $tl.Location = New-Object System.Drawing.Point([int](56 * $S), ($y + [int](3 * $S))); $tl.Size = New-Object System.Drawing.Size($tw, $hh)
+        $tl.Text = [string]$st; $tl.AutoSize = $false; $tl.UseMnemonic = $false; $tl.Font = $script:GuideFont; $tl.ForeColor = (Get-FixItColor $cText)
+        $tl.Location = New-Object System.Drawing.Point([int](56 * $S), $r.TextY); $tl.Size = New-Object System.Drawing.Size($tw, $r.Height)
+        $tl.AccessibleName = ('Step {0}. {1}' -f $r.Number, [string]$st)
         $pn.Controls.Add($tl)
-        $y += $hh + [int](14 * $S); $n++
     }
     $back = New-FixItTile -Run '' -Title 'Back' -Sub '' -IconKey '' -Style 'yes' -IconBg '' -X 24 -Y 622 -W 170 -H 56
     $back.Add_Click({ param($s, $e) $s.FindForm().Close() })
@@ -8928,8 +9463,7 @@ function Show-FixItGuideSteps {
     $no = New-FixItTile -Run ('GuideHelp:' + [string]$Guide.Id) -Title "This didn't help - tell Trey" -Sub '' -IconKey '' -Style 'btn' -IconBg '' -X 214 -Y 622 -W 422 -H 56
     $f.Controls.Add($no)
     $script:GuideShown = $Guide
-    [void]$f.ShowDialog($script:Form)
-    $f.Dispose()
+    try { [void]$f.ShowDialog($script:Form) } finally { $f.Dispose(); $script:GuideFont.Dispose(); $nfont.Dispose(); $script:GuideFont = $null }
 }
 
 function Send-FixItGuideNote {
@@ -9001,7 +9535,7 @@ function Show-FixItTestOutcome {
 }
 
 function Invoke-GuiTestAll {
-    $q = "Test all buttons?`r`n`r`nThis checks every fix one after the other, answering Yes to each question. Nothing is changed, closed, restarted or sent. The results are saved on your Desktop."
+    $q = "Test all buttons?`r`n`r`nThis checks every fix one after the other, answering Yes to each question. Nothing is changed, closed, restarted or sent. The results are saved $($script:ReportsWhere)."
     $a = [System.Windows.Forms.MessageBox]::Show($q, 'Family Fix-It (Test mode)', 'YesNo', 'Question')
     if ($a -ne 'Yes') { return }
     foreach ($x in $script:FixButtons) { $x.Enabled = $false; $x.Invalidate() }
@@ -9055,10 +9589,10 @@ function Invoke-GuiButton {
         return
     }
     if ($Which -eq 'Pin') { Show-FixItGuideSteps -Guide (Get-FixItPinGuide); return }
-    if ($Which -eq 'Privacy' -or $Which -eq 'YourName') {
-        # the "What's shared" window and the name question: no question first (Test mode shows its checklist instead)
+    if ($Which -eq 'Privacy' -or $Which -eq 'YourName' -or $Which -eq 'Share') {
+        # the "What's shared" window, the name question and "Share with a friend": no question first (Test mode shows its checklist instead)
         $pr = $null
-        if ($Which -eq 'Privacy') { $pr = Invoke-FixItPrivacy } else { $pr = Invoke-FixItYourName }
+        if ($Which -eq 'Privacy') { $pr = Invoke-FixItPrivacy } elseif ($Which -eq 'Share') { $pr = Invoke-FixItShare } else { $pr = Invoke-FixItYourName }
         if ($script:TestMode) { Show-FixItTestOutcome -Title (Get-FixItActionTable)[$Which].Title -Result $pr }
         return
     }
@@ -9208,6 +9742,7 @@ function Start-FamilyFixIt {
             'Donate'             { Show-FixItResult (Invoke-FixItDonate) }
             'Privacy'            { Show-FixItResult (Invoke-FixItPrivacy) }
             'YourName'           { Show-FixItResult (Invoke-FixItYourName) }
+            'Share'              { Show-FixItResult (Invoke-FixItShare) }
             'FirstRunPending'    { Show-FixItResult (Invoke-FixItFirstRunPending) }
             'Guides'             { Show-FixItResult (Invoke-GuidesHelper) }
             'Simple'             { Show-FixItResult (Invoke-SimpleToggle -Mode 'Toggle') }

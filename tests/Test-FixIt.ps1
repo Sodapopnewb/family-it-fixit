@@ -599,7 +599,7 @@ Assert (-not $r.Ok -and $r.Title -eq 'Router not restarted' -and (CallsLike 'cou
 Assert ($r.Message.Contains($routerWords)) 'No: the instruction is repeated for when they are ready'
 Reset-All; $script:Conn.Router = $false; $script:Conn.Net = $false; $script:Conn.Dns = $false; $script:Conn.Web = $false; $script:PostFail = $true
 $r = Invoke-NetworkFix
-Assert (-not $r.Ok -and -not $r.ReportSent -and $r.Message -match 'saved on your Desktop' -and $r.Message -match 'call Trey') 'report cannot be sent (no internet): says so and points to the saved copy'
+Assert (-not $r.Ok -and -not $r.ReportSent -and $r.Message -match "saved in the 'Family Fix-It Reports' folder in your Documents" -and $r.Message -match 'call Trey') 'report cannot be sent (no internet): says so and points to the saved copy'
 Reset-All; $script:Conn.Dns = $false; $script:Conn.Web = $false; $script:ConnHeal = 'ipconfig.exe /flushdns'
 $r = Invoke-NetworkFix
 Assert ($r.Ok -and $r.Title -eq 'Internet fixed' -and (CallsLike 'tool netsh*') -eq 0) 'fixed by the simple steps: the deeper (admin) reset is NOT run'
@@ -930,7 +930,7 @@ Section 'Sending the report to Trey'
 Reset-All; $o2 = Join-Path $tmp 'send1'; New-Item -ItemType Directory $o2 -Force | Out-Null; $OutputDir = $o2
 $res = Invoke-FixItReport
 Assert ($res.Ok -and $res.Title -eq 'Report sent' -and $res.Message -eq 'Report sent to Trey') 'success: "Report sent to Trey"'
-Assert ($script:Posts.Count -eq 1 -and @(Get-ChildItem $o2 -File).Count -eq 1) 'saved to the Desktop folder AND sent once'
+Assert ($script:Posts.Count -eq 1 -and @(Get-ChildItem $o2 -File).Count -eq 1) 'saved to the reports folder AND sent once'
 $p = $script:Posts[0]
 Assert ($p.App -eq 'family-it-fixit' -and $p.Url -eq 'https://fixit-report.hg-fixit.workers.dev/report') 'app header and Worker URL from the setting'
 $j = $p.Json | ConvertFrom-Json
@@ -938,7 +938,7 @@ Assert ($j.version -eq $script:FixItVersion -and $j.kind -eq 'report' -and $j.pc
 Assert ([Text.Encoding]::UTF8.GetByteCount($p.Json) -lt 512KB) 'body well under 512KB'
 Reset-All; $script:PostFail = $true; $OutputDir = $o2
 $res = Invoke-FixItReport
-$cant = "Couldn't send$([char]0x2014)please send the file on your Desktop to Trey"
+$cant = "Couldn't send$([char]0x2014)please send the file in the 'Family Fix-It Reports' folder in your Documents to Trey"
 Assert (-not $res.Ok -and $res.Message -match [regex]::Escape($cant) -and (Test-Path $res.ReportPath)) 'failure: exact fallback message, file kept'
 Reset-All; $script:DryRun = $true; $OutputDir = $o2
 $res = Invoke-FixItReport
@@ -1314,19 +1314,19 @@ function Invoke-FixItNative {
 }
 Reset-All; $script:ManifestUrl = ''
 $apps = @(Get-FixItApprovedApps)
-Assert ($apps.Count -eq 4 -and ($apps.Id -join ',') -eq 'Google.Chrome,Zoom.Zoom,Adobe.Acrobat.Reader.64-bit,VideoLAN.VLC' -and ($apps.Name -join ',') -match 'Google Chrome,Zoom,Adobe Acrobat Reader,VLC') 'default list: Chrome, Zoom, Acrobat Reader, VLC with exact winget ids'
+Assert ($apps.Count -eq 12 -and ($apps.Id -join ',') -eq 'Google.Chrome,Zoom.Zoom,Discord.Discord,VideoLAN.VLC,Spotify.Spotify,Apple.iTunes,OBSProject.OBSStudio,Audacity.Audacity,Adobe.Acrobat.Reader.64-bit,7zip.7zip,Google.GoogleDrive,Dropbox.Dropbox' -and ($apps.Name -join ',') -match 'Google Chrome,Zoom,Discord,VLC media player,Spotify,iTunes') 'default list: the 12 approved apps with exact ids'
 $placeholder = 'https://raw.githubusercontent.com/<' + 'OWNER>/family-it-fixit/main/manifest.json'
 $script:ManifestUrl = $placeholder; $script:Calls.Clear()
-Assert (@(Get-FixItApprovedApps).Count -eq 4 -and (CallsLike 'web*') -eq 0) 'update address not set up yet: built-in list, no download'
+Assert (@(Get-FixItApprovedApps).Count -eq 12 -and (CallsLike 'web*') -eq 0) 'update address not set up yet: built-in list, no download'
 $mm = Join-Path $tmp 'apps-manifest.json'
 Set-Content $mm '{"version":"2.0.0","files":[],"apps":[{"id":"Mozilla.Firefox","name":"Firefox"},{"id":"Evil Pkg; calc","name":"Bad"},{"id":"x","name":"No dot"},{"id":"A.B","name":"<script>"},{"id":"Foo.Bar","name":"Foo Bar"}]}'
 $mu = 'https://example.test/manifest.json'; $script:ManifestUrl = $mu; $script:WebMap = @{ $mu = $mm }
 $apps = @(Get-FixItApprovedApps)
 Assert ($apps.Count -eq 2 -and $apps[0].Id -eq 'Mozilla.Firefox' -and $apps[1].Id -eq 'Foo.Bar') 'list comes from the manifest; entries that look wrong are dropped'
 Set-Content $mm '{"apps":[{"id":"bad id","name":"x"}]}'
-Assert (@(Get-FixItApprovedApps).Count -eq 4) 'manifest list with no valid entries: built-in list'
+Assert (@(Get-FixItApprovedApps).Count -eq 12) 'manifest list with no valid entries: built-in list'
 $script:WebFail = $true
-Assert (@(Get-FixItApprovedApps).Count -eq 4) 'offline: built-in list'
+Assert (@(Get-FixItApprovedApps).Count -eq 12) 'offline: built-in list'
 $script:WebFail = $false
 Set-Content $mm '{"apps":[{"id":"Mozilla.Firefox","name":"Firefox"}]}'
 Reset-All; $script:Wg.Installed = @{}; $script:Wg.InstallCode = 0; $script:Wg.Present = $true
@@ -1356,7 +1356,7 @@ $r = Invoke-InstallApp -AppName 'Firefox'
 Assert ($r.Ok -and (CallsLike 'native winget.exe install*') -eq 0 -and $script:Wg.Installed.Count -eq 0) 'dry-run: nothing installed'
 Reset-All; $script:ManifestUrl = ''
 $r = Invoke-InstallApp
-Assert ($r.Ok -and $r.Details.Count -eq 4 -and (CallsLike 'native*') -eq 0) 'no app named: just lists the approved apps'
+Assert ($r.Ok -and $r.Details.Count -eq 12 -and (CallsLike 'native*') -eq 0) 'no app named: just lists the approved apps'
 $gui = [IO.File]::ReadAllText((Join-Path $root 'FamilyFixIt.ps1'))
 Assert ($gui -match "'--source', 'winget'" -and $gui -match "'--exact'") 'real adapter source: --exact and --source winget'
 Assert ($gui.Contains('@(''install'', ''--id'', $Id, ')) 'install is only ever called with the validated id'
@@ -1370,7 +1370,7 @@ $sb = [IO.File]::ReadAllText((Join-Path $root 'FamilyFixIt.ps1'))
 foreach ($t in @("'What did I fix?'", "'My files'", "'Install an app'")) { Assert ($sb.Contains("@('") -and $sb.Contains($t)) "sidebar has $t" }
 Assert ($sb -match "'History', 'Files', 'Install'") 'command-line actions History, Files, Install exist'
 $ap = Get-Content (Join-Path $root 'apps.json') -Raw | ConvertFrom-Json
-Assert (@($ap).Count -eq 4 -and (@($ap.id) -join ',') -eq 'Google.Chrome,Zoom.Zoom,Adobe.Acrobat.Reader.64-bit,VideoLAN.VLC') 'apps.json: default four apps'
+Assert (@($ap).Count -eq 12 -and (@($ap.id) -join ',') -eq 'Google.Chrome,Zoom.Zoom,Discord.Discord,VideoLAN.VLC,Spotify.Spotify,Apple.iTunes,OBSProject.OBSStudio,Audacity.Audacity,Adobe.Acrobat.Reader.64-bit,7zip.7zip,Google.GoogleDrive,Dropbox.Dropbox') 'apps.json: the 12 approved apps'
 
 Section 'Printer: asks which printer, then sets the default'
 function Pr { param($Name, $Default = $false, $Status = 'Normal', $Port = 'USB001') [pscustomobject]@{ Name = $Name; IsNetwork = $false; Server = ''; PortName = $Port; StatusText = $Status; WorkOffline = ($Status -eq 'Offline'); IsDefault = $Default } }
@@ -1558,15 +1558,15 @@ $outPin = & (Get-Command pwsh).Source -NoProfile -File (Join-Path $root 'FamilyF
 Assert ($LASTEXITCODE -eq 0 -and $outPin -match 'Pin to taskbar') 'command line: -Action Pin prints the steps'
 
 Section 'Version'
-Assert ($script:FixItVersion -eq '2.3.8') 'the program is version 2.3.8'
+Assert ($script:FixItVersion -eq '2.3.9') 'the program is version 2.3.9'
 
 Section 'Publish + update'
 $pub = Join-Path $root 'tools/Publish-FixIt.ps1'
 $dist = Join-Path $tmp 'dist1'
 & $pub -Owner 'octo-test' -OutDir $dist -WarningAction SilentlyContinue | Out-Null
 $man = Get-Content (Join-Path $dist 'manifest.json') -Raw | ConvertFrom-Json
-Assert ($man.version -eq '2.3.8' -and @($man.files).Count -eq 4) 'manifest has version and 4 runtime files'
-Assert (@($man.apps).Count -eq 4 -and $man.apps[0].id -eq 'Google.Chrome') 'manifest carries the approved app list'
+Assert ($man.version -eq '2.3.9' -and @($man.files).Count -eq 4) 'manifest has version and 4 runtime files'
+Assert (@($man.apps).Count -eq 12 -and $man.apps[0].id -eq 'Google.Chrome' -and $man.apps[0].section -eq 'Browsers and chat' -and [string]$man.apps[0].description -and $man.apps[4].id -eq 'Spotify.Spotify' -and $man.apps[4].elevationProhibited -eq $true -and -not ($man.apps[0].PSObject.Properties['elevationProhibited'])) 'manifest carries the approved app list with sections, descriptions and the Spotify flag'
 Assert (@($man.assets).Count -eq 1 -and $man.assets[0].path -eq 'FamilyFixIt.ico' -and $man.assets[0].sha256 -match '^[0-9a-f]{64}$' -and [int]$man.assets[0].size -gt 1000) 'manifest lists the program icon under assets, with its SHA-256 and size'
 Assert (@($man.files | Where-Object { $_.path -like '*.ico' }).Count -eq 0) 'the icon is NOT in "files" (versions up to 2.3.1 refuse unknown names there, which would break their update)'
 Assert ((Get-FileSha256 (Join-Path $dist 'FamilyFixIt.ico')) -eq $man.assets[0].sha256 -and (Get-FileSha256 (Join-Path $dist 'FamilyFixIt.ico')) -eq (Get-FileSha256 (Join-Path $root 'FamilyFixIt.ico'))) 'published icon is byte-for-byte the source icon and matches the manifest'
@@ -1594,7 +1594,7 @@ Assert (-not (Select-String -Path (Join-Path $dist '*') -Pattern '(?i)treyb|@gma
 # a newer version 1.0.1 to update to
 $newSrc = Join-Path $tmp 'newsrc'; Copy-Item -LiteralPath $root -Destination $newSrc -Recurse
 $ps = Join-Path $newSrc 'FamilyFixIt.ps1'
-[IO.File]::WriteAllText($ps, ([IO.File]::ReadAllText($ps).Replace("FixItVersion = '2.3.8'", "FixItVersion = '2.3.9'")))
+[IO.File]::WriteAllText($ps, ([IO.File]::ReadAllText($ps).Replace("FixItVersion = '2.3.9'", "FixItVersion = '2.3.10'")))
 $dist2 = Join-Path $tmp 'dist2'
 & (Join-Path $newSrc 'tools/Publish-FixIt.ps1') -SourceDir $newSrc -Owner 'octo-test' -OutDir $dist2 | Out-Null
 $base = 'https://raw.githubusercontent.com/octo-test/family-it-fixit/main/'
@@ -1605,7 +1605,7 @@ $script:ManifestUrl = $base + 'manifest.json'
 Reset-All; Set-Web $dist2; $script:InstallDir = New-Install
 $res = Invoke-FixItUpdate
 Assert ($res.Ok -and $res.Title -eq 'Updated') 'newer version installs after asking'
-Assert ([IO.File]::ReadAllText((Join-Path $script:InstallDir 'FamilyFixIt.ps1')) -match "FixItVersion = '2.3.9'") 'installed script is the new one'
+Assert ([IO.File]::ReadAllText((Join-Path $script:InstallDir 'FamilyFixIt.ps1')) -match "FixItVersion = '2.3.10'") 'installed script is the new one'
 Assert (Test-Path (Join-Path $script:InstallDir 'previous/FamilyFixIt.ps1')) 'old version kept in previous/'
 Assert (@($script:Asked).Count -eq 1) 'asked before updating'
 
@@ -1742,7 +1742,7 @@ Assert ($script:Posts.Count -eq 1 -and ($script:Posts[0].Json | ConvertFrom-Json
 $gj = ($script:Posts[0].Json | ConvertFrom-Json).report
 Assert ($gj -match 'GUARDIAN' -and $gj -match 'Get me out of here' -and $gj -match 'Warning! - Microsoft Edge' -and $gj -match 'https://scam.example/alert\?id=7') 'report has the reason, the window title and the page address'
 Assert ($gj -match '--kiosk' -and $gj -match 'Browser programs closed: 3' -and $gj -match 'fix-your-pc.exe' -and $gj -match 'SCAM ALERT') 'report has the browser flags, the number closed, recent downloads and the SCAM header'
-Assert ($r.Sent -and -not (Get-ChildItem $og -Filter 'SCAM-*' -ErrorAction SilentlyContinue)) 'sent: no extra file left on the Desktop'
+Assert ($r.Sent -and -not (Get-ChildItem $og -Filter 'SCAM-*' -ErrorAction SilentlyContinue)) 'sent: no extra file left behind'
 Reset-Guardian; $OutputDir = $og; $script:UrlFn = 'THROW'
 $r = Invoke-GuardianGetOut -Fg (MkFg) -Reason 'button'
 $gj = ($script:Posts[0].Json | ConvertFrom-Json).report
@@ -1761,7 +1761,7 @@ Assert (@($script:Killed).Count -eq 2 -and $gj -match 'Browser programs closed: 
 Reset-Guardian; $script:PostFail = $true; $og2 = Join-Path $tmp 'gd2'; New-Item -ItemType Directory $og2 -Force | Out-Null; $OutputDir = $og2
 $r = Invoke-GuardianGetOut -Fg (MkFg)
 Assert (-not $r.Sent -and $r.Message -match "You're safe" -and $r.Message -match 'could not reach Trey' -and $r.Message -match 'call him') 'offline: stays calm and says to call Trey'
-Assert (@(Get-ChildItem $og2 -Filter 'SCAM-Report-for-Trey-*.txt').Count -eq 1) 'offline: a copy of the report is saved on the Desktop'
+Assert (@(Get-ChildItem $og2 -Filter 'SCAM-Report-for-Trey-*.txt').Count -eq 1) 'offline: a copy of the report is saved'
 Reset-Guardian; $OutputDir = $og
 $r = Invoke-GuardianGetOut -Fg (MkFg) -Demo
 Assert (@($script:Killed).Count -eq 0 -and $script:Posts.Count -eq 0 -and $r.Message -match 'Practice only') 'demo: nothing closed, nothing sent'
@@ -2094,7 +2094,7 @@ $relDir = Join-Path $tmp 'release1'
 $distI = Join-Path $tmp 'dist-i1'
 $newSrcI = Join-Path $tmp 'newsrc-i'; Copy-Item -LiteralPath $root -Destination $newSrcI -Recurse
 $psI = Join-Path $newSrcI 'FamilyFixIt.ps1'
-[IO.File]::WriteAllText($psI, ([IO.File]::ReadAllText($psI).Replace("FixItVersion = '2.3.8'", "FixItVersion = '2.3.9'")))
+[IO.File]::WriteAllText($psI, ([IO.File]::ReadAllText($psI).Replace("FixItVersion = '2.3.9'", "FixItVersion = '2.3.10'")))
 $distI2 = Join-Path $tmp 'dist-i2'
 & (Join-Path $newSrcI 'tools/Publish-FixIt.ps1') -SourceDir $newSrcI -Owner 'octo-test' -OutDir $distI2 -ReleaseDir (Join-Path $tmp 'release2') -WarningAction SilentlyContinue | Out-Null
 
@@ -2149,7 +2149,7 @@ Assert ($rd -match 'releases/latest/download/Install-FamilyFixIt\.zip' -and $rd 
 
     Reset-Inst; Serve $distI
     $r = Install-FamilyFixIt -Base $base -Dir $dir
-    Assert ($r.Ok -and $r.Title -eq 'Installed' -and $r.Version -eq '2.3.8' -and $r.Changed) 'fresh install works'
+    Assert ($r.Ok -and $r.Title -eq 'Installed' -and $r.Version -eq '2.3.9' -and $r.Changed) 'fresh install works'
     $same = $true; foreach ($f in @('FamilyFixIt.ps1', 'Start-FixIt.cmd', 'README.md')) { if ((Get-FileSha256 (Join-Path $dir $f)) -ne (Get-FileSha256 (Join-Path $distI $f))) { $same = $false } }
     Assert $same 'the three files are installed and match the published fingerprints'
     Assert (-not (Test-Path (Join-Path $dir '.staging')) -and -not (Test-Path (Join-Path $dir 'previous'))) 'no leftover staging folder; nothing to keep from a previous version'
@@ -2207,10 +2207,10 @@ Assert ($rd -match 'releases/latest/download/Install-FamilyFixIt\.zip' -and $rd 
 
     Clear-I; Serve $distI2; $script:I.Lnk.Remove($dl)
     $r = Install-FamilyFixIt -Base $base -Dir $dir
-    Assert ($r.Ok -and $r.Version -eq '2.3.9' -and (Get-InstalledVersion $dir) -eq '2.3.9') 'a newer version in the list updates the install'
+    Assert ($r.Ok -and $r.Version -eq '2.3.10' -and (Get-InstalledVersion $dir) -eq '2.3.10') 'a newer version in the list updates the install'
     Assert (($script:I.Actions -join ',') -eq 'GuardianOff,GuardianOn,CheckInOn') 'update restarts the watcher so it runs the new program'
     Assert ($script:I.LnkWrites -eq 1 -and $script:I.Lnk.ContainsKey($dl)) 'a missing shortcut is put back'
-    Assert ((Get-InstalledVersion (Join-Path $dir 'previous')) -eq '2.3.8') 'the old program is kept in previous/'
+    Assert ((Get-InstalledVersion (Join-Path $dir 'previous')) -eq '2.3.9') 'the old program is kept in previous/'
 
     # a download that does not match the fingerprint
     Reset-Inst; Serve $distI; $script:I.Tamper['/FamilyFixIt.ps1'] = $true
@@ -2220,7 +2220,7 @@ Assert ($rd -match 'releases/latest/download/Install-FamilyFixIt\.zip' -and $rd 
     Assert ((Get-Content $script:InstallLog -Raw) -match 'CHECKSUM MISMATCH') 'tampered download: logged'
     Reset-Inst; Serve $distI; $null = Install-FamilyFixIt -Base $base -Dir $dir; Clear-I; Serve $distI2; $script:I.Tamper['/FamilyFixIt.ps1'] = $true
     $r = Install-FamilyFixIt -Base $base -Dir $dir
-    Assert (-not $r.Ok -and (Get-InstalledVersion $dir) -eq '2.3.8') 'tampered update: the working old copy is left exactly as it was'
+    Assert (-not $r.Ok -and (Get-InstalledVersion $dir) -eq '2.3.9') 'tampered update: the working old copy is left exactly as it was'
 
     # network problems
     Reset-Inst; Serve $distI; $script:I.WebFail = $true
@@ -2703,7 +2703,7 @@ Assert ($rm.State -eq 'Ok' -and @($rm.Assets).Count -eq 0) 'a list with no asset
 Reset-All; Set-Web $distI3; $script:ManifestUrl = $base + 'manifest.json'
 $script:InstallDir = New-Install; Reset-Lnks
 Copy-Item (Join-Path $distI3 'FamilyFixIt.ps1') $script:InstallDir -Force
-$script:FixItVersion = '2.3.9'   # pretend we are the newest program, so only the icon is missing
+$script:FixItVersion = '2.3.10'   # pretend we are the newest program, so only the icon is missing
 $fixed = Repair-FixItIcon
 $ico2 = Join-Path $script:InstallDir 'FamilyFixIt.ico'
 Assert ($fixed -and (Test-Path $ico2) -and (Get-FileSha256 $ico2) -eq (Get-FileSha256 $icoSrc) -and $script:Lnks[$lnkDesk].Icon -eq ($ico2 + ',0')) 'missing icon: fetched from the update list, verified, shortcuts pointed at it'
@@ -2719,7 +2719,7 @@ Assert ((Repair-FixItIcon) -eq $false -and -not (Test-Path $ico2)) 'practice run
 $script:DryRun = $false
 $script:ManifestUrl = 'https://raw.githubusercontent.com/<' + 'OWNER>/family-it-fixit/main/manifest.json'
 Assert ((Repair-FixItIcon) -eq $false) 'update address not set up: does nothing'
-$script:FixItVersion = '2.3.8'
+$script:FixItVersion = '2.3.9'
 
 # window / taskbar icon
 Assert (@([regex]::Matches($src, 'New-Object System\.Windows\.Forms\.Form')).Count -eq @([regex]::Matches($src, '(?m)^\s*(\$\w+) = New-Object System\.Windows\.Forms\.Form\r?\n\s*Set-FixItFormIcon \1')).Count) 'every window (main, confirm, pickers, guides ...) gets the program icon right after it is created'
@@ -2965,6 +2965,14 @@ foreach ($ln in $v238) { if ($ln -match 'FAIL:|^==') { Write-Host $ln } }
 $sumLine = @($v238 | Where-Object { $_ -match '^Passed: \d+\s+Failed: \d+' }) | Select-Object -Last 1
 if ($sumLine -match 'Passed: (\d+)\s+Failed: (\d+)') { $script:Pass += [int]$Matches[1]; $script:Fail += [int]$Matches[2] }
 else { $script:Fail++; Write-Host '  FAIL: the 2.3.8 test file did not finish'; $v238 | Select-Object -Last 15 | ForEach-Object { Write-Host ('    ' + $_) } }
+
+# ---- version 2.3.9 tests (Share with a friend, the Family Fix-It Reports folder, My files wrapping)
+Section 'Version 2.3.9 tests (own process)'
+$v239 = & $pwshExe -NoProfile -File (Join-Path $PSScriptRoot 'Test-FixIt-V239.ps1') 2>&1 | ForEach-Object { [string]$_ }
+foreach ($ln in $v239) { if ($ln -match 'FAIL:|^==') { Write-Host $ln } }
+$sumLine = @($v239 | Where-Object { $_ -match '^Passed: \d+\s+Failed: \d+' }) | Select-Object -Last 1
+if ($sumLine -match 'Passed: (\d+)\s+Failed: (\d+)') { $script:Pass += [int]$Matches[1]; $script:Fail += [int]$Matches[2] }
+else { $script:Fail++; Write-Host '  FAIL: the 2.3.9 test file did not finish'; $v239 | Select-Object -Last 15 | ForEach-Object { Write-Host ('    ' + $_) } }
 
 Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host ''

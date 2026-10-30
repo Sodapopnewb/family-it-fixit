@@ -1,6 +1,14 @@
 [
-  { "id": "Google.Chrome", "name": "Google Chrome" },
-  { "id": "Zoom.Zoom", "name": "Zoom" },
-  { "id": "Adobe.Acrobat.Reader.64-bit", "name": "Adobe Acrobat Reader" },
-  { "id": "VideoLAN.VLC", "name": "VLC media player" }
+  { "id": "Google.Chrome", "name": "Google Chrome", "section": "Browsers and chat", "description": "A web browser from Google for visiting websites." },
+  { "id": "Zoom.Zoom", "name": "Zoom", "section": "Browsers and chat", "description": "Video calls and meetings with family, friends or work." },
+  { "id": "Discord.Discord", "name": "Discord", "section": "Browsers and chat", "description": "Chat with friends by text, voice and video." },
+  { "id": "VideoLAN.VLC", "name": "VLC media player", "section": "Media and photos", "description": "Plays almost any video or music file." },
+  { "id": "Spotify.Spotify", "name": "Spotify", "section": "Media and photos", "description": "Listen to music and podcasts online. You need an account.", "elevationProhibited": true },
+  { "id": "Apple.iTunes", "name": "iTunes", "section": "Media and photos", "description": "Apple's music app. Also used with an iPhone or iPad." },
+  { "id": "OBSProject.OBSStudio", "name": "OBS Studio", "section": "Media and photos", "description": "Records your screen or streams video live." },
+  { "id": "Audacity.Audacity", "name": "Audacity", "section": "Media and photos", "description": "Record and edit sound, such as voice recordings." },
+  { "id": "Adobe.Acrobat.Reader.64-bit", "name": "Adobe Acrobat Reader", "section": "Files and office", "description": "Opens and fills in PDF files." },
+  { "id": "7zip.7zip", "name": "7-Zip", "section": "Files and office", "description": "Opens and makes zip files and other compressed folders." },
+  { "id": "Google.GoogleDrive", "name": "Google Drive", "section": "Files and office", "description": "Keeps your Google files in a folder on this computer." },
+  { "id": "Dropbox.Dropbox", "name": "Dropbox", "section": "Files and office", "description": "Keeps your Dropbox files in a folder on this computer." }
 ]
