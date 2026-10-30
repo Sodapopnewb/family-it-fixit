@@ -37,7 +37,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 # Settings
 # ---------------------------------------------------------------------------
-$script:FixItVersion = '2.3.9'
+$script:FixItVersion = '2.3.10'
 $script:GuideFont = $null; $script:FilesMsg = $null; $script:FilesPanel = $null; $script:FilesTip = $null; $script:FilesNameFont = $null   # My files window pieces (set when the window opens)
 $script:DefaultManifestUrl = 'https://raw.githubusercontent.com/Sodapopnewb/family-it-fixit/main/manifest.json'
 $script:OwnerPlaceholder = ('<' + 'OWNER>')   # the guards compare with this; Publish never rewrites it
@@ -3111,6 +3111,12 @@ function Install-FixItUpdate {
         }
         # the shortcuts follow the icon (never a reason to fail the update)
         try { [void](Update-FixItShortcutIcons) } catch { Write-FixItLog ('Shortcut icon refresh: {0}' -f $_.Exception.Message) 'WARN' }
+        # a watcher that is running keeps the OLD program in memory: stop it and start a fresh one from the new file (never a reason to fail the update)
+        if ($done -contains 'FamilyFixIt.ps1') {
+            try {
+                if ((Get-FixItSetting -Name 'Guardian' -Default '') -ne '0' -and ((Test-FixItGuardianRunning) -or (Test-FixItGuardianInstalled))) { [void](Restart-FixItGuardian -Why 'update') }
+            } catch { Write-FixItLog ('Could not restart the pop-up watcher: {0}' -f $_.Exception.Message) 'WARN' }
+        }
     } finally {
         Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
     }
@@ -6062,6 +6068,14 @@ function Invoke-GuardianTick {
             [System.Windows.Forms.Application]::ExitThread()
             return
         }
+        # every few minutes: is the installed program a different version from the one this watcher is running? Then start over from the installed file.
+        if (Test-FixItGuardianVersionCheckDue -Last $script:GLastVersionCheck -Now $now -Minutes $script:GuardianVersionCheckMinutes) {
+            if (Invoke-GuardianVersionCheck -Now $now) {
+                Close-FixItGuardianToast
+                [System.Windows.Forms.Application]::ExitThread()
+                return
+            }
+        }
         $fg = Get-FixItForeground
         Update-FixItGuardianLastWindow -Fg $fg -Now $now
         $d = Get-FixItGuardianDecision -Fg $fg -State $script:GState -Now $now
@@ -6095,6 +6109,8 @@ function Invoke-GuardianRun {
         Initialize-FixItGuardianNative
         $script:GState = New-FixItGuardianState
         $script:GLastDay = (Get-Date).ToString('yyyy-MM-dd')
+        $script:GLastVersionCheck = Get-Date
+        $script:GRelaunch = $false
         $script:GStop = New-FixItGuardianStopEvent
         try { $hk = New-FixItGuardianHotkey } catch { Write-FixItLog ('Hotkey setup failed: {0}' -f $_.Exception.Message) 'WARN' }
         try { $tray = New-FixItGuardianTray } catch { Write-FixItLog ('Tray icon setup failed: {0}' -f $_.Exception.Message) 'WARN' }
@@ -6106,6 +6122,11 @@ function Invoke-GuardianRun {
         if ($null -ne $script:GStop) { try { $script:GStop.Dispose() } catch { }; $script:GStop = $null }
         Release-FixItGuardianMutex $mutex
         Write-FixItLog 'Guardian stopped'
+        # a newer (or different) installed version: the single-instance lock is free now, so the fresh watcher can take it
+        if ($script:GRelaunch) {
+            $script:GRelaunch = $false
+            try { Start-FixItGuardianProcess -Path (Get-FixItInstalledScriptPath); Write-FixItLog 'Guardian: a fresh watcher was started from the installed program' } catch { Write-FixItLog ('Guardian: could not start the fresh watcher: {0}' -f $_.Exception.Message) 'WARN' }
+        }
     }
     return New-FixItResult $true 'Stopped' 'The watcher stopped.'
 }
@@ -6143,7 +6164,7 @@ function Invoke-GuardianToggle {
         if (-not (Invoke-FixItStep 'Start the pop-up watcher when you sign in (a startup entry for this user only)' { Set-RegString -Path $script:GuardianRunKey -Name $script:GuardianRunName -Value $cmd })) {
             return New-FixItResult $false 'Could not turn it on' 'The pop-up watcher could not be set up.'
         }
-        [void](Invoke-FixItStep 'Start the pop-up watcher now' { if (-not (Test-FixItGuardianRunning)) { Start-FixItGuardianProcess } })
+        [void](Invoke-FixItStep 'Start the pop-up watcher now' { if (-not (Test-FixItGuardianRunning)) { Start-FixItGuardianProcess } else { [void](Update-FixItGuardianIfOld) } })
         Set-FixItSetting -Name 'Guardian' -Value '1'
         if ($script:DryRun) { return New-FixItResult $true 'Practice run' 'Practice run only - the pop-up watcher would be turned on.' }
         return New-FixItResult $true 'Pop-up watcher is on' ("I'll quietly watch for a web page that takes over your whole screen. If that happens, a small box appears in the bottom right corner asking if you are OK.`r`n`r`nYou can also press " + $script:GuardianHotkeyText + ' at any time to close your browser and tell Trey.')
@@ -6170,7 +6191,105 @@ function Initialize-FixItGuardianDefault {
     $s = Get-FixItSetting -Name 'Guardian' -Default ''
     if ($s -eq '0') { return }
     if ($s -eq '' -or -not (Test-FixItGuardianInstalled)) { [void](Invoke-GuardianToggle -Mode 'On'); return }
-    if (-not (Test-FixItGuardianRunning)) { try { Start-FixItGuardianProcess } catch { Write-FixItLog ('Could not start the watcher: {0}' -f $_.Exception.Message) 'WARN' } }
+    if (-not (Test-FixItGuardianRunning)) { try { Start-FixItGuardianProcess } catch { Write-FixItLog ('Could not start the watcher: {0}' -f $_.Exception.Message) 'WARN' }; return }
+    # running: but is it the old program from before an update? (an update never touches a program that is already running)
+    try { [void](Update-FixItGuardianIfOld) } catch { Write-FixItLog ('Could not check the watcher version: {0}' -f $_.Exception.Message) 'WARN' }
+}
+
+# ----- keeping the watcher on the installed version (v2.3.10) ------------------------------------------
+# A running PowerShell keeps the OLD program in memory, so after an update the watcher (and its tray icon) stayed on the old version.
+# Restarting it needs no administrator: it is this user's own hidden process.
+$script:GuardianVersionCheckMinutes = 5
+$script:GLastVersionCheck = [datetime]::MinValue
+$script:GRelaunch = $false
+function Get-FixItInstalledScriptPath { return (Join-Path $script:InstallDir 'FamilyFixIt.ps1') }
+# The version written near the top of a program file, or '' when it cannot be read (never throws).
+function Get-FixItScriptVersion {
+    param([string]$Path)
+    try {
+        $n = 0
+        foreach ($line in [System.IO.File]::ReadLines($Path)) {
+            if ($line -match '^\$script:FixItVersion\s*=\s*''(\d+(\.\d+){1,3})''') { return $Matches[1] }
+            $n++; if ($n -gt 150) { break }
+        }
+    } catch { }
+    return ''
+}
+# Pure: two readable versions that differ (newer OR older, so a rollback is picked up too). Unreadable means "do nothing".
+function Test-FixItGuardianVersionStale {
+    param([string]$Running, [string]$Installed)
+    $a = $null; $b = $null
+    if (-not [version]::TryParse($Running, [ref]$a)) { return $false }
+    if (-not [version]::TryParse($Installed, [ref]$b)) { return $false }
+    return ($a -ne $b)
+}
+function Test-FixItGuardianVersionCheckDue {
+    param([datetime]$Last, [datetime]$Now, [int]$Minutes = 5)
+    return ((($Now - $Last).TotalMinutes) -ge $Minutes)
+}
+# Called by the watcher every few minutes. True: the installed program is a different version, so this watcher should hand over.
+function Invoke-GuardianVersionCheck {
+    param([datetime]$Now = (Get-Date))
+    $script:GLastVersionCheck = $Now
+    $inst = Get-FixItScriptVersion -Path (Get-FixItInstalledScriptPath)
+    if (Test-FixItGuardianVersionStale -Running $script:FixItVersion -Installed $inst) {
+        Write-FixItLog ('Guardian: running version {0} but the installed program is {1}; starting over from the installed file' -f $script:FixItVersion, $inst)
+        $script:GRelaunch = $true
+        return $true
+    }
+    return $false
+}
+# Adapters (read only): when did each of this user's running watchers start, and when was the installed program last written?
+function Get-FixItGuardianStarted {
+    $out = @()
+    try {
+        foreach ($p in @(Get-CimInstance -ClassName Win32_Process -Filter "Name='powershell.exe' OR Name='pwsh.exe'" -ErrorAction SilentlyContinue)) {
+            if ($p.ProcessId -eq $PID -or [string]$p.CommandLine -notmatch 'FamilyFixIt\.ps1.*-Action\s+Guardian(\s|"|$)') { continue }
+            if (-not (Test-FixItOwnSession $p)) { continue }
+            $c = Get-FixItProp $p 'CreationDate' $null
+            if ($c -is [datetime]) { $out += $c }
+        }
+    } catch { }
+    return @($out)
+}
+function Get-FixItInstalledFileTime {
+    try { return (Get-Item -LiteralPath (Get-FixItInstalledScriptPath) -ErrorAction Stop).LastWriteTime } catch { return $null }
+}
+# Pure: did any watcher start before the installed program was written (with a little slack)?
+function Test-FixItGuardianOlderThanFile {
+    param($Started, $FileTime, [int]$SlackSeconds = 2)
+    if ($null -eq $FileTime) { return $false }
+    foreach ($s in @($Started)) { if ($s -is [datetime] -and $s -lt ([datetime]$FileTime).AddSeconds(-$SlackSeconds)) { return $true } }
+    return $false
+}
+# Pure: is this process in the same Windows session as we are (this user)? Unknown counts as yes.
+function Test-FixItOwnSession {
+    param($Proc)
+    $sid = Get-FixItProp $Proc 'SessionId' $null
+    if ($null -eq $sid) { return $true }
+    $mine = $null
+    try { $mine = (Get-Process -Id $PID -ErrorAction Stop).SessionId } catch { }
+    if ($null -eq $mine) { return $true }
+    return ([int]$sid -eq [int]$mine)
+}
+# Stop this user's watcher and start a fresh one, hidden, from the installed program. Safe to repeat (one watcher at most: the lock decides).
+function Restart-FixItGuardian {
+    param([string]$Why = 'update')
+    $path = Get-FixItInstalledScriptPath
+    if (-not (Test-Path -LiteralPath $path)) { Write-FixItLog 'The pop-up watcher was not restarted: the installed program was not found' 'WARN'; return $false }
+    Write-FixItLog ('Restarting the pop-up watcher so it runs the installed program ({0})' -f $Why)
+    [void](Invoke-FixItStep 'Stop the pop-up watcher that is running now' { Stop-FixItGuardianProcess })
+    [void](Invoke-FixItStep 'Start a fresh pop-up watcher (hidden, from the installed program)' { if (-not (Test-FixItGuardianRunning)) { Start-FixItGuardianProcess -Path $path } })
+    return $true
+}
+# If a watcher is running but started before the installed program was written, restart it. Returns 'Restarted' or 'Current'.
+function Update-FixItGuardianIfOld {
+    $ft = Get-FixItInstalledFileTime
+    if (Test-FixItGuardianOlderThanFile -Started (Get-FixItGuardianStarted) -FileTime $ft) {
+        [void](Restart-FixItGuardian -Why 'it started before the program was updated')
+        return 'Restarted'
+    }
+    return 'Current'
 }
 
 function Get-FixItIdleStatus {
@@ -6407,8 +6526,10 @@ function Test-FixItGuardianRunning {
     return $false
 }
 function Start-FixItGuardianProcess {
+    param([string]$Path = '')
     if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Start-FixItGuardianProcess' -Arguments $PSBoundParameters; return }
-    Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-File', ('"{0}"' -f $script:SelfPath), '-Action', 'Guardian') -WindowStyle Hidden | Out-Null
+    if (-not $Path) { $Path = $script:SelfPath }
+    Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-File', ('"{0}"' -f $Path), '-Action', 'Guardian') -WindowStyle Hidden | Out-Null
 }
 function Stop-FixItGuardianProcess {
     if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Stop-FixItGuardianProcess' -Arguments $PSBoundParameters; return }
@@ -6416,7 +6537,7 @@ function Stop-FixItGuardianProcess {
     if (Send-FixItGuardianStopSignal) { [void](Wait-FixItGuardianGone -Seconds 6) }
     $me = $PID
     foreach ($p in @(Get-CimInstance -ClassName Win32_Process -Filter "Name='powershell.exe' OR Name='pwsh.exe'" -ErrorAction SilentlyContinue)) {
-        if ($p.ProcessId -ne $me -and [string]$p.CommandLine -match 'FamilyFixIt\.ps1.*-Action\s+Guardian(\s|"|$)') {
+        if ($p.ProcessId -ne $me -and (Test-FixItOwnSession $p) -and [string]$p.CommandLine -match 'FamilyFixIt\.ps1.*-Action\s+Guardian(\s|"|$)') {
             try { Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop } catch { }
         }
     }
@@ -7333,7 +7454,7 @@ function Show-FixItScamForm {
     $t = New-Object System.Windows.Forms.Label
     $t.Text = [string]$Result.Message
     $t.Font = New-Object System.Drawing.Font('Segoe UI', [single](19 * $S), [System.Drawing.FontStyle]::Regular, [System.Drawing.GraphicsUnit]::Pixel)
-    $t.AutoSize = $false
+    $t.AutoSize = $false; $t.UseMnemonic = $false
     $t.Location = New-Object System.Drawing.Point([int](24 * $S), [int](76 * $S))
     $t.Size = New-Object System.Drawing.Size([int](572 * $S), [int](370 * $S))
     $f.Controls.Add($t)
@@ -7345,6 +7466,7 @@ function Show-FixItScamForm {
     $ok.DialogResult = 'OK'
     $f.AcceptButton = $ok
     $f.Controls.Add($ok)
+    Expand-FixItLabelsToFit -Form $f -Labels @($t) -Scale $S
     [void]$f.ShowDialog()
 }
 
@@ -7562,22 +7684,22 @@ function Invoke-FixItSidePaint {
 # Every big button in the main window (the grid, the red pop-up button and the two buttons at the bottom) has a small "?" in a circle in its top
 # right corner. Clicking it opens a short plain description of what that button does. The "?" is its own small button placed on top of the
 # tile, so a click on it never reaches the tile (it cannot run the fix). F1 on a focused tile opens the same description.
-# ALL the descriptions are in this one table. Each is 2 to 4 short sentences and follows what the real code does (see the fix functions).
+# ALL the descriptions are in this one table. Each is 2 to 3 short sentences, about 45 words at most, and follows what the real code does (see the fix functions).
 function Get-FixItHelpTable {
     $rw = $script:ReportsWhere
     return @{
-        Printer = @{ Title = 'Fix my printer'; Text = ("I look at the printers on this computer and ask if you know which one you want. You pick it from a list, or I test them and choose one that is ready, and I make it your main printer. I restart the part of Windows that handles printing, clear out stuck print jobs (anything waiting has to be printed again) and reconnect shared printers. Nothing starts until you agree on the 'Here is what I will do' window, Windows asks your permission with a shield box, and your documents and files are never touched.") }
-        Acrobat = @{ Title = 'Fix Acrobat in Outlook'; Text = ("Use this when the Acrobat buttons are missing in Outlook. I close Outlook completely and open it again, then ask if Acrobat is back, and I stop there if it is. If not, I switch the Acrobat add-in back on, which can make Windows ask your permission, and only then offer a repair, after asking you. Your email accounts, passwords and sign-ins are never touched.") }
-        Outlook = @{ Title = 'Fix Outlook'; Text = ("Use this when Outlook freezes or will not open. I close Outlook completely and open it again, then ask if it works now, and I stop there if it does. If not, I ask before each next step: turning off add-ins that look like trouble (you can turn them back on), rebuilding the Outlook search (Windows asks your permission), or opening Outlook in safe mode. Your email accounts, passwords, sign-ins and Outlook profiles are never cleared or changed.") }
-        Network = @{ Title = 'Fix my internet'; Text = ("I test your router, the internet and opening a website, and if all three work I change nothing. If something is wrong, I get a fresh internet address from your router, clear the saved website addresses, switch off a setting that can block websites if it is on, and reset the network settings (Windows asks your permission). If it still fails, I ask you to unplug the router and plug it back in, wait with a countdown, and test again. Your internet drops for a few seconds, and your files are never touched.") }
-        Slow = @{ Title = 'My computer is slow'; Text = ("If a program has frozen, I offer to close it, and I ask first. I empty your temporary files and the Recycle Bin for good, and the temporary files Windows keeps (Windows asks your permission). I ask before clearing the saved website files in your browser, which can sign you out of websites. Your Documents, Desktop, Pictures and Downloads are never touched.") }
-        Sound = @{ Title = 'Fix sound, mic and camera'; Text = ("I check your speakers, microphone and camera. If the speakers or microphone are muted or almost silent I turn them on (speakers quietly at 25%, microphone at 70%), and a volume that is fine stays as it is. I ask before allowing apps to use a blocked microphone or camera, and I may restart the part of Windows that handles sound (Windows asks your permission). Then I open the Windows page where you pick the right devices, and I change nothing else.") }
-        Browser = @{ Title = 'Clean up my browser'; Text = ("I make a safe copy of your browser settings and bookmarks first. Then I look for a changed home page or search engine, extensions you do not know, and websites allowed to send you pop-up notices. I ask before I open each browser page where you can fix things yourself, and I never change the browser myself. I also offer a quick Microsoft Defender virus scan (I ask first, and Windows asks your permission), and your passwords, bookmarks and history are not touched.") }
-        WinUpdate = @{ Title = 'Fix Windows Update'; Text = ("I pause Windows Update, set aside the folders where it keeps its update files (nothing is deleted), start it again and open the Windows Update page. Windows asks your permission with a shield box. If updates are still stuck I offer a deeper repair of Windows that takes 20 to 40 minutes, and I ask first. I only restart the computer if you say yes, and your own files are not touched.") }
-        OneDrive = @{ Title = 'Fix OneDrive'; Text = ("I check whether OneDrive is installed, signed in and running, and whether your Desktop, Documents and Pictures are backed up to it. I tell you what I find and change nothing unless you say yes to a reset. A reset makes OneDrive restart and check all of your files again, which can take a few minutes. Your files are not deleted.") }
-        Scam = @{ Title = 'I see a scary pop-up'; Text = ("This does not fix anything. I gather basic facts about this computer, send Trey a report right away and save a copy $rw. Then I tell you what to do next: do not call the number on the screen, turn off your Wi-Fi and call Trey. I do not change or close anything on your computer.") }
-        Screen = @{ Title = 'Let Trey see my screen'; Text = ("I open the Zoho Assist web page where you type in a code. Trey gives you the code on the phone, and only when you type it in and click Join can he see your screen. Nothing is installed ahead of time. Only do this if you called Trey.") }
-        Report = @{ Title = 'Send Trey a report'; Text = ("I collect information that helps Trey: your Windows version, printers, Outlook and Acrobat, a health check and recent problems. I save a copy $rw and send it to Trey. The report does not include your files or your passwords, and I do not change anything on your computer.") }
+        Printer = @{ Title = 'Fix my printer'; Text = ("I help you pick a printer and make it your main one. I restart printing, clear stuck print jobs (they must be printed again) and reconnect shared printers. I ask first, and your documents and files are never touched.") }
+        Acrobat = @{ Title = 'Fix Acrobat in Outlook'; Text = ("Use this when the Acrobat buttons are missing in Outlook. I close and reopen Outlook, then switch the Acrobat add-in back on. I ask before each step, and your email accounts and passwords are never touched.") }
+        Outlook = @{ Title = 'Fix Outlook'; Text = ("Use this when Outlook freezes or will not open. I close it and open it again, then ask before each next step. Your email accounts, passwords and sign-ins are never changed.") }
+        Network = @{ Title = 'Fix my internet'; Text = ("I test your router and your internet, and I change nothing if they work. If not, I reset your connection settings and may ask you to unplug the router and plug it back in. Your internet drops briefly, and your files are never touched.") }
+        Slow = @{ Title = 'My computer is slow'; Text = ("I close a frozen program if you say yes. I empty your temporary files and the Recycle Bin, and I ask before clearing saved website files, which can sign you out of websites. Your Documents, Desktop, Pictures and Downloads are never touched.") }
+        Sound = @{ Title = 'Fix sound, mic and camera'; Text = ("I check your speakers, microphone and camera. I turn on a muted speaker or microphone, and I ask before letting apps use a blocked microphone or camera. Then I open the page where you pick your devices, and I change nothing else.") }
+        Browser = @{ Title = 'Clean up my browser'; Text = ("I first save a copy of your browser settings and bookmarks. I look for odd settings and extensions, and I ask before opening any page where you can fix them. I never change your browser myself, and your passwords and bookmarks are not touched.") }
+        WinUpdate = @{ Title = 'Fix Windows Update'; Text = ("I pause Windows Update, set old files aside (nothing is deleted) and start it again. If it is still stuck, I offer a longer repair (20 to 40 minutes) after asking you. I restart only if you say yes, and your files are not touched.") }
+        OneDrive = @{ Title = 'Fix OneDrive'; Text = ("I check that OneDrive is signed in and running, and backing up your Desktop, Documents and Pictures. I tell you what I find and change nothing unless you say yes to a reset. A reset makes it check your files again; none are deleted.") }
+        Scam = @{ Title = 'I see a scary pop-up'; Text = ("This fixes nothing and changes nothing on your computer. I send Trey a report and save a copy $rw. Then do not call the number on the screen: turn off your Wi-Fi and call Trey.") }
+        Screen = @{ Title = 'Let Trey see my screen'; Text = ("I open the Zoho Assist page where you type a code from Trey. Only when you type it and click Join can Trey see your screen. Nothing is installed, so only do this if you called Trey.") }
+        Report = @{ Title = 'Send Trey a report'; Text = ("I collect facts that help Trey, such as your Windows version, printers and recent problems. I save a copy $rw and send it to Trey. It has no files or passwords, and I change nothing.") }
     }
 }
 # The title and text for one button, or $null when it has no description.
@@ -7691,19 +7813,37 @@ function Show-FixItHelpForm {
     $w = [int](520 * $S); $inner = [int](472 * $S)
     $tfont = New-Object System.Drawing.Font('Segoe UI', [single](20 * $S), [System.Drawing.FontStyle]::Bold, $px)
     $bfont = New-Object System.Drawing.Font('Segoe UI', [single](16 * $S), [System.Drawing.FontStyle]::Regular, $px)
-    $th = 30 * $S; $bh = 120 * $S
-    try { $th = [math]::Ceiling([double](Measure-FixItText -Text $Title -Font $tfont -Width $inner).Height) + 6; $bh = [math]::Ceiling([double](Measure-FixItText -Text $Text -Font $bfont -Width $inner).Height) + 8 } catch { Write-FixItLog ('Help window: could not measure the text: {0}' -f $_.Exception.Message) 'WARN' }
+    $sbw = 17; try { $sbw = [System.Windows.Forms.SystemInformation]::VerticalScrollBarWidth } catch { }
+    $workH = 0; try { $workH = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea.Height } catch { }
+    # title and the OK button area stay as they are; the body is measured at the real width (with a safety margin) and the window is made to fit it
+    $chrome = [int](20 * $S) + [int](10 * $S) + [int](20 * $S) + [int](52 * $S) + [int](20 * $S)
+    $th = [int](36 * $S); $bh = [int](120 * $S); $labelW = $inner
+    try {
+        $th = Get-FixItLabelHeight -Text $Title -Font $tfont -Width $inner -Scale $S -Min ([int](36 * $S)) -PadUnits 6
+        $bh = Get-FixItLabelHeight -Text $Text -Font $bfont -Width $inner -Scale $S
+    } catch { Write-FixItLog ('Help window: could not measure the text: {0}' -f $_.Exception.Message) 'WARN' }
+    $plan = Get-FixItTextWindowPlan -TitleHeight $th -BodyHeight $bh -ChromeHeight $chrome -WorkAreaHeight $workH
+    if ($plan.Scroll) {
+        # past the cap the text scrolls; the scroll bar takes some width, so measure again at the narrower width
+        $labelW = $inner - $sbw
+        try { $bh = Get-FixItLabelHeight -Text $Text -Font $bfont -Width $labelW -Scale $S } catch { }
+        $plan = Get-FixItTextWindowPlan -TitleHeight $th -BodyHeight $bh -ChromeHeight $chrome -WorkAreaHeight $workH
+    }
     $y = [int](20 * $S)
     $lt = New-Object System.Windows.Forms.Label
     $lt.AutoSize = $false; $lt.UseMnemonic = $false; $lt.Text = $Title; $lt.Font = $tfont; $lt.ForeColor = (Get-FixItColor $cText)
     $lt.Location = New-Object System.Drawing.Point([int](24 * $S), $y); $lt.Size = New-Object System.Drawing.Size($inner, [int]$th)
     $f.Controls.Add($lt)
     $y += [int]$th + [int](10 * $S)
+    $pb = New-Object System.Windows.Forms.Panel
+    $pb.AutoScroll = [bool]$plan.Scroll; $pb.BackColor = (Get-FixItColor $script:UiBack)
+    $pb.Location = New-Object System.Drawing.Point([int](24 * $S), $y); $pb.Size = New-Object System.Drawing.Size($inner, [int]$plan.ViewHeight)
     $lb = New-Object System.Windows.Forms.Label
-    $lb.AutoSize = $false; $lb.UseMnemonic = $false; $lb.Text = $Text; $lb.Font = $bfont; $lb.ForeColor = (Get-FixItColor $cText)
-    $lb.Location = New-Object System.Drawing.Point([int](24 * $S), $y); $lb.Size = New-Object System.Drawing.Size($inner, [int]$bh)
-    $f.Controls.Add($lb)
-    $y += [int]$bh + [int](20 * $S)
+    $lb.AutoSize = $false; $lb.UseMnemonic = $false; $lb.Text = $Text; $lb.Font = $bfont; $lb.ForeColor = (Get-FixItColor $cText); $lb.BackColor = (Get-FixItColor $script:UiBack)
+    $lb.Location = New-Object System.Drawing.Point(0, 0); $lb.Size = New-Object System.Drawing.Size($labelW, [int]$bh)
+    $pb.Controls.Add($lb)
+    $f.Controls.Add($pb)
+    $y += [int]$plan.ViewHeight + [int](20 * $S)
     $ok = New-FixItTile -Run '' -Title 'OK, got it' -Sub '' -IconKey '' -Style 'yes' -IconBg '' -X 24 -Y 0 -W 472 -H 52
     $ok.Location = New-Object System.Drawing.Point([int](24 * $S), $y)
     $ok.AccessibleName = 'OK, got it. Closes this window.'
@@ -8470,13 +8610,12 @@ function Show-FixItPrivacyForm {
         $st = [System.Drawing.FontStyle]::Regular; if ($Bold) { $st = [System.Drawing.FontStyle]::Bold }
         $font = New-Object System.Drawing.Font('Segoe UI', [single]($Size * $S), $st, $px)
         $ww = $labelW - [int]($Indent * $S)
-        $flags = [System.Windows.Forms.TextFormatFlags]::WordBreak -bor [System.Windows.Forms.TextFormatFlags]::NoPadding
-        $m = [System.Windows.Forms.TextRenderer]::MeasureText($Text, $font, (New-Object System.Drawing.Size($ww, 0)), $flags)
+        $lh = Get-FixItLabelHeight -Text $Text -Font $font -Width $ww -Scale $S -PadUnits 8
         $l = New-Object System.Windows.Forms.Label
-        $l.AutoSize = $false; $l.Text = $Text; $l.Font = $font
+        $l.AutoSize = $false; $l.UseMnemonic = $false; $l.Text = $Text; $l.Font = $font
         $l.ForeColor = (Get-FixItColor $Color); $l.BackColor = (Get-FixItColor $script:UiBack)
         $l.Location = New-Object System.Drawing.Point(($pad + [int]($Indent * $S)), $state.Y)
-        $l.Size = New-Object System.Drawing.Size($ww, ($m.Height + [int](6 * $S)))
+        $l.Size = New-Object System.Drawing.Size($ww, $lh)
         $panel.Controls.Add($l)
         $state.Y = $state.Y + $l.Height + [int]($GapAfter * $S)
     }
@@ -8541,6 +8680,7 @@ function Show-FixItNameForm {
     $save.AccessibleName = 'Save my name.'; $skip.AccessibleName = 'Skip. I do not want to give my name.'
     $f.Controls.Add($save); $f.Controls.Add($skip)
     $f.AcceptButton = $save; $f.CancelButton = $skip
+    Expand-FixItLabelsToFit -Form $f -Labels @($q, $note) -Scale $S
     $typed = ''
     try { $r = $f.ShowDialog(); $typed = [string]$tb.Text } finally { $f.Dispose() }
     if ($r -eq 'Yes') {
@@ -8612,6 +8752,7 @@ function Show-FixItShareForm {
     $cl.DialogResult = 'Cancel'
     $f.Controls.Add($cp); $f.Controls.Add($cl)
     $f.AcceptButton = $cp; $f.CancelButton = $cl
+    Expand-FixItLabelsToFit -Form $f -Labels @($intro, $how) -Scale $S
     try { [void]$f.ShowDialog() } finally { $f.Dispose() }
     Write-FixItLog 'Share with a friend window closed'
 }
@@ -8653,13 +8794,16 @@ function Show-FixItFixedDialog {
         $l.Location = New-Object System.Drawing.Point([int](20 * $S), [int]($y * $S)); $l.Size = New-Object System.Drawing.Size([int](400 * $S), [int]($hgt * $S))
         return $l
     }
-    $f.Controls.Add((& $mk $Title 24 $true $cText 90 36))
-    $f.Controls.Add((& $mk $Detail 14 $false $cMuted 130 60))
+    $lblTitle = & $mk $Title 24 $true $cText 90 36
+    $lblDetail = & $mk $Detail 14 $false $cMuted 130 60
+    $f.Controls.Add($lblTitle); $f.Controls.Add($lblDetail)
     $yes = New-FixItTile -Run '' -Title "Yes, it's fixed" -Sub '' -IconKey '' -Style 'yes' -IconBg '' -X 24 -Y 206 -W 184 -H 52
     $no = New-FixItTile -Run '' -Title 'No, still broken' -Sub '' -IconKey '' -Style 'no' -IconBg '' -X 224 -Y 206 -W 184 -H 52
     $yes.DialogResult = 'Yes'; $no.DialogResult = 'No'
     $f.Controls.Add($yes); $f.Controls.Add($no)
-    $f.Controls.Add((& $mk "If it's still broken, I'll send Trey a report automatically." 12 $false $cMuted 272 24))
+    $lblNote = & $mk "If it's still broken, I'll send Trey a report automatically." 12 $false $cMuted 272 24
+    $f.Controls.Add($lblNote)
+    Expand-FixItLabelsToFit -Form $f -Labels @($lblTitle, $lblDetail, $lblNote) -Scale $S
     $f.CancelButton = $no
     $r = $f.ShowDialog($script:Form)
     $f.Dispose()
@@ -8688,14 +8832,16 @@ function Show-FixItChromeAskDialog {
         $l.Location = New-Object System.Drawing.Point([int](20 * $S), [int]($y * $S)); $l.Size = New-Object System.Drawing.Size([int](600 * $S), [int]($hgt * $S))
         return $l
     }
-    $f.Controls.Add((& $mk 'Is Google Chrome on this computer?' 26 $true $cText 20 44))
-    $f.Controls.Add((& $mk 'I could not find it. If it is here, I will look for it and open its settings pages.' 14 $false $cMuted 72 50))
+    $lblQ = & $mk 'Is Google Chrome on this computer?' 26 $true $cText 20 44
+    $lblA = & $mk 'I could not find it. If it is here, I will look for it and open its settings pages.' 14 $false $cMuted 72 50
+    $f.Controls.Add($lblQ); $f.Controls.Add($lblA)
     $yes = New-FixItTile -Run '' -Title 'Yes' -Sub '' -IconKey '' -Style 'yes' -IconBg '' -X 24 -Y 144 -W 184 -H 56
     $no = New-FixItTile -Run '' -Title 'No' -Sub '' -IconKey '' -Style 'no' -IconBg '' -X 228 -Y 144 -W 184 -H 56
     $idk = New-FixItTile -Run '' -Title "I don't know" -Sub '' -IconKey '' -Style 'outline' -IconBg '' -X 432 -Y 144 -W 184 -H 56
     $yes.DialogResult = 'Yes'; $no.DialogResult = 'No'; $idk.DialogResult = 'Ignore'
     $yes.AccessibleName = 'Yes. Google Chrome is on this computer.'; $no.AccessibleName = 'No. Google Chrome is not on this computer.'; $idk.AccessibleName = "I don't know."
     $f.Controls.Add($yes); $f.Controls.Add($no); $f.Controls.Add($idk)
+    Expand-FixItLabelsToFit -Form $f -Labels @($lblQ, $lblA) -Scale $S
     $f.CancelButton = $no
     $r = $f.ShowDialog($script:Form)
     $f.Dispose()
@@ -8723,7 +8869,6 @@ function Show-FixItPlanDialog {
     $fontBody = New-Object System.Drawing.Font('Segoe UI', [single](17 * $S), [System.Drawing.FontStyle]::Regular, $px)
     $fontBold = New-Object System.Drawing.Font('Segoe UI', [single](17 * $S), [System.Drawing.FontStyle]::Bold, $px)
     $fontNum = New-Object System.Drawing.Font('Segoe UI', [single](19 * $S), [System.Drawing.FontStyle]::Bold, $px)
-    $tflags = [System.Windows.Forms.TextFormatFlags]::WordBreak -bor [System.Windows.Forms.TextFormatFlags]::NoPadding
     $panelW = [int](612 * $S)
     $stepW = [int](540 * $S)
     $h = New-Object System.Windows.Forms.Label
@@ -8744,14 +8889,13 @@ function Show-FixItPlanDialog {
     $pn.Location = New-Object System.Drawing.Point([int](24 * $S), [int](92 * $S))
     $y = 0; $n = 1
     foreach ($d in @($Plan.Does)) {
-        $hh = [System.Windows.Forms.TextRenderer]::MeasureText([string]$d, $fontBody, (New-Object System.Drawing.Size($stepW, 0)), $tflags).Height
-        $hh = [math]::Max($hh + [int](6 * $S), [int](34 * $S))
+        $hh = Get-FixItLabelHeight -Text ([string]$d) -Font $fontBody -Width $stepW -Scale $S -Min ([int](34 * $S)) -PadUnits 8
         $nl = New-Object System.Windows.Forms.Label
         $nl.Text = [string]$n; $nl.AutoSize = $false; $nl.Font = $fontNum; $nl.ForeColor = (Get-FixItColor $cNum); $nl.TextAlign = 'TopCenter'
         $nl.Location = New-Object System.Drawing.Point(0, $y); $nl.Size = New-Object System.Drawing.Size([int](44 * $S), $hh)
         $pn.Controls.Add($nl)
         $tl = New-Object System.Windows.Forms.Label
-        $tl.Text = [string]$d; $tl.AutoSize = $false; $tl.Font = $fontBody; $tl.ForeColor = (Get-FixItColor $cText)
+        $tl.Text = [string]$d; $tl.AutoSize = $false; $tl.UseMnemonic = $false; $tl.Font = $fontBody; $tl.ForeColor = (Get-FixItColor $cText)
         $tl.Location = New-Object System.Drawing.Point([int](48 * $S), ($y + [int](2 * $S))); $tl.Size = New-Object System.Drawing.Size($stepW, $hh)
         $pn.Controls.Add($tl)
         $y += $hh + [int](8 * $S); $n++
@@ -8773,9 +8917,9 @@ function Show-FixItPlanDialog {
         if ($bx[0]) { $labels += , @([string]$bx[0], $fontBold) }
         foreach ($tx in @($bx[1])) { $labels += , @([string]$tx, $(if ($bx[0]) { $fontBody } else { $fontBold })) }
         foreach ($lb in $labels) {
-            $lh = [System.Windows.Forms.TextRenderer]::MeasureText([string]$lb[0], $lb[1], (New-Object System.Drawing.Size($innerW, 0)), $tflags).Height + [int](4 * $S)
+            $lh = Get-FixItLabelHeight -Text ([string]$lb[0]) -Font $lb[1] -Width $innerW -Scale $S -PadUnits 8
             $ll = New-Object System.Windows.Forms.Label
-            $ll.Text = [string]$lb[0]; $ll.AutoSize = $false; $ll.Font = $lb[1]; $ll.ForeColor = (Get-FixItColor $bx[4]); $ll.BackColor = (Get-FixItColor $bx[2])
+            $ll.Text = [string]$lb[0]; $ll.AutoSize = $false; $ll.UseMnemonic = $false; $ll.Font = $lb[1]; $ll.ForeColor = (Get-FixItColor $bx[4]); $ll.BackColor = (Get-FixItColor $bx[2])
             $ll.Location = New-Object System.Drawing.Point([int](14 * $S), $by); $ll.Size = New-Object System.Drawing.Size($innerW, $lh)
             $bp.Controls.Add($ll); $by += $lh
         }
@@ -8881,8 +9025,9 @@ function Show-FixItCountdownDialog {
         $l.Location = New-Object System.Drawing.Point([int](24 * $S), [int]($y * $S)); $l.Size = New-Object System.Drawing.Size([int](552 * $S), [int]($hgt * $S))
         return $l
     }
-    $f.Controls.Add((& $mk $Title 26 $true $cText 20 44))
-    $f.Controls.Add((& $mk $Message 16 $false $cMuted 70 56))
+    $lblT = & $mk $Title 26 $true $cText 20 44
+    $lblM = & $mk $Message 16 $false $cMuted 70 56
+    $f.Controls.Add($lblT); $f.Controls.Add($lblM)
     $script:CdTime = & $mk '' 64 $true $cBig 134 84
     $f.Controls.Add($script:CdTime)
     $script:CdMsg = & $mk '' 16 $false $cText 226 36
@@ -8892,6 +9037,7 @@ function Show-FixItCountdownDialog {
     $bar.Location = New-Object System.Drawing.Point([int](60 * $S), [int](286 * $S)); $bar.Size = New-Object System.Drawing.Size([int](480 * $S), [int](24 * $S))
     $f.Controls.Add($bar)
     $f.Controls.Add((& $mk 'Please do not turn off the computer.' 14 $false $cMuted 326 30))
+    Expand-FixItLabelsToFit -Form $f -Labels @($lblT, $lblM) -Scale $S
     $script:CdBar = $bar; $script:CdForm = $f; $script:CdTotal = [math]::Max(1, $Seconds)
     $script:CdEnd = (Get-Date).AddSeconds($Seconds)
     $script:CdTime.Text = ('{0}:{1:00}' -f [int][math]::Floor($Seconds / 60), ($Seconds % 60))
@@ -9275,6 +9421,8 @@ function Show-FixItPcInfoForm {
             $val = [string]$r.Value
             $lineCount = [int][math]::Max(1, [math]::Ceiling($val.Length / 38.0))
             $h = 24 * $lineCount
+            # the guess above is the least it can be; the real wrapped height at this width wins (never shorter than the guess)
+            try { $mhPx = Get-FixItLabelHeight -Text $val -Font $fontValue -Width ([int](414 * $S)) -Scale $S -PadUnits 0; $h = [int][math]::Max($h, [math]::Ceiling($mhPx / $S)) } catch { }
             [void](& $mk ([string]$r.Label) $fontLabel $cMuted 4 $y 190 $h)
             [void](& $mk $val $fontValue $cText 196 $y 414 $h)
             $y += $h + 2
@@ -9399,6 +9547,54 @@ function Show-FixItGuidesDialog {
 # Where each step of a guide goes, from the MEASURED height of its wrapped text. $Measure is called as & $Measure $text $width and returns the
 # wrapped height in pixels (the window passes TextRenderer with WordBreak). The text is measured a little narrower than its label, so the
 # label can never wrap to one more line than was measured, and the row gets padding below the last line. Rows are stacked by their own height.
+# ----- fitting wrapped text (v2.3.10): one way to size every text label --------------------------------------------------
+# Text that wraps can come out a line taller on screen than a measurement says (Windows measures and draws a hair differently), and a label with a
+# fixed height then cuts the last line off. So every label measures its text with the same helper: measure at a slightly NARROWER width than the
+# label really has (a safety margin), then add a little padding. The measuring itself is passed in (-Measure { param($text, $width) height }) so the
+# rule can be tested without a screen.
+function Get-FixItWrappedTextHeight {
+    param([string]$Text, [int]$Width, [double]$Scale = 1.0, [scriptblock]$Measure)
+    if ($Scale -le 0) { $Scale = 1.0 }
+    $safety = [int][math]::Ceiling(8 * $Scale)
+    $w = [int][math]::Max(1, $Width - $safety)
+    return [int][math]::Ceiling([double](& $Measure $Text $w))
+}
+# The height a label needs for its wrapped text (measured with the real font through Windows' own text measuring), plus padding.
+function Get-FixItLabelHeight {
+    param([string]$Text, $Font, [int]$Width, [double]$Scale = 1.0, [int]$Min = 0, [double]$PadUnits = 12)
+    if ($Scale -le 0) { $Scale = 1.0 }
+    $m = { param($t, $w) [int](Measure-FixItText -Text $t -Font $Font -Width $w).Height }   # $Font is found in this function (the block runs inside it)
+    $h = (Get-FixItWrappedTextHeight -Text $Text -Width $Width -Scale $Scale -Measure $m) + [int][math]::Ceiling($PadUnits * $Scale)
+    return [int][math]::Max($h, $Min)
+}
+# Pure: how much taller a label has to grow (0 when it already fits).
+function Get-FixItGrowDelta { param([int]$Needed, [int]$Current) return [int][math]::Max(0, $Needed - $Current) }
+# Pure: the size of a window that holds a title, a body of wrapped text and some fixed pieces (buttons, margins). The window grows to fit the
+# text; it stops at about 85% of the screen's working-area height, and only then does the body scroll.
+function Get-FixItTextWindowPlan {
+    param([int]$TitleHeight, [int]$BodyHeight, [int]$ChromeHeight, [int]$WorkAreaHeight, [double]$CapFraction = 0.85)
+    $cap = [int]::MaxValue; if ($WorkAreaHeight -gt 0) { $cap = [int][math]::Floor($WorkAreaHeight * $CapFraction) }
+    $total = $ChromeHeight + $TitleHeight + $BodyHeight
+    if ($total -le $cap) { return [pscustomobject]@{ Scroll = $false; ViewHeight = $BodyHeight; ClientHeight = $total; Cap = $cap } }
+    $view = [int][math]::Max(60, $cap - $ChromeHeight - $TitleHeight)
+    return [pscustomobject]@{ Scroll = $true; ViewHeight = $view; ClientHeight = ($ChromeHeight + $TitleHeight + $view); Cap = $cap }
+}
+# Makes each label as tall as its text needs. Everything below a label that grew moves down, and the window grows by the same amount.
+function Expand-FixItLabelsToFit {
+    param($Form, $Labels, [double]$Scale = 1.0)
+    try {
+        foreach ($l in @($Labels | Sort-Object { $_.Top })) {
+            if ($null -eq $l -or -not [string]$l.Text) { continue }
+            $need = Get-FixItLabelHeight -Text ([string]$l.Text) -Font $l.Font -Width $l.Width -Scale $Scale
+            $d = Get-FixItGrowDelta -Needed $need -Current $l.Height
+            if ($d -le 0) { continue }
+            $bottom = $l.Bottom
+            foreach ($c in @($Form.Controls)) { if (-not [object]::ReferenceEquals($c, $l) -and $c.Top -ge ($bottom - 1)) { $c.Top = $c.Top + $d } }
+            $l.Height = $l.Height + $d
+            $Form.ClientSize = New-Object System.Drawing.Size($Form.ClientSize.Width, ($Form.ClientSize.Height + $d))
+        }
+    } catch { Write-FixItLog ('Could not fit the text in the window: {0}' -f $_.Exception.Message) 'WARN' }
+}
 function Get-FixItGuideStepLayout {
     param($Steps, [double]$Scale = 1.0, [int]$TextWidth, [int]$LineHeight = 26, [scriptblock]$Measure)
     if ($Scale -le 0) { $Scale = 1.0 }
@@ -9409,7 +9605,7 @@ function Get-FixItGuideStepLayout {
     $gap = [int][math]::Ceiling(14 * $Scale)
     $rows = @(); $y = 0; $n = 1
     foreach ($st in @($Steps)) {
-        $mh = [int][math]::Ceiling([double](& $Measure ([string]$st) ($TextWidth - $safety)))
+        $mh = Get-FixItWrappedTextHeight -Text ([string]$st) -Width $TextWidth -Scale $Scale -Measure $Measure
         $lines = 1; if ($LineHeight -gt 0) { $lines = [int][math]::Max(1, [math]::Round($mh / $LineHeight)) }
         $h = [int][math]::Max($mh + $pad, $minH)
         $rows += [pscustomobject]@{ Number = $n; Y = $y; TextY = ($y + $top); Height = $h; Lines = $lines; MeasuredHeight = $mh }

@@ -891,7 +891,7 @@ Assert ($gb.IndexOf("`$Which -eq 'Privacy'") -lt $gb.IndexOf('Confirm-FixIt')) '
 # --- the windows themselves (source checks: System.Drawing is not available here)
 $pf = (Get-Fn 'Show-FixItPrivacyForm').Extent.Text; $nf = (Get-Fn 'Show-FixItNameForm').Extent.Text
 Assert ($pf -match "-Title 'OK, got it'" -and $pf -match 'AcceptButton' -and $pf -match 'AutoScroll = \$true') 'the privacy window has one "OK, got it" button and scrolls if the text is large'
-Assert ($pf -match '\$script:UiScale' -and $pf -match '\$script:UiHighContrast' -and $pf -match "'#FFFF00'" -and $pf -match 'MeasureText') 'the privacy window follows Big text and High contrast and measures its text so nothing is cut off'
+Assert ($pf -match '\$script:UiScale' -and $pf -match '\$script:UiHighContrast' -and $pf -match "'#FFFF00'" -and $pf -match 'Get-FixItLabelHeight') 'the privacy window follows Big text and High contrast and measures its text so nothing is cut off'
 Assert ($pf -match "Set-FixItSetting -Name 'PrivacyShown'") 'it records that it was shown'
 Assert ($nf -match 'NameQuestion' -and $nf -match "-Title 'Save'" -and $nf -match "-Title 'Skip'" -and $nf -match 'MaxLength = \$script:OwnerNameMax' -and $nf -match 'Save-FixItOwnerName') 'the name window has the question, a limited box, Save and Skip'
 Assert ($nf -match '\$script:UiScale' -and $nf -match '\$script:UiHighContrast') 'the name window follows Big text and High contrast'
