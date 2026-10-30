@@ -32,9 +32,9 @@ Assert (-not ($srcText -match '[^\x00-\x7F]')) 'the program file is plain ASCII 
 # ================================================================ 1. tray icon: the plan
 Section 'Tray icon: what it says and offers'
 $plan = Get-FixItTrayPlan
-Assert (@($plan.Items).Count -eq 2) 'the right-click menu has exactly two items'
-Assert (@($plan.Items)[0].Text -eq 'Get me out of a scary page' -and @($plan.Items)[1].Text -eq 'Open Family Fix-It') 'the two items read "Get me out of a scary page" and "Open Family Fix-It"'
-Assert (@($plan.Items | Where-Object { $_.Text -match '(?i)exit|quit|close|stop|turn off' }).Count -eq 0) 'there is no Exit (or Quit, Stop, Turn off) item'
+Assert (@($plan.Items).Count -eq 3) 'the right-click menu has exactly three items (2.3.13 added the Exit item)'
+Assert (@($plan.Items)[0].Text -eq 'Get me out of a scary page' -and @($plan.Items)[1].Text -eq 'Open Family Fix-It' -and @($plan.Items)[2].Text -eq 'Turn off the pop-up watcher') 'the items read "Get me out of a scary page", "Open Family Fix-It" and "Turn off the pop-up watcher"'
+Assert (@($plan.Items | Where-Object { $_.Text -match '(?i)quit|close' }).Count -eq 0) 'there is no Quit or Close item'
 Assert ($plan.ToolTip -eq 'Family Fix-It is watching for scary pop-ups' -and $plan.ToolTip.Length -le 63) 'the hover text is plain and fits the 63 character limit'
 Assert ($plan.DoubleClick -eq 'Open' -and -not $plan.Balloons) 'double-click opens Family Fix-It; no pop-up bubbles'
 Assert ($srcText -notmatch 'ShowBalloonTip|BalloonTip') 'the program never shows a balloon notification'
@@ -122,7 +122,7 @@ $t1 = New-FixItGuardianTray
 $ni1 = $t1.Icon
 Assert ($ni1.Visible -and $ni1.Text -eq 'Family Fix-It is watching for scary pop-ups' -and $ni1.Icon -eq 'THE-ICON') 'the icon is shown with its hover text and icon'
 $menuItems = @($t1.Menu.Items.List)
-Assert ($menuItems.Count -eq 2 -and $menuItems[0].Text -eq 'Get me out of a scary page' -and $menuItems[1].Text -eq 'Open Family Fix-It') 'the menu holds exactly the two items'
+Assert ($menuItems.Count -eq 3 -and $menuItems[0].Text -eq 'Get me out of a scary page' -and $menuItems[1].Text -eq 'Open Family Fix-It' -and $menuItems[2].Text -eq 'Turn off the pop-up watcher') 'the menu holds exactly the three items'
 Assert ($ni1.ContextMenuStrip -eq $t1.Menu) 'the menu is attached to the icon'
 $script:Got.Clear()
 function Invoke-GuardianTrayAction { param([string]$Id) [void]$script:Got.Add('act:' + $Id) }

@@ -6,14 +6,14 @@ browser clean-up, Windows Update, OneDrive; a red "scary pop-up" button; screen 
 
 Run with no options to open the friendly window.
 Command-line use (for Trey):
-  FamilyFixIt.ps1 -Action Printer|Acrobat|AcrobatRepair|Outlook|Network|Slow|Sound|Browser|WinUpdate|OneDrive|Scam|Screen|Report|Pin|Update [-WhatIf]
+  FamilyFixIt.ps1 -Action Printer|Acrobat|AcrobatRepair|Outlook|Network|Slow|Sound|Display|Browser|WinUpdate|OneDrive|Scam|Screen|Report|Pin|Update [-WhatIf]
   -WhatIf (alias -DryRun) shows what would happen and changes nothing (nothing is sent either).
   -Test (Test mode) runs the normal window and questions but only CHECKS each change step (PASS/WARN/FAIL); -Action TestAll checks every button.
   -ReportUrl overrides the address that reports are sent to.
   Guardian (runs at sign-in, hidden) watches for a full-screen browser page and offers a way out; GuardianOn/GuardianOff/GuardianDemo.
 #>
 param(
-    [ValidateSet('Gui', 'TestAll', 'Printer', 'Acrobat', 'AcrobatRepair', 'Outlook', 'Network', 'Slow', 'Sound', 'Browser', 'WinUpdate', 'OneDrive', 'Scam', 'Screen', 'Report', 'Pin', 'Update', 'Restart', 'Status', 'Undo', 'CheckIn', 'CheckInOn', 'CheckInOff', 'HealthCheck', 'History', 'Files', 'Install', 'Guardian', 'GuardianOn', 'GuardianOff', 'GuardianDemo', 'PCInfo', 'Guides', 'Simple', 'Donate', 'Privacy', 'YourName', 'Share', 'FirstRunPending',
+    [ValidateSet('Gui', 'TestAll', 'Printer', 'Acrobat', 'AcrobatRepair', 'Outlook', 'Network', 'Slow', 'Sound', 'Display', 'Browser', 'WinUpdate', 'OneDrive', 'Scam', 'Screen', 'Report', 'Pin', 'Update', 'Restart', 'Status', 'Undo', 'CheckIn', 'CheckInOn', 'CheckInOff', 'HealthCheck', 'History', 'Files', 'Install', 'Guardian', 'GuardianOn', 'GuardianOff', 'GuardianDemo', 'PCInfo', 'Guides', 'Simple', 'Donate', 'Privacy', 'YourName', 'Share', 'FirstRunPending',
         'PrinterAdmin', 'AcrobatAdmin', 'AcrobatRepairAdmin', 'NetworkAdmin', 'SlowAdmin', 'SoundAdmin', 'OutlookAdmin', 'DefenderScanAdmin', 'WinUpdateAdmin', 'WinUpdateDeepAdmin', 'UndoAdmin')]
     [string]$Action = 'Gui',
     [Alias('DryRun')][switch]$WhatIf,
@@ -37,7 +37,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 # Settings
 # ---------------------------------------------------------------------------
-$script:FixItVersion = '2.3.12'
+$script:FixItVersion = '2.3.13'
 $script:GuideFont = $null; $script:FilesMsg = $null; $script:FilesPanel = $null; $script:FilesTip = $null; $script:FilesNameFont = $null   # My files window pieces (set when the window opens)
 $script:DefaultManifestUrl = 'https://raw.githubusercontent.com/Sodapopnewb/family-it-fixit/main/manifest.json'
 $script:OwnerPlaceholder = ('<' + 'OWNER>')   # the guards compare with this; Publish never rewrites it
@@ -501,6 +501,14 @@ function Get-FixItPreflight {
             if ($null -ne $d) { & $pass ('the {0} "{1}" was found' -f ([string]$A['Kind']).ToLowerInvariant(), $d.Name) } else { & $fail ('no {0} was found' -f ([string]$A['Kind']).ToLowerInvariant()) }
             break
         }
+        'Send-FixItDisplayReset' { & $pass 'any user may restart the graphics driver (no administrator needed)'; & $pass 'the key presses are sent to the open desktop'; break }
+        'Set-FixItResolution' {
+            $wd = [int]$A['Width']; $ht = [int]$A['Height']
+            $mm = @(); try { $mm = @(Get-FixItDisplayModes) } catch { }
+            if (@($mm | Where-Object { ([string]$_) -like ('{0},{1},*' -f $wd, $ht) }).Count -gt 0) { & $pass ('the main screen lists {0} x {1} as a size it can show' -f $wd, $ht) } else { & $fail ('the main screen does not list {0} x {1} as a size it can show' -f $wd, $ht) }
+            & $pass 'any user may change the screen size (no administrator needed)'
+            break
+        }
         { $_ -in @('Start-FixItOutlook', 'Start-FixItOutlookSafe') } {
             $ol = $null; try { $ol = Get-OutlookInfo } catch { }
             if ($null -ne $ol -and $ol.Installed -and $ol.Path) { & $pass ('Outlook was found ({0})' -f $ol.Path) } else { & $fail 'Outlook was not found on this PC' }
@@ -675,7 +683,7 @@ function Complete-FixItTestRecords {
 }
 
 # The buttons that "Test all buttons" runs (every fix, the report, the restart, the undo, the toggles and the update check).
-$script:TestAllKeys = @('Printer', 'Acrobat', 'AcrobatRepair', 'Outlook', 'Network', 'Slow', 'Sound', 'Browser', 'WinUpdate', 'OneDrive', 'Scam', 'Screen', 'Report', 'Update', 'Restart', 'Undo', 'CheckIn', 'Guardian', 'HealthCheck', 'PCInfo', 'Donate', 'Privacy', 'YourName', 'Share')
+$script:TestAllKeys = @('Printer', 'Acrobat', 'AcrobatRepair', 'Outlook', 'Network', 'Slow', 'Sound', 'Display', 'Browser', 'WinUpdate', 'OneDrive', 'Scam', 'Screen', 'Report', 'Update', 'Restart', 'Undo', 'CheckIn', 'Guardian', 'HealthCheck', 'PCInfo', 'Donate', 'Privacy', 'YourName', 'Share')
 
 function Get-FixItTestResultsPath {
     param([switch]$Create)
@@ -2837,6 +2845,7 @@ function Get-FixItReportText {
             }
         }
     }
+    Add-ReportSection $o 'Display (screen flicker or going black)' { Invoke-ReportItem 'Display details' { Get-FixItDisplayReportLines } }
     Add-ReportSection $o 'Recent errors - System log (last 7 days, newest first)' { Invoke-ReportItem 'System log' { Format-EventLines (Get-FixItEvents -LogName 'System') } }
     Add-ReportSection $o 'Recent errors - Application log (last 7 days, newest first)' { Invoke-ReportItem 'Application log' { Format-EventLines (Get-FixItEvents -LogName 'Application') } }
     Add-ReportSection $o 'What this tool did recently (from its log)' {
@@ -3066,6 +3075,59 @@ function Get-UpdateStatus {
     return $m
 }
 
+# ----- safer file swap for updates (v2.3.13) ---------------------------------------------------------------------
+# The waits between tries: 0.2 s, 0.4 s, ... (10 tries = 9 waits, 9 seconds in all).
+function Get-FixItUpdateRetryWaits {
+    param([int]$Tries = 10, [int]$StepMs = 200)
+    $w = @()
+    for ($i = 1; $i -lt $Tries; $i++) { $w += ($i * $StepMs) }
+    return @($w)
+}
+# One try at putting a prepared file over the real one (a small adapter, replaced by a pretend in the tests).
+function Move-FixItStagedFile {
+    param([string]$Temp, [string]$Target)
+    if (Test-Path -LiteralPath $Target) {
+        $old = $Target + '.fixit-old'
+        [void][IO.File]::Replace($Temp, $Target, $old)
+        try { if (Test-Path -LiteralPath $old) { Remove-Item -LiteralPath $old -Force -ErrorAction Stop } } catch { }
+    } else { [IO.File]::Move($Temp, $Target) }
+}
+# Puts Source at Target. The new file is first copied next to the target (name.fixit-new), then swapped in with up to $Tries tries and growing waits.
+# If every try fails, the target is left exactly as it was (and the temporary file is removed) and this throws. Safe to repeat.
+function Install-FixItFileSafely {
+    param([string]$Source, [string]$Target, [int]$Tries = 10)
+    $tmp = $Target + '.fixit-new'
+    $waits = @(Get-FixItUpdateRetryWaits -Tries $Tries)
+    $last = ''
+    try {
+        Copy-Item -LiteralPath $Source -Destination $tmp -Force
+        for ($i = 1; $i -le $Tries; $i++) {
+            try {
+                Move-FixItStagedFile -Temp $tmp -Target $Target
+                if ($i -gt 1) { Write-FixItLog ('Update: replaced {0} on try {1}' -f (Split-Path -Leaf $Target), $i) }
+                return
+            } catch {
+                $last = $_.Exception.Message
+                Write-FixItLog ('Update: could not replace {0} yet (try {1} of {2}): {3}' -f (Split-Path -Leaf $Target), $i, $Tries, $last) 'WARN'
+                if ($i -lt $Tries) { Wait-FixIt -Milliseconds ([int]$waits[$i - 1]) }
+            }
+        }
+        throw ('{0} is still in use by another program and could not be replaced ({1})' -f (Split-Path -Leaf $Target), $last)
+    } finally {
+        if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+    }
+}
+# Asks this user's pop-up watcher to stop (the same polite stop signal as everywhere else, then the old way) and waits until it has let go.
+# True when a watcher was running and has stopped; false when none was running. Logged. Safe to repeat.
+function Stop-FixItGuardianForUpdate {
+    if (-not (Test-FixItGuardianRunning)) { Write-FixItLog 'Update: no pop-up watcher is running'; return $false }
+    Write-FixItLog 'Update: asking the pop-up watcher to stop so the program file can be replaced'
+    Stop-FixItGuardianProcess
+    if (Wait-FixItGuardianGone -Seconds 3) { Write-FixItLog 'Update: the pop-up watcher has stopped' }
+    else { Write-FixItLog 'Update: the pop-up watcher is still shown as running; the file swap will keep trying' 'WARN' }
+    return $true
+}
+
 function Install-FixItUpdate {
     param($Manifest)
     if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Install-FixItUpdate' -Arguments $PSBoundParameters; return }
@@ -3092,6 +3154,11 @@ function Install-FixItUpdate {
         }
         # Windows still open on the old version would keep running old code: close the others first (never stops the update if it cannot).
         try { [void](Close-FixItOtherGuiWindows -Why 'update') } catch { Write-FixItLog ('Could not close the other windows: {0}' -f $_.Exception.Message) 'WARN' }
+        # A running pop-up watcher keeps FamilyFixIt.ps1 open, and Windows will not let the file be replaced while it does (2.3.13): ask it to stop and wait for it.
+        $stoppedGuardian = $false
+        if (@($everything | Where-Object { [string]$_.path -eq 'FamilyFixIt.ps1' }).Count -gt 0) {
+            try { $stoppedGuardian = [bool](Stop-FixItGuardianForUpdate) } catch { Write-FixItLog ('Could not ask the pop-up watcher to stop: {0}' -f $_.Exception.Message) 'WARN' }
+        }
         $backup = Join-Path $script:InstallDir 'previous'
         New-Item -ItemType Directory -Path $backup -Force | Out-Null
         $done = @()
@@ -3099,13 +3166,21 @@ function Install-FixItUpdate {
             foreach ($f in $everything) {
                 $target = Join-Path $script:InstallDir ([string]$f.path)
                 if (Test-Path -LiteralPath $target) { Copy-Item -LiteralPath $target -Destination (Join-Path $backup ([string]$f.path)) -Force }
-                Copy-Item -LiteralPath (Join-Path $stage ([string]$f.path)) -Destination $target -Force
+                # one file at a time, through a temporary file next to it, with retries: the old file stays exactly as it was until the new one is in place
+                Install-FixItFileSafely -Source (Join-Path $stage ([string]$f.path)) -Target $target
                 $done += [string]$f.path
             }
         } catch {
+            Write-FixItLog ('Update: could not replace the files ({0}); putting back the ones already replaced' -f $_.Exception.Message) 'ERROR'
             foreach ($d in $done) {
                 $b = Join-Path $backup $d
-                if (Test-Path -LiteralPath $b) { Copy-Item -LiteralPath $b -Destination (Join-Path $script:InstallDir $d) -Force -ErrorAction SilentlyContinue }
+                if (Test-Path -LiteralPath $b) {
+                    try { Install-FixItFileSafely -Source $b -Target (Join-Path $script:InstallDir $d) } catch { Write-FixItLog ('Update: could not put back {0}: {1}' -f $d, $_.Exception.Message) 'ERROR' }
+                }
+            }
+            # the update did not happen: the watcher we stopped starts again from the old (restored) program
+            if ($stoppedGuardian) {
+                try { [void](Restart-FixItGuardian -Why 'the update did not finish') } catch { Write-FixItLog ('Could not restart the pop-up watcher: {0}' -f $_.Exception.Message) 'WARN' }
             }
             throw
         }
@@ -3488,6 +3563,313 @@ function Invoke-SoundFix {
     if ($script:DryRun) { return New-FixItResult $true 'Practice run' 'Practice run only - nothing was changed. Details are in the log file.' $lines }
     Write-FixItLog 'Finished: sound, microphone and camera'
     return New-FixItResult $true 'Sound check done' 'I checked your speakers, microphone and camera and opened the Windows page where you can pick the right one. Please try again now.' $lines
+}
+
+# ---------------------------------------------------------------------------
+# "Fix my display" (v2.3.13): the screen flickers, goes black or looks wrong.
+# Reads the graphics card, the driver, the screens and 7 days of the Windows log, says in plain words which it looks like
+# ("the graphics driver keeps crashing and restarting" or "the screen keeps losing its connection"), then restarts the graphics driver
+# (the same as pressing the Windows key + Ctrl + Shift + B) and, only if you say yes, puts the main screen back to its best size. No admin needed.
+# ---------------------------------------------------------------------------
+$script:DisplaySeconds = 40
+$script:DisplayMonitorEventsHigh = 6   # more screen plug/unplug entries than a week of normal start-ups
+
+function Initialize-FixItDisplay {
+    if ('FixItDisplay' -as [type]) { return }
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Threading;
+public static class FixItDisplay {
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
+    struct DEVMODE {
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmDeviceName;
+        public short dmSpecVersion; public short dmDriverVersion; public short dmSize; public short dmDriverExtra;
+        public int dmFields;
+        public int dmPositionX; public int dmPositionY; public int dmDisplayOrientation; public int dmDisplayFixedOutput;
+        public short dmColor; public short dmDuplex; public short dmYResolution; public short dmTTOption; public short dmCollate;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmFormName;
+        public short dmLogPixels;
+        public int dmBitsPerPel; public int dmPelsWidth; public int dmPelsHeight; public int dmDisplayFlags; public int dmDisplayFrequency;
+        public int dmICMMethod; public int dmICMIntent; public int dmMediaType; public int dmDitherType;
+        public int dmReserved1; public int dmReserved2; public int dmPanningWidth; public int dmPanningHeight;
+    }
+    [StructLayout(LayoutKind.Sequential)] struct KEYBDINPUT { public ushort wVk; public ushort wScan; public uint dwFlags; public uint time; public IntPtr dwExtraInfo; }
+    [StructLayout(LayoutKind.Sequential)] struct MOUSEINPUT { public int dx; public int dy; public uint mouseData; public uint dwFlags; public uint time; public IntPtr dwExtraInfo; }
+    [StructLayout(LayoutKind.Explicit)] struct INPUTUNION { [FieldOffset(0)] public KEYBDINPUT ki; [FieldOffset(0)] public MOUSEINPUT mi; }
+    [StructLayout(LayoutKind.Sequential)] struct INPUT { public uint type; public INPUTUNION u; }
+    [DllImport("user32.dll", CharSet = CharSet.Ansi)] static extern bool EnumDisplaySettings(string deviceName, int modeNum, ref DEVMODE dm);
+    [DllImport("user32.dll", CharSet = CharSet.Ansi)] static extern int ChangeDisplaySettings(ref DEVMODE dm, int flags);
+    [DllImport("user32.dll", SetLastError = true)] static extern uint SendInput(uint n, INPUT[] inputs, int size);
+    static DEVMODE NewMode() { DEVMODE d = new DEVMODE(); d.dmDeviceName = new string(' ', 0); d.dmFormName = new string(' ', 0); d.dmSize = (short)Marshal.SizeOf(typeof(DEVMODE)); return d; }
+    // every size the main screen can show: "width,height,hz;"
+    public static string Modes() {
+        StringBuilder sb = new StringBuilder();
+        DEVMODE dm = NewMode(); int i = 0;
+        while (i < 3000) { if (!EnumDisplaySettings(null, i, ref dm)) { break; } sb.Append(dm.dmPelsWidth + "," + dm.dmPelsHeight + "," + dm.dmDisplayFrequency + ";"); i++; dm = NewMode(); }
+        return sb.ToString();
+    }
+    // 0 = changed. Only a size the screen lists is tried, and it is tested before it is applied.
+    public static int SetMode(int w, int h) {
+        DEVMODE cur = NewMode();
+        if (!EnumDisplaySettings(null, -1, ref cur)) { return -100; }
+        DEVMODE best = NewMode(); bool found = false; int bestDiff = int.MaxValue;
+        DEVMODE dm = NewMode(); int i = 0;
+        while (i < 3000) {
+            if (!EnumDisplaySettings(null, i, ref dm)) { break; }
+            bool same = dm.dmPelsWidth == w;
+            if (same) { same = dm.dmPelsHeight == h; }
+            if (same) { same = dm.dmBitsPerPel == cur.dmBitsPerPel; }
+            if (same) {
+                int diff = Math.Abs(dm.dmDisplayFrequency - cur.dmDisplayFrequency);
+                bool better = !found;
+                if (!better) { better = diff < bestDiff; }
+                if (better) { best = dm; found = true; bestDiff = diff; }
+            }
+            i++; dm = NewMode();
+        }
+        if (!found) { return -101; }
+        best.dmFields = best.dmFields | 0x80000 | 0x100000 | 0x400000;
+        int t = ChangeDisplaySettings(ref best, 2);
+        if (t != 0) { return t; }
+        return ChangeDisplaySettings(ref best, 1);
+    }
+    static bool Key(ushort vk, bool up) {
+        INPUT[] a = new INPUT[1];
+        a[0].type = 1; a[0].u.ki.wVk = vk; a[0].u.ki.dwFlags = up ? 2u : 0u;
+        return SendInput(1, a, Marshal.SizeOf(typeof(INPUT))) == 1;
+    }
+    // Windows key + Ctrl + Shift + B (restarts the graphics driver). Every key that was pressed is let go again, whatever happens.
+    public static bool Reset() {
+        ushort[] keys = new ushort[] { 0x5B, 0x11, 0x10, 0x42 };
+        int pressed = 0; bool ok = true;
+        try {
+            for (int i = 0; i < keys.Length; i++) { if (!Key(keys[i], false)) { ok = false; break; } pressed++; Thread.Sleep(40); }
+        } finally {
+            for (int j = pressed - 1; j >= 0; j--) { Key(keys[j], true); Thread.Sleep(20); }
+        }
+        if (!ok) { return false; }
+        return pressed == keys.Length;
+    }
+}
+'@
+}
+
+# What the screen can show: "width,height,hz" text for every size (a small adapter, replaced by a pretend in the tests).
+function Get-FixItDisplayModes {
+    Initialize-FixItDisplay
+    return @(([FixItDisplay]::Modes()).Split(';') | Where-Object { $_ })
+}
+# Restarts the graphics driver: Windows key + Ctrl + Shift + B, sent as real key presses. The screen goes black for a second or two.
+function Send-FixItDisplayReset {
+    if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Send-FixItDisplayReset' -Arguments $PSBoundParameters; return }
+    Initialize-FixItDisplay
+    if (-not [FixItDisplay]::Reset()) { throw 'Windows did not accept the key presses' }
+    Wait-FixIt -Milliseconds 1500
+}
+# Sets the main screen to a size it lists as supported. Throws when Windows says no (nothing is changed then).
+function Set-FixItResolution {
+    param([int]$Width, [int]$Height)
+    if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Set-FixItResolution' -Arguments $PSBoundParameters; return }
+    Initialize-FixItDisplay
+    $code = [int][FixItDisplay]::SetMode($Width, $Height)
+    if ($code -ne 0) { throw ('Windows would not use {0} x {1} (code {2})' -f $Width, $Height, $code) }
+}
+
+function Get-FixItDisplayConnectionName {
+    param($Code)
+    if ($null -eq $Code -or [string]$Code -eq '') { return '' }
+    switch ([int64]$Code) {
+        0 { return 'VGA' } 1 { return 'S-video' } 2 { return 'composite video' } 3 { return 'component video' }
+        4 { return 'DVI' } 5 { return 'HDMI' } 6 { return 'the laptop screen' } 8 { return 'Japanese D-connector' } 9 { return 'SDI' }
+        10 { return 'DisplayPort' } 11 { return 'DisplayPort (inside the laptop)' } 12 { return 'UDI' } 13 { return 'UDI (inside the laptop)' }
+        14 { return 'TV dongle' } 15 { return 'wireless (Miracast)' } 16 { return 'wired adapter' }
+        2147483648 { return 'the laptop screen' }
+        default { return '' }
+    }
+}
+function Test-FixItBasicDisplay {
+    param($Card)
+    return ([string](Get-FixItProp $Card 'Name' '') -match 'Basic Display|Basic Render')
+}
+# A count from the Windows log that never throws: $null means "could not be read".
+function Get-FixItDisplayEventCount {
+    param([string]$Provider, [int[]]$Ids = @(), [string]$MessageLike = '', [string]$LogName = 'System')
+    try { return [int](Get-FixItHwEventCount -Provider $Provider -Ids $Ids -Days 7 -MessageLike $MessageLike -LogName $LogName) }
+    catch { Write-FixItLog ('Display: could not count {0} events ({1})' -f $Provider, $_.Exception.Message); return $null }
+}
+function Get-FixItDisplaySum {
+    param($Counts)
+    $known = @($Counts | Where-Object { $null -ne $_ })
+    if ($known.Count -eq 0) { return $null }
+    return [int](($known | Measure-Object -Sum).Sum)
+}
+
+# Reads (changes nothing): the graphics card(s), the screens, the sizes and 7 days of display-related Windows log entries.
+function Get-FixItDisplayFacts {
+    if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Get-FixItDisplayFacts' -Arguments $PSBoundParameters -TimeoutSeconds $script:DisplaySeconds) }
+    $notes = New-Object System.Collections.ArrayList
+    $cards = @()
+    try {
+        foreach ($g in @(Get-CimInstance -ClassName Win32_VideoController -ErrorAction Stop)) {
+            $dt = $null; $dd = Get-FixItProp $g 'DriverDate' $null
+            if ($dd) { try { $dt = [datetime]$dd } catch { } }
+            $code = 0; $ec = Get-FixItProp $g 'ConfigManagerErrorCode' $null
+            if ($null -ne $ec -and [string]$ec -ne '') { $code = [int]$ec }
+            $w = $null; $h = $null; $hz = $null
+            $cw = Get-FixItProp $g 'CurrentHorizontalResolution' $null; $ch = Get-FixItProp $g 'CurrentVerticalResolution' $null; $cr = Get-FixItProp $g 'CurrentRefreshRate' $null
+            if ($cw) { $w = [int]$cw }; if ($ch) { $h = [int]$ch }; if ($cr) { $hz = [int]$cr }
+            $cards += [pscustomobject]@{ Name = [string](Get-FixItProp $g 'Name' ''); Status = [string](Get-FixItProp $g 'Status' ''); ErrorCode = $code; DriverVersion = [string](Get-FixItProp $g 'DriverVersion' ''); DriverDate = $dt; Width = $w; Height = $h; Hz = $hz }
+        }
+    } catch { [void]$notes.Add('the graphics card'); Write-FixItLog ('Display: could not read the graphics card ({0})' -f $_.Exception.Message) }
+
+    $screens = $null; $conn = @()
+    try {
+        $cp = @(Get-CimInstance -Namespace 'root\wmi' -ClassName 'WmiMonitorConnectionParams' -ErrorAction Stop | Where-Object { (Get-FixItProp $_ 'Active' $true) -ne $false })
+        $screens = $cp.Count
+        foreach ($c in $cp) { $nm = Get-FixItDisplayConnectionName -Code (Get-FixItProp $c 'VideoOutputTechnology' $null); if ($nm -and ($conn -notcontains $nm)) { $conn += $nm } }
+    } catch { [void]$notes.Add('the connection type'); Write-FixItLog ('Display: could not read the connection type ({0})' -f $_.Exception.Message) }
+
+    # the size the screen itself prefers. Only worked out when exactly one screen is on, so the main screen cannot be mixed up with another.
+    $rec = $null
+    try {
+        $sm = @(Get-CimInstance -Namespace 'root\wmi' -ClassName 'WmiMonitorListedSupportedSourceModes' -ErrorAction Stop | Where-Object { (Get-FixItProp $_ 'Active' $true) -ne $false })
+        if ($null -eq $screens) { $screens = $sm.Count }
+        if ($sm.Count -eq 1) {
+            $modes = @(Get-FixItProp $sm[0] 'MonitorSourceModes' @())
+            $pi = [int](Get-FixItProp $sm[0] 'PreferredMonitorSourceModeIndex' -1)
+            if ($pi -ge 0 -and $pi -lt $modes.Count) {
+                $m = $modes[$pi]; $hz = $null
+                $num = [double](Get-FixItProp $m 'VerticalRefreshRateNumerator' 0); $den = [double](Get-FixItProp $m 'VerticalRefreshRateDenominator' 0)
+                if ($den -gt 0) { $hz = [int][math]::Round($num / $den) }
+                $rw = [int](Get-FixItProp $m 'HorizontalActivePixels' 0); $rh = [int](Get-FixItProp $m 'VerticalActivePixels' 0)
+                if ($rw -gt 0 -and $rh -gt 0) { $rec = [pscustomobject]@{ Width = $rw; Height = $rh; Hz = $hz } }
+            }
+        }
+    } catch { [void]$notes.Add('the best screen size'); Write-FixItLog ('Display: could not read the best screen size ({0})' -f $_.Exception.Message) }
+    $cur = $null
+    foreach ($c in $cards) { if ($null -eq $cur -and $c.Width -and $c.Height) { $cur = [pscustomobject]@{ Width = [int]$c.Width; Height = [int]$c.Height; Hz = $c.Hz } } }
+
+    $stop = 'stopped responding|has successfully recovered|recovered|TDR|reset'
+    $resets = Get-FixItDisplaySum @(
+        (Get-FixItDisplayEventCount -Provider 'Display' -Ids @(4101)),
+        (Get-FixItDisplayEventCount -Provider 'nvlddmkm' -MessageLike $stop),
+        (Get-FixItDisplayEventCount -Provider 'amdkmdag' -MessageLike $stop),
+        (Get-FixItDisplayEventCount -Provider 'igfx' -MessageLike $stop))
+    $power = Get-FixItDisplayEventCount -Provider 'Microsoft-Windows-Kernel-Power' -Ids @(41)
+    $whea = Get-FixItDisplayEventCount -Provider 'Microsoft-Windows-WHEA-Logger'
+    $live = Get-FixItDisplayEventCount -Provider 'Windows Error Reporting' -Ids @(1001) -MessageLike 'LiveKernelEvent' -LogName 'Application'
+    $plug = Get-FixItDisplaySum @(
+        (Get-FixItDisplayEventCount -Provider 'Microsoft-Windows-Kernel-PnP' -MessageLike 'DISPLAY\\'),
+        (Get-FixItDisplayEventCount -Provider 'Microsoft-Windows-DeviceSetupManager' -MessageLike 'monitor|display'))
+    return [pscustomobject]@{ Cards = @($cards); ScreenCount = $screens; Connections = @($conn); Current = $cur; Recommended = $rec; Resets = $resets; PowerLoss = $power; Whea = $whea; LiveKernel = $live; PlugEvents = $plug; Notes = @($notes) }
+}
+
+function Get-FixItDisplayNum { param($Value) if ($null -eq $Value -or [string]$Value -eq '') { return 0 }; return [int]$Value }
+
+# Says in plain words what it looks like. Kind: driver, connection, both, none or unknown.
+function Get-FixItDisplayVerdict {
+    param($Facts)
+    $nothing = ($null -eq $Facts)
+    if (-not $nothing) { $nothing = ((@(Get-FixItProp $Facts 'Cards' @()).Count -eq 0) -and ($null -eq (Get-FixItProp $Facts 'Resets' $null)) -and ($null -eq (Get-FixItProp $Facts 'PlugEvents' $null))) }
+    if ($nothing) {
+        return [pscustomobject]@{ Kind = 'unknown'; Text = 'I cannot see enough about your screen to say what is wrong.'; Suggestion = 'Please click Send Trey a report, so he can look.'; Extra = '' }
+    }
+    $cards = @(Get-FixItProp $Facts 'Cards' @())
+    $cardBad = $false
+    foreach ($c in $cards) { if ((Get-FixItDisplayNum (Get-FixItProp $c 'ErrorCode' 0)) -ne 0 -or (Test-FixItBasicDisplay -Card $c)) { $cardBad = $true } }
+    $resets = Get-FixItDisplayNum (Get-FixItProp $Facts 'Resets' $null)
+    $plug = Get-FixItDisplayNum (Get-FixItProp $Facts 'PlugEvents' $null)
+    $screens = Get-FixItProp $Facts 'ScreenCount' $null
+    $lost = ($plug -ge $script:DisplayMonitorEventsHigh) -or ($null -ne $screens -and [int]$screens -eq 0 -and $cards.Count -gt 0)
+    $driver = ($resets -ge 1) -or $cardBad
+    $dText = 'The graphics driver keeps crashing and restarting.'
+    if ($resets -eq 1 -and -not $cardBad) { $dText = 'The graphics driver crashed and restarted once.' }
+    $dFix = 'A newer graphics driver usually fixes this. Please ask Trey to update it.'
+    $cText = 'The screen keeps losing its connection.'
+    $cFix = 'Push the screen cable in firmly at both ends, or try a different cable.'
+    $kind = 'none'; $text = 'I did not find a graphics crash or a lost screen connection in the last 7 days.'; $fix = 'If the flicker comes back, click this again right after it happens.'
+    if ($driver -and $lost) { $kind = 'both'; $text = $dText; $fix = $dFix + ' Also push the screen cable in firmly at both ends.' }
+    elseif ($driver) { $kind = 'driver'; $text = $dText; $fix = $dFix }
+    elseif ($lost) { $kind = 'connection'; $text = $cText; $fix = $cFix }
+    $extra = ''
+    $n = (Get-FixItDisplayNum (Get-FixItProp $Facts 'PowerLoss' $null)) + (Get-FixItDisplayNum (Get-FixItProp $Facts 'Whea' $null)) + (Get-FixItDisplayNum (Get-FixItProp $Facts 'LiveKernel' $null))
+    if ($n -gt 0) { $extra = 'Windows also stopped suddenly or reported a hardware error {0} time(s) this week. If it keeps happening, please call Trey.' -f $n }
+    return [pscustomobject]@{ Kind = $kind; Text = $text; Suggestion = $fix; Extra = $extra }
+}
+
+function Format-FixItDisplayCount {
+    param($Value)
+    if ($null -eq $Value) { return 'not available' }
+    return [string][int]$Value
+}
+# The plain lines for the result window and the report.
+function Get-FixItDisplayLines {
+    param($Facts, $Verdict)
+    $o = @()
+    if ($null -eq $Facts) { $o += 'The screen details could not be read on this PC.' }
+    else {
+        $inv = [Globalization.CultureInfo]::InvariantCulture
+        foreach ($c in @(Get-FixItProp $Facts 'Cards' @())) {
+            $state = 'working'
+            $ec = Get-FixItDisplayNum (Get-FixItProp $c 'ErrorCode' 0)
+            if (Test-FixItBasicDisplay -Card $c) { $state = 'using the basic Windows driver (not the real one)' }
+            elseif ($ec -ne 0) { $state = ('has a problem (Windows code {0})' -f $ec) }
+            $drv = ''
+            $dv = [string](Get-FixItProp $c 'DriverVersion' ''); $dd = Get-FixItProp $c 'DriverDate' $null
+            if ($dv) { $drv = ', driver ' + $dv; if ($dd) { $drv += ' from ' + ([datetime]$dd).ToString('d MMM yyyy', $inv) } }
+            $o += ('Graphics card: {0} - {1}{2}' -f [string](Get-FixItProp $c 'Name' ''), $state, $drv)
+        }
+        if (@(Get-FixItProp $Facts 'Cards' @()).Count -eq 0) { $o += 'Graphics card: not available' }
+        $sc = Get-FixItProp $Facts 'ScreenCount' $null; $cn = @(Get-FixItProp $Facts 'Connections' @())
+        if ($null -eq $sc) { $o += 'Screens connected: not available' }
+        else { $o += ('Screens connected: {0}{1}' -f [int]$sc, $(if ($cn.Count -gt 0) { ' (' + ($cn -join ', ') + ')' } else { '' })) }
+        $cur = Get-FixItProp $Facts 'Current' $null; $rec = Get-FixItProp $Facts 'Recommended' $null
+        if ($cur) { $o += ('Screen size now: {0} x {1}{2}' -f $cur.Width, $cur.Height, $(if ($cur.Hz) { ' at ' + $cur.Hz + ' Hz' } else { '' })) }
+        if ($rec) { $o += ('Best size for this screen: {0} x {1}' -f $rec.Width, $rec.Height) }
+        $o += ('Graphics driver crashes and restarts, last 7 days: {0}' -f (Format-FixItDisplayCount (Get-FixItProp $Facts 'Resets' $null)))
+        $o += ('Screen plugged or unplugged, last 7 days: {0}' -f (Format-FixItDisplayCount (Get-FixItProp $Facts 'PlugEvents' $null)))
+        $o += ('Windows stopped suddenly (power), last 7 days: {0}' -f (Format-FixItDisplayCount (Get-FixItProp $Facts 'PowerLoss' $null)))
+        $o += ('Hardware errors (WHEA), last 7 days: {0}' -f (Format-FixItDisplayCount (Get-FixItProp $Facts 'Whea' $null)))
+        $o += ('Graphics hardware errors (LiveKernelEvent), last 7 days: {0}' -f (Format-FixItDisplayCount (Get-FixItProp $Facts 'LiveKernel' $null)))
+        foreach ($n in @(Get-FixItProp $Facts 'Notes' @())) { $o += ('Not available: {0}' -f $n) }
+    }
+    if ($null -ne $Verdict) {
+        $o += ('It looks like: {0} {1}' -f $Verdict.Text, $Verdict.Suggestion)
+        if ($Verdict.Extra) { $o += [string]$Verdict.Extra }
+    }
+    return @($o)
+}
+function Get-FixItDisplayReportLines {
+    $facts = $null
+    try { $facts = Get-FixItDisplayFacts } catch { return @(Get-FixItReportItemNote -Label 'Display details' -Err $_) }
+    return @(Get-FixItDisplayLines -Facts $facts -Verdict (Get-FixItDisplayVerdict -Facts $facts))
+}
+
+function Invoke-DisplayFix {
+    Write-FixItLog 'Started: Fix my display'
+    $facts = $null
+    try { $facts = Get-FixItDisplayFacts } catch { Write-FixItLog ('Could not read the display details: {0}' -f $_.Exception.Message) 'WARN' }
+    $verdict = Get-FixItDisplayVerdict -Facts $facts
+    $info = @(Get-FixItDisplayLines -Facts $facts -Verdict $verdict)
+    foreach ($l in $info) { Write-FixItLog ('Display: {0}' -f $l) }
+    $did = @()
+    $cur = Get-FixItProp $facts 'Current' $null; $rec = Get-FixItProp $facts 'Recommended' $null
+    if ($cur -and $rec -and ([int]$cur.Width -ne [int]$rec.Width -or [int]$cur.Height -ne [int]$rec.Height)) {
+        $ow = [int]$cur.Width; $oh = [int]$cur.Height; $nw = [int]$rec.Width; $nh = [int]$rec.Height
+        if (Confirm-FixItStep ('Your screen is set to {0} x {1}, but its best size is {2} x {3}. Change it to the best size?' -f $ow, $oh, $nw, $nh)) {
+            Add-FixItUndoStep ([ordered]@{ Kind = 'resolution'; Width = $ow; Height = $oh })
+            if (Invoke-FixItStep ('Set the main screen to {0} x {1}' -f $nw, $nh) { Set-FixItResolution -Width $nw -Height $nh }) { $did += ('Your screen is now set to its best size ({0} x {1}).' -f $nw, $nh) }
+            else { $did += 'I could not change the screen size. It is as it was.' }
+        } else { $did += 'The screen size was left as it is, as you chose.' }
+    }
+    if (Invoke-FixItStep 'Restart the graphics driver (Windows key + Ctrl + Shift + B)' { Send-FixItDisplayReset }) { $did += 'I restarted the graphics driver. The screen may have gone black or flickered for a second.' }
+    else { $did += 'I could not restart the graphics driver.' }
+    if ($script:DryRun) { return New-FixItResult $true 'Practice run' 'Practice run only - nothing was changed. Details are in the log file.' @($info) }
+    Write-FixItLog 'Finished: Fix my display'
+    $msg = ('I checked your graphics card and screen. {0} {1}' -f $verdict.Text, $verdict.Suggestion)
+    return New-FixItResult $true 'Display checked' $msg @(@($did) + @('') + @($info))
 }
 
 # ---------------------------------------------------------------------------
@@ -4190,6 +4572,10 @@ function Invoke-FixItUndoSteps {
                 $kd = [string]$st.Device; $vol = [int]$st.Volume; $mu = [bool]$st.Muted
                 if (-not (Invoke-FixItStep ('Put the {0} volume back to {1}' -f $kd, $vol) { Set-FixItAudioDevice -Kind $kd -Volume $vol -Muted $mu })) { $ok = $false }
             }
+            'resolution' {
+                $rw = [int]$st.Width; $rh = [int]$st.Height
+                if (-not (Invoke-FixItStep ('Put the screen size back to {0} x {1}' -f $rw, $rh) { Set-FixItResolution -Width $rw -Height $rh })) { $ok = $false }
+            }
             'defaultprinter' {
                 $pn = [string]$st.Name
                 if (-not (Invoke-FixItStep ('Make {0} the default printer again' -f $pn) { Set-FixItDefaultPrinter -Name $pn })) { $ok = $false }
@@ -4354,6 +4740,17 @@ function Get-FixItActionTable {
             Heads = @(
                 'Sound cuts out for a second or two while that part of Windows restarts.',
                 'A volume that is not muted and not almost silent is left exactly as it is.')
+            Restart = ''; SignIn = '' } }
+        Display = @{ Fn = 'Invoke-DisplayFix'; Title = 'Fix my display'; Fix = $true; Plan = @{
+            Time = 'Under a minute'
+            Does = @(
+                'I look at your graphics card, its software and how many screens are connected.',
+                'I count how often the graphics software crashed or the screen lost its connection in the last 7 days, and tell you which one it looks like.',
+                'If your screen is not set to its best size, I ask before putting it back to the best size.',
+                'I restart the graphics software, the same as pressing the Windows key, Ctrl, Shift and B together.')
+            Heads = @(
+                'The screen may go black or flicker for a second or two while the graphics software restarts.',
+                'Your programs stay open and nothing is deleted.')
             Restart = ''; SignIn = '' } }
         Browser = @{ Fn = 'Invoke-BrowserFix'; Title = 'Clean up my browser'; Fix = $true; Plan = @{
             Time = 'A few minutes'
@@ -4855,9 +5252,9 @@ function Get-FixItHwReliability {
     if ($got -eq 0 -and $null -ne $denied) { throw $denied }
 }
 function Get-FixItHwEventCount {
-    param([string]$Provider, [int[]]$Ids = @(), [int]$Days = 7, [int[]]$Levels = @(), [string]$MessageLike = '')
+    param([string]$Provider, [int[]]$Ids = @(), [int]$Days = 7, [int[]]$Levels = @(), [string]$MessageLike = '', [string]$LogName = 'System')
     if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Get-FixItHwEventCount' -Arguments $PSBoundParameters -TimeoutSeconds $script:HwSeconds) }
-    $f = @{ LogName = 'System'; ProviderName = $Provider; StartTime = (Get-Date).AddDays(-$Days) }
+    $f = @{ LogName = $LogName; ProviderName = $Provider; StartTime = (Get-Date).AddDays(-$Days) }
     if ($Ids.Count -gt 0) { $f['Id'] = $Ids }
     if ($Levels.Count -gt 0) { $f['Level'] = $Levels }
     try { $ev = @(Get-WinEvent -FilterHashtable $f -MaxEvents 200 -ErrorAction Stop) } catch { if (Test-FixItNoEvents -Err $_) { return 0 }; throw }
@@ -6111,6 +6508,7 @@ function Invoke-GuardianRun {
         $script:GLastDay = (Get-Date).ToString('yyyy-MM-dd')
         $script:GLastVersionCheck = Get-Date
         $script:GRelaunch = $false
+        $script:GExiting = $false
         $script:GStop = New-FixItGuardianStopEvent
         try { $hk = New-FixItGuardianHotkey } catch { Write-FixItLog ('Hotkey setup failed: {0}' -f $_.Exception.Message) 'WARN' }
         try { $tray = New-FixItGuardianTray } catch { Write-FixItLog ('Tray icon setup failed: {0}' -f $_.Exception.Message) 'WARN' }
@@ -6565,12 +6963,13 @@ function Start-FixItGuardianLoop {
 
 # ----- the tray icon (v2.3.7): owned by the watcher, nothing else ------------------------------------
 # A small icon in the notification area, so the family can see the watcher is on and has a way out.
-# Right-click: exactly two items (no Exit; turning the watcher off is done in the Family Fix-It window). Double-click opens Family Fix-It.
+# Right-click: three items (the last one, added in 2.3.13, turns the watcher off until the next sign-in). Double-click opens Family Fix-It.
 $script:GuardianStopEventName = 'Local\FamilyFixItGuardianStop'
 $script:GuardianTrayTip = 'Family Fix-It is watching for scary pop-ups'
 $script:GuardianTrayWindowSeconds = 120   # a window seen this recently counts as "the page in front" when the menu itself has taken over the front
 $script:GuardianShellNames = @('explorer', 'shellexperiencehost', 'searchhost', 'searchapp', 'startmenuexperiencehost', 'textinputhost')
 $script:GTray = $null
+$script:GExiting = $false
 $script:GStop = $null
 $script:GLastFg = $null
 $script:GLastFgAt = [datetime]::MinValue
@@ -6581,7 +6980,8 @@ function Get-FixItTrayPlan {
         ToolTip = $script:GuardianTrayTip
         Items = @(
             [pscustomobject]@{ Id = 'GetOut'; Text = 'Get me out of a scary page' },
-            [pscustomobject]@{ Id = 'Open'; Text = 'Open Family Fix-It' })
+            [pscustomobject]@{ Id = 'Open'; Text = 'Open Family Fix-It' },
+            [pscustomobject]@{ Id = 'Exit'; Text = 'Turn off the pop-up watcher' })
         DoubleClick = 'Open'
         Balloons = $false
     }
@@ -6614,7 +7014,7 @@ function Open-FixItMainWindow {
 }
 # What a click does. Every click is logged.
 function Invoke-GuardianTrayAction {
-    param([ValidateSet('GetOut', 'Open', 'DoubleClick')][string]$Id)
+    param([ValidateSet('GetOut', 'Open', 'Exit', 'DoubleClick')][string]$Id)
     $plan = Get-FixItTrayPlan
     $want = $Id; if ($want -eq 'DoubleClick') { $want = $plan.DoubleClick }
     $text = [string](@($plan.Items | Where-Object { $_.Id -eq $want })[0]).Text
@@ -6626,7 +7026,21 @@ function Invoke-GuardianTrayAction {
         Start-GuardianGetOutUi -Fg $fg -Reason 'tray'
         return
     }
+    if ($want -eq 'Exit') { Invoke-GuardianExit; return }
     Open-FixItMainWindow
+}
+
+# "Turn off the pop-up watcher" (2.3.13): hides and frees the tray icon, ends the watcher's loop (the single-instance lock Local\FamilyFixItGuardian is
+# released and "Guardian stopped" is logged by Invoke-GuardianRun as it unwinds). The startup entry and the Guardian setting are NOT touched, so the watcher
+# comes back at the next sign-in. Safe to call twice.
+function Invoke-GuardianExit {
+    if ($script:GExiting) { return }
+    $script:GExiting = $true
+    Write-FixItLog 'Guardian: turned off from the tray menu (the startup entry is unchanged, so it comes back at the next sign-in)'
+    $script:GRelaunch = $false
+    try { Close-FixItGuardianToast } catch { }
+    Remove-FixItGuardianTray
+    try { [System.Windows.Forms.Application]::ExitThread() } catch { Write-FixItLog ('Guardian: could not leave the loop: {0}' -f $_.Exception.Message) 'WARN' }
 }
 
 function Get-FixItTrayIcon {
@@ -6698,11 +7112,18 @@ function Wait-FixItGuardianGone {
     return (-not (Test-FixItGuardianRunning))
 }
 # Test mode and practice runs: what would be shown (nothing is created).
+# "a", "a and b", "a, b and c"
+function Join-FixItWords {
+    param($Items)
+    $i = @($Items)
+    if ($i.Count -le 1) { return ($i -join '') }
+    return ((($i[0..($i.Count - 2)]) -join ', ') + ' and ' + $i[-1])
+}
 function Get-FixItTrayPreviewText {
     $plan = Get-FixItTrayPlan
     $ico = 'the Family Fix-It icon'
     try { if (-not (Test-FixItIconFile -Path (Get-FixItIconPath))) { $ico = 'a standard Windows icon (the Family Fix-It icon file is missing)' } } catch { $ico = 'a standard Windows icon' }
-    return ('a small icon would be shown in the notification area, using {0}. Hover text: "{1}". Right-click menu: {2}. Double-click: {3}. No pop-up bubbles.' -f $ico, $plan.ToolTip, ((@($plan.Items | ForEach-Object { '"' + $_.Text + '"' })) -join ' and '), (@($plan.Items | Where-Object { $_.Id -eq $plan.DoubleClick })[0].Text))
+    return ('a small icon would be shown in the notification area, using {0}. Hover text: "{1}". Right-click menu: {2}. Double-click: {3}. No pop-up bubbles.' -f $ico, $plan.ToolTip, (Join-FixItWords -Items @($plan.Items | ForEach-Object { '"' + $_.Text + '"' })), (@($plan.Items | Where-Object { $_.Id -eq $plan.DoubleClick })[0].Text))
 }
 
 function Wait-FixItGuardianToastClosed {
@@ -7406,6 +7827,7 @@ function Get-FixItLayout {
     $tiles1 = @(@('Printer', 'Fix my printer', "Won't print or is stuck", 'printer'), @('Acrobat', 'Fix Acrobat in Outlook', 'Acrobat buttons are missing', 'pdf'), @('Outlook', 'Fix Outlook', "Freezes or won't open", 'mail'))
     $tiles2 = @(@('Network', 'Fix my internet', "Wi-Fi or websites won't work", 'wifi'), @('Slow', 'My computer is slow', 'Clean up and speed up', 'slow'), @('Sound', 'Fix sound/mic/camera', "Video calls aren't working", 'cam'))
     $tiles3 = @(@('Browser', 'Clean up my browser', 'Pop-ups or a new homepage', 'globe'), @('WinUpdate', 'Fix Windows Update', 'Updates are stuck', 'upd'), @('OneDrive', 'Fix OneDrive', 'Files have disappeared', 'cloud'))
+    $tiles4 = @(,@('Display', 'Fix my display', 'Flickers or goes black', 'display'))
     if ($Simple) {
         $groups = @(@{ Name = 'THE BASICS'; Y = 84; Bg = '#E6F0FA'; Tiles = @($tiles1[0], $tiles2[0], $tiles2[1]) })
         $toggles = @(
@@ -7419,7 +7841,8 @@ function Get-FixItLayout {
         $groups = @(
             @{ Name = 'PRINTING AND EMAIL'; Y = 84; Bg = '#E6F0FA'; Tiles = $tiles1 },
             @{ Name = 'INTERNET AND MY COMPUTER'; Y = 234; Bg = '#E3F4EA'; Tiles = $tiles2 },
-            @{ Name = 'BROWSER, UPDATES AND FILES'; Y = 384; Bg = '#EEE9F9'; Tiles = $tiles3 })
+            @{ Name = 'BROWSER, UPDATES AND FILES'; Y = 384; Bg = '#EEE9F9'; Tiles = $tiles3 },
+            @{ Name = 'MY SCREEN'; Y = 534; Bg = '#FBEFD9'; Tiles = $tiles4 })
         $nav = @(
             @('Restart', 'Restart the right way', '', 'restart', 44, 40),
             @('Status', 'Is it just me?', 'Check for outages', 'out', 88, 52),
@@ -7437,7 +7860,7 @@ function Get-FixItLayout {
             @('CheckIn', 'Weekly check-in', 'check', $CheckInOn, 672, 40))
         $pin = @('Pin', 'Pin me to the taskbar', '', 'pin', 728, 40)
         $donate = @('Donate', 'Thank Trey', 'Kids are expensive!', 'heart', 772, 52)   # last item on the left list, under Pin to taskbar
-        $lay = @{ Simple = $false; SideTitle = 'TOOLS'; Nav = $nav; SepY = 470; Pin = $pin; Donate = $donate; Footer = $footer; Toggles = $toggles; Groups = $groups; ScamY = 538; PrimaryY = 626; StatusY = 712; LinksY = 746; FullH = 830 }
+        $lay = @{ Simple = $false; SideTitle = 'TOOLS'; Nav = $nav; SepY = 470; Pin = $pin; Donate = $donate; Footer = $footer; Toggles = $toggles; Groups = $groups; ScamY = 688; PrimaryY = 776; StatusY = 862; LinksY = 896; FullH = 980 }
     }
     $ids = @()
     foreach ($g in $lay.Groups) { foreach ($t in $g.Tiles) { $ids += [string]$t[0] } }
@@ -7510,6 +7933,7 @@ function Show-FixItScamForm {
 
 function Get-FixItIconMap {
     $b64 = @{
+        'display' = 'iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAABmJLR0QA/wD/AP+gvaeTAAADT0lEQVR4nO2az08TQRzF37cthijKlhgS8SZ6Ev8AI5q1IXjBmyQmQIgHowdCoiGRUJpsUgrc9SAhXgSinjzgyR+lQb0ZvIiJCUQuYlSSbgUN2G2/HsDQ1tkS4+wOpPM57cy8Tt+8zmx3ZxfQaDQajUZTqdBOghqrtT7oOL0EbgNwHMAB7239FxkAHwA83B+qGVu2pn+WE5cNoDYaaSfiewAOSjToH4wlBrdnEqk3bhLXALYG/6icZo+wBsqds+Ozb0WNwsHVWK31ISe7gL36y//Noh3iJlip9dKGkEgddJxeFA9+g4j6OJiftK2U7ZVLGWz9eP0AbhRUNxpO4KoN3C7VCwMg8MWiMlFfOp68I9eqN6xZT78CuGlEzSoQ9Wy38GUIAgi49HOssMDB/KREj74QqqoaKak6KdK5BVBTWNjt017EivVsuaSqVqQTLgGfoHDM7ACAdDw1BYBVmHCbAZ5jRCOdzDTBTBNGNNKpyoeyAEBoFB77jLoAdgk6ANUGVKMDUG1ANRUfgFcXQhSOmR15xlF3CZ8pPK4dNG+5KQOET15dLHkSwOZFDt//h42EFgK1uDUyA0Y0QnYiOSHDXyF6CXjRqZ1IToZjJoMDTW4aBjcD+LMMXhPolWuHlH+XHpqZkmwTgHfnAE7HU2VvoY3BiLV9HqDn6aGk5ZGXslT8EtABqDagGh2AagOq0QEo+2bGovDYZ5QFYCeSk0TcRcRddiKpbNtd5a7wjhdLfuA2AzKFhcMDZ4/44EUqh6wLdSVVqyKdMAAGvy8sOxQckOTLNwLOr+7iGloQ6VyeDQYeAHx6u4J6jJjpZHPB0R/DL75I9Cmd2v7mMAX3dQM8WtRAPC3Si2/ZLbPayNI8qPgZ4R4m4+ScE2sjL7+VNojPAVZqnZnaAax57cwH8mC6Iho8UOZvMDOcnGOCCeCjV858IAOmS3Yi+dhNECz36Y3Zpc91kVPj2Vx2hQhhbD41rpbtUjKrAOZBGM+FuPN7fGaunFjZ+z/G4PmiDU57aEaJF30voNqAanQAqg2opuIDkH7mDQ+abQwaA9AguetlAl9LD6WeyOxU+gxg0F3IHzwANGz1LZWKXwLSAyDwdQCl7+jJYHmrb41Go9FoNBop/AZKzfTmR+wrPgAAAABJRU5ErkJggg=='
         'heart' = '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'
         'heartW' = 'iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAElklEQVR4nO2aTWsdVRjH/89N3HSjTcFFdaOQjUZBqaKbglLMxmV3btyUbv0CAb+By4YK0g+QL1AEFReKjStBEQqBghRaTUoWFtrk3p+L8zydk3vnTu7LTGZuvT8YJjM59zn/55zznNeRlixZsuR/jM1rADBJvRJ7+H1gZmgGmrQ9N0APWJkw7QrQOz1l87aHmboFRK2YWd+fz0l6U9Krkt5Wqh2T9JukvyT9bmaPQ6wqaq1J27WQ1wqwAXwN3KOae55uo8zOWdiu1XngIvAN8CQTMgCOgaPsOvb3wRP/3cUShxuzXbfzm8D9LOOjISFlDDxdcB/YDLtN2q7L+VW/X5tS3Glir2V5NGIb1z6P81E7V93wMdCfUtwwfbcD8IlfTdi+mvswjrGjAGloQdLrknYlvej/mnnIyRh43o/8+bznVZdtSTqU9J6kPUlmZoOyxJUZ+pByo2aBka9JWvMrn/DUYRslzTdOGxZLWwCwYmZ94CNJ30nqS2pieAlxc89ISwjNH5vZ9+HTcKJxpY6HwFYDwnJMzTifs5WFc6mAEwA9MxsA65L+UCrFpkU2BUot4Q0zuxu+5QnKWkC8uyxpVUWnsogMlHy47M8j/lZ1POt+b2e1VQ+hfX1cgrICiBp/x++L2vylQnv4MtKaq1rAC7XLaY+xvlQVwHzTyG4x1peyAohms+f356EPCF9GwrmqAP5sQlFLhC8TFUCU2q8VaRaF0B6+jLTmqlFgV9IDpVJbxDCI7bMHSr5Ik4wCZobPmw8lbbuRkTn0AtBX0r5tZofu00hFjlsMxfs1SXeVlsJnMW+vC/w6VJoEHUjPVrcnKI1vT9gzs32lBVFP0nFTahvgWEnzlvvQm2m3mGJHaMd3WfLNyq4SGndyH8ZR2aRJoWBKIXBbaYflWN2dJIW2XUmbSiFAVe1PsiMkM3vkBm97Bl0Mh76SttuSNl1zadxPDdnRE3DTm9hRWftridBys0xzLZCd15FOY/KM2yQ0PIt5pnB+qmGNok9A0k+SPlBz+4WTEHnnMa9xO8BlzHI4GqX7kqQfJL2ldgphoNSH/S1pw8weUrLldRpTx4lnYGZ2IOkzSftKBXmWW2cxzX0s6VN3fmVa5+dTUByZXfEY7DP9kdYsDICn/vfnuZYzh9Fzw7PoFMP5Lz3vdneuskL4akhgE5wY7mir5nMAi1oAbg0JrZM49PzZ8zSKRVu7uJgecA64MyS4DuLUeA9Y87y6tVETgoDzLjQXPq/zfeAf4JLn0da8oxqKmeIlFxziZyX/8OGK224/7qtgdHic5YuPIMLoem6782SFcD0rhGmJ32y7rW42+3FQhMP2DIUQab91G6t0pcefFNLIEC1hZ8ixKqLZ7wIX6GKPPykhnjQyTDI8Rqe5D7wWNtr2Yy4ohseXgYeZo8MMsutD/81ixf04KPqD94EDyhdOER71fOPXNSj6g/jm8GlWCN1a4DQFxZrhi6zWo+ZvRRoWrcefhqwlxOYqwC+kdUR3FjhN4U5Gx/gj8C9wwZ8Xu8efFNLQaMArwLvxrm1drfHcN/tx5OGwZMmSJUta4D+VsGRVytVA2gAAAABJRU5ErkJggg=='
         'pcinfo' = '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'
@@ -7731,6 +8155,7 @@ function Get-FixItHelpTable {
         Outlook = @{ Title = 'Fix Outlook'; Text = ("Use this when Outlook freezes or will not open. I close it and open it again, then ask before each next step. Your email accounts, passwords and sign-ins are never changed.") }
         Network = @{ Title = 'Fix my internet'; Text = ("I test your router and your internet, and I change nothing if they work. If not, I reset your connection settings and may ask you to unplug the router and plug it back in. Your internet drops briefly, and your files are never touched.") }
         Slow = @{ Title = 'My computer is slow'; Text = ("I close a frozen program if you say yes. I empty your temporary files and the Recycle Bin, and I ask before clearing saved website files, which can sign you out of websites. Your Documents, Desktop, Pictures and Downloads are never touched.") }
+        Display = @{ Title = 'Fix my display'; Text = ("Use this when the screen flickers or goes black. I check your graphics card, tell you if the driver keeps crashing or the cable keeps losing its signal, and restart the driver. I ask before changing the screen size, and nothing is deleted.") }
         Sound = @{ Title = 'Fix sound, mic and camera'; Text = ("I check your speakers, microphone and camera. I turn on a muted speaker or microphone, and I ask before letting apps use a blocked microphone or camera. Then I open the page where you pick your devices, and I change nothing else.") }
         Browser = @{ Title = 'Clean up my browser'; Text = ("I first save a copy of your browser settings and bookmarks. I look for odd settings and extensions, and I ask before opening any page where you can fix them. I never change your browser myself, and your passwords and bookmarks are not touched.") }
         WinUpdate = @{ Title = 'Fix Windows Update'; Text = ("I pause Windows Update, set old files aside (nothing is deleted) and start it again. If it is still stuck, I offer a longer repair (20 to 40 minutes) after asking you. I restart only if you say yes, and your files are not touched.") }
@@ -9970,6 +10395,7 @@ function Start-FamilyFixIt {
             'Network'           { [void](Invoke-FixItAndShow -Which 'Network') }
             'Slow'              { [void](Invoke-FixItAndShow -Which 'Slow') }
             'Sound'             { [void](Invoke-FixItAndShow -Which 'Sound') }
+            'Display'           { [void](Invoke-FixItAndShow -Which 'Display') }
             'Browser'           { [void](Invoke-FixItAndShow -Which 'Browser') }
             'WinUpdate'         { [void](Invoke-FixItAndShow -Which 'WinUpdate') }
             'OneDrive'          { [void](Invoke-FixItAndShow -Which 'OneDrive') }

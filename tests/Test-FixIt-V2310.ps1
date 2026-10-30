@@ -260,7 +260,7 @@ Assert ((Get-Fn 'Restart-FixItGuardian') -match 'Invoke-FixItStep' -and (Get-Fn 
 Assert ((Get-Fn 'Start-FixItGuardianProcess') -match '\[string\]\$Path' -and (Get-Fn 'Start-FixItGuardianProcess') -match '-WindowStyle.*Hidden' -and (Get-Fn 'Start-FixItGuardianProcess') -match '-Action.*Guardian' -and (Get-Fn 'Start-FixItGuardianProcess') -match 'TestMode') 'the watcher is started hidden from the path it is given (the installed file), and Test mode only probes'
 Assert ((Get-Fn 'Enter-FixItGuardianMutex') -match 'Mutex' -and $srcText -match "GuardianMutexName = 'Local\\FamilyFixItGuardian'") 'the single-instance lock is still the same named lock'
 Assert ((Get-Fn 'Stop-FixItGuardianProcess') -match 'Test-FixItOwnSession') 'stopping looks at this user only'
-Assert ((Get-Fn 'Install-FixItUpdate') -match 'Restart-FixItGuardian' -and (Get-Fn 'Install-FixItUpdate').IndexOf('Restart-FixItGuardian') -gt (Get-Fn 'Install-FixItUpdate').IndexOf('Copy-Item -LiteralPath (Join-Path $stage') -and (Get-Fn 'Install-FixItUpdate') -match "Get-FixItSetting -Name 'Guardian'") 'the update restarts the watcher after the files are in place and respects an off switch'
+Assert ((Get-Fn 'Install-FixItUpdate') -match 'Restart-FixItGuardian' -and (Get-Fn 'Install-FixItUpdate').IndexOf('Restart-FixItGuardian') -gt (Get-Fn 'Install-FixItUpdate').IndexOf('Install-FixItFileSafely') -and (Get-Fn 'Install-FixItUpdate') -match "Get-FixItSetting -Name 'Guardian'") 'the update restarts the watcher after the files are in place and respects an off switch'
 Assert ((Get-Fn 'Initialize-FixItGuardianDefault') -match 'Update-FixItGuardianIfOld' -and (Get-Fn 'Invoke-GuardianToggle') -match 'Update-FixItGuardianIfOld') 'the window start and GuardianOn both replace an old watcher'
 $inst = [IO.File]::ReadAllText((Join-Path $root 'Install-FixIt.ps1'))
 Assert ($inst -match "'GuardianOff'" -and $inst -match "'GuardianOn'" -and $inst.IndexOf("'GuardianOff'") -lt $inst.IndexOf("'GuardianOn'")) 'the installer still turns the watcher off then on when the program file changed'
@@ -289,7 +289,7 @@ Assert ($lay.Rows[0].Height -ge $lay.Rows[0].MeasuredHeight + 12) 'the guide ste
 
 Section 'The ? help window: measured, sized to fit, scrolls only past the cap'
 $table = Get-FixItHelpTable
-Assert ($table.Count -eq 12) 'there are 12 descriptions'
+Assert ($table.Count -eq 13) 'there are 13 descriptions (2.3.13 added Fix my display)'
 $bad = 0; $checked = 0
 foreach ($scale in @(1.0, 1.25, 1.5, 1.75, 2.0, 2.5)) {
     foreach ($shrink in @(0.0, 0.04)) {   # 0.04: windows that wrap about 4 percent earlier than the measure says
@@ -307,7 +307,7 @@ foreach ($scale in @(1.0, 1.25, 1.5, 1.75, 2.0, 2.5)) {
         }
     }
 }
-Assert ($bad -eq 0 -and $checked -eq 12 * 6 * 2) "the height given to the body covers every description at every screen scale, even if the real wrap is 4 percent tighter ($checked cases)"
+Assert ($bad -eq 0 -and $checked -eq 13 * 6 * 2) "the height given to the body covers every description at every screen scale, even if the real wrap is 4 percent tighter ($checked cases)"
 # the exact case from the screenshot (Fix my printer, old long text): 8 lines drawn, 7 allowed. The old text is gone, but the rule must hold for it.
 $oldPrinter = "I look at the printers on this computer and ask if you know which one you want. You pick it from a list, or I test them and choose one that is ready, and I make it your main printer. I restart the part of Windows that handles printing, clear out stuck print jobs (anything waiting has to be printed again) and reconnect shared printers. Nothing starts until you agree on the 'Here is what I will do' window, Windows asks your permission with a shield box, and your documents and files are never touched."
 $script:CharW = 8.1; $script:LineH = 24; $script:Shrink = 0.0

@@ -146,7 +146,7 @@ foreach ($c in Get-Layouts) {
     Assert ($keys.Count -ge 6 -and ($keys -contains 'Scam') -and ($keys -contains 'Screen') -and ($keys -contains 'Report')) "$($c.Name): the main buttons include the scam button and the two bottom buttons"
     foreach ($k in $keys) { $keysSeen[$k] = $true; $h = Get-FixItHelpText -Key $k; Assert ($null -ne $h -and $h.Title -and $h.Text) "$($c.Name): $k has a description" }
 }
-Assert ($keysSeen.Count -eq 12) ('all 12 main buttons were found (' + $keysSeen.Count + ')')
+Assert ($keysSeen.Count -eq 13) ('all 13 main buttons were found (' + $keysSeen.Count + ')')
 foreach ($k in @($keysSeen.Keys)) {
     $h = Get-FixItHelpText -Key $k
     $sent = @([regex]::Split($h.Text.Trim(), '(?<=[.!?])\s+') | Where-Object { $_ })
