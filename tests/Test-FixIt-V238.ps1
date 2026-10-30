@@ -98,7 +98,7 @@ foreach ($c in $calls) {
         if ($subKnown -and [string]$sub.Value -eq '' -and -not $isWide -and $iconKnown -and [string]$icon.Value -ne '') { [void]$bad.Add($label) }   # an icon tile with no subtitle (the icon may fail to load)
     }
 }
-Assert ($moved.Count -eq 3) ('exactly three tiles change how they are drawn (Skip, I don''t know, and the Share window''s Close, added in 2.3.9): ' + ($moved -join '; '))
+Assert ($moved.Count -eq 4) ('exactly four tiles change how they are drawn (Skip, I don''t know, the Share window''s Close added in 2.3.9, and the helper window''s Skip/Cancel): ' + ($moved -join '; '))
 Assert (@($moved | Where-Object { $_ -match 'outline "Close"' }).Count -eq 1) 'the third is Close in the Share window (2.3.9), a text-only outline tile that is centered from the start'
 Assert (@($moved | Where-Object { $_ -match 'outline "Skip"' }).Count -eq 1) 'one of them is Skip in the name window'
 Assert (@($moved | Where-Object { $_ -match "outline `"I don't know`"" }).Count -eq 1) 'another is "I don''t know" in the Chrome question'

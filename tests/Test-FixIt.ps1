@@ -696,7 +696,7 @@ Assert ($r.Message -match [regex]::Escape('Trey will give you a code. Type it in
 Assert ($r.Message -match 'Only do this if YOU called Trey') 'keeps the scam warning'
 Assert ($r.Message -match 'Nothing is installed in advance') 'says nothing is preinstalled'
 $ssFn = @([Management.Automation.Language.Parser]::ParseInput($src, [ref]$null, [ref]$null).FindAll({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Invoke-ScreenShare' }, $true))[0]
-Assert ($script:ScreenShareUrl -eq 'https://join.zoho.com/' -and $ssFn.Extent.Text -notmatch '(?i)quick ?assist|msra') 'Zoho, not Quick Assist'
+Assert ($script:ScreenShareUrl -eq 'https://join.zoho.com/' -and ($ssFn.Extent.Text -replace '(?m)^.*Test-FixItHelperIsTrey.*$', '') -notmatch '(?i)quick ?assist|msra') 'Zoho, not Quick Assist (the one line that hands another helper to Quick Assist is left out)'
 Reset-All; $script:DryRun = $true
 $r = Invoke-ScreenShare
 Assert ((CallsLike 'url*') -eq 0 -and $r.Title -eq 'Practice run') 'dry-run: page not opened'
@@ -3005,6 +3005,14 @@ foreach ($ln in $v2313l) { if ($ln -match 'FAIL:|^==') { Write-Host $ln } }
 $sumLine = @($v2313l | Where-Object { $_ -match '^Passed: \d+\s+Failed: \d+' }) | Select-Object -Last 1
 if ($sumLine -match 'Passed: (\d+)\s+Failed: (\d+)') { $script:Pass += [int]$Matches[1]; $script:Fail += [int]$Matches[2] }
 else { $script:Fail++; Write-Host '  FAIL: the 2.3.13 layout test file did not finish'; $v2313l | Select-Object -Last 15 | ForEach-Object { Write-Host ('    ' + $_) } }
+
+# ---- "Who helps you?" tests (the helper setting, the report with the helper in it, Quick Assist for other helpers)
+Section 'Who helps you? tests (own process)'
+$v2314 = & $pwshExe -NoProfile -File (Join-Path $PSScriptRoot 'Test-FixIt-V2314.ps1') 2>&1 | ForEach-Object { [string]$_ }
+foreach ($ln in $v2314) { if ($ln -match 'FAIL:|^==') { Write-Host $ln } }
+$sumLine = @($v2314 | Where-Object { $_ -match '^Passed: \d+\s+Failed: \d+' }) | Select-Object -Last 1
+if ($sumLine -match 'Passed: (\d+)\s+Failed: (\d+)') { $script:Pass += [int]$Matches[1]; $script:Fail += [int]$Matches[2] }
+else { $script:Fail++; Write-Host '  FAIL: the Who helps you? test file did not finish'; $v2314 | Select-Object -Last 15 | ForEach-Object { Write-Host ('    ' + $_) } }
 
 Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host ''

@@ -13,7 +13,7 @@ Command-line use (for Trey):
   Guardian (runs at sign-in, hidden) watches for a full-screen browser page and offers a way out; GuardianOn/GuardianOff/GuardianDemo.
 #>
 param(
-    [ValidateSet('Gui', 'TestAll', 'Printer', 'Acrobat', 'AcrobatRepair', 'Outlook', 'Network', 'Slow', 'Sound', 'Display', 'Browser', 'WinUpdate', 'OneDrive', 'Scam', 'Screen', 'Report', 'Pin', 'Update', 'Restart', 'Status', 'Undo', 'CheckIn', 'CheckInOn', 'CheckInOff', 'HealthCheck', 'History', 'Files', 'Install', 'Guardian', 'GuardianOn', 'GuardianOff', 'GuardianDemo', 'PCInfo', 'Guides', 'Simple', 'Donate', 'Privacy', 'YourName', 'Share', 'FirstRunPending',
+    [ValidateSet('Gui', 'TestAll', 'Printer', 'Acrobat', 'AcrobatRepair', 'Outlook', 'Network', 'Slow', 'Sound', 'Display', 'Browser', 'WinUpdate', 'OneDrive', 'Scam', 'Screen', 'Report', 'Pin', 'Update', 'Restart', 'Status', 'Undo', 'CheckIn', 'CheckInOn', 'CheckInOff', 'HealthCheck', 'History', 'Files', 'Install', 'Guardian', 'GuardianOn', 'GuardianOff', 'GuardianDemo', 'PCInfo', 'Guides', 'Simple', 'Donate', 'Privacy', 'YourName', 'YourHelper', 'Share', 'FirstRunPending',
         'PrinterAdmin', 'AcrobatAdmin', 'AcrobatRepairAdmin', 'NetworkAdmin', 'SlowAdmin', 'SoundAdmin', 'OutlookAdmin', 'DefenderScanAdmin', 'WinUpdateAdmin', 'WinUpdateDeepAdmin', 'UndoAdmin')]
     [string]$Action = 'Gui',
     [Alias('DryRun')][switch]$WhatIf,
@@ -106,6 +106,10 @@ function Write-FixItLog {
 
 function New-FixItResult {
     param([bool]$Ok, [string]$Title, [string]$Message, [string[]]$Details = @(), [hashtable]$Extra = @{})
+    # every sentence the program shows names the person's helper (Trey unless they chose someone else); the Extra values are left alone
+    $Title = ConvertTo-FixItHelperText $Title
+    $Message = ConvertTo-FixItHelperText $Message
+    $Details = @(@($Details) | ForEach-Object { ConvertTo-FixItHelperText ([string]$_) })
     $r = [ordered]@{ Ok = $Ok; Title = $Title; Message = $Message; Details = @($Details) }
     foreach ($k in $Extra.Keys) { $r[$k] = $Extra[$k] }
     return [pscustomobject]$r
@@ -523,6 +527,12 @@ function Get-FixItPreflight {
             if (Test-FixItUriHandler -Scheme 'https') { & $pass 'Windows has a web browser for https pages' } else { & $fail 'Windows has no web browser set for https pages' }
             break
         }
+        'Start-FixItQuickAssist' {
+            if (Test-FixItCommandPresent -Name 'quickassist.exe') { & $pass 'Windows Quick Assist was found' }
+            elseif (Test-FixItUriHandler -Scheme 'ms-quick-assist') { & $pass 'Windows knows how to open Quick Assist' }
+            else { & $warn 'Quick Assist is not on this PC yet, so its Microsoft Store page would open' }
+            break
+        }
         'Open-FixItBrowserPage' {
             $e = [string]$A['Exe']
             $full = Resolve-FixItBrowserExe -Exe $e
@@ -683,7 +693,7 @@ function Complete-FixItTestRecords {
 }
 
 # The buttons that "Test all buttons" runs (every fix, the report, the restart, the undo, the toggles and the update check).
-$script:TestAllKeys = @('Printer', 'Acrobat', 'AcrobatRepair', 'Outlook', 'Network', 'Slow', 'Sound', 'Display', 'Browser', 'WinUpdate', 'OneDrive', 'Scam', 'Screen', 'Report', 'Update', 'Restart', 'Undo', 'CheckIn', 'Guardian', 'HealthCheck', 'PCInfo', 'Donate', 'Privacy', 'YourName', 'Share')
+$script:TestAllKeys = @('Printer', 'Acrobat', 'AcrobatRepair', 'Outlook', 'Network', 'Slow', 'Sound', 'Display', 'Browser', 'WinUpdate', 'OneDrive', 'Scam', 'Screen', 'Report', 'Update', 'Restart', 'Undo', 'CheckIn', 'Guardian', 'HealthCheck', 'PCInfo', 'Donate', 'Privacy', 'YourName', 'YourHelper', 'Share')
 
 function Get-FixItTestResultsPath {
     param([switch]$Create)
@@ -2022,7 +2032,8 @@ function Send-WebReport {
     try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
     $bytes = (New-Object Text.UTF8Encoding($false)).GetBytes($Json)
     $r = Invoke-WebRequest -Uri $Url -Method Post -Body $bytes -ContentType 'application/json; charset=utf-8' -Headers @{ 'X-FixIt-App' = $AppValue } -UseBasicParsing -TimeoutSec 20
-    return [int]$r.StatusCode
+    # the answer (a small JSON text) says who the report went to; a plain number is still understood by the callers
+    return [pscustomobject]@{ Code = [int]$r.StatusCode; Body = [string]$r.Content }
 }
 
 # ---------------------------------------------------------------------------
@@ -2147,6 +2158,7 @@ function Test-FixItCanAsk {
 # Questions for the person. The window and the command line each supply their own.
 function Confirm-FixIt {
     param([string]$Question, [string]$Title = 'Family Fix-It', [string]$Kind = '', [string]$Detail = '')
+    $Question = ConvertTo-FixItHelperText $Question; $Detail = ConvertTo-FixItHelperText $Detail; $Title = ConvertTo-FixItHelperText $Title
     if ($script:TestAll) { Write-FixItLog ('Test all: answered yes to: {0}' -f $Question) 'TEST'; return $true }
     if ($script:GuiActive) {
         if ($Kind -eq 'Fixed') { return (Show-FixItFixedDialog -Title $Question -Detail $Detail) }
@@ -2758,7 +2770,8 @@ function Get-FixItReportText {
     $o.Add('Made: ' + (Get-Date -Format 'yyyy-MM-dd HH:mm') + '   Tool version: ' + $script:FixItVersion)
     foreach ($l in (Invoke-ReportItem 'PC code' { Get-FixItPcCodeLine })) { $o.Add([string]$l) }
     $o.Add((Get-FixItNameLine))
-    $o.Add('This report is saved ' + $script:ReportsWhere + ' and sent to Trey by the tool.')
+    if (Test-FixItHelperIsTrey) { $o.Add('This report is saved ' + $script:ReportsWhere + ' and sent to Trey by the tool.') }
+    else { $o.Add(('This report is saved {0} and sent to {1} by the tool (to Trey until {1} has said yes).' -f $script:ReportsWhere, (Get-FixItHelperName))) }
     $o.Add('(It includes your name if you gave it, the computer name, the Windows user name and the printer names.)')
     if ($Note) { $o.Add(''); $o.Add('NOTE: ' + $Note) }
 
@@ -2930,8 +2943,16 @@ function Get-FixItReportJson {
     $limit = 500 * 1024 - 2048
     $enc = New-Object Text.UTF8Encoding($false)
     $t = $Text
+    $body = [ordered]@{ pcName = $pc; version = $script:FixItVersion; kind = $Kind; report = $t }
+    $hp = Get-FixItHelper
+    if (-not $hp.IsTrey) {
+        # a helper other than Trey: the service mails the report to the helper only after the helper has said yes (otherwise to Trey)
+        $body['owner'] = (Get-FixItOwnerName)
+        $body['helper'] = [ordered]@{ name = $hp.Name; email = $hp.Email; pcId = $hp.PcId }
+    }
     while ($true) {
-        $json = ConvertTo-Json -InputObject ([ordered]@{ pcName = $pc; version = $script:FixItVersion; kind = $Kind; report = $t }) -Compress
+        $body['report'] = $t
+        $json = ConvertTo-Json -InputObject $body -Compress
         if ($enc.GetByteCount($json) -lt $limit) { return $json }
         $t = $t.Substring(0, [int]($t.Length * 0.8)) + "`r`n(The rest of this report was cut off because it was too long.)"
     }
@@ -2944,14 +2965,18 @@ function Send-FixItReport {
     if ($script:TestMode) {
         $json = ''
         try { $json = Get-FixItReportJson -Text $Text -Kind $Kind } catch { Add-FixItTestNote -Step 'Send the report to Trey' -Status 'FAIL' -Text ('the report could not be put together: ' + $_.Exception.Message); return $true }
-        return [bool](Invoke-FixItStep ('Send the {0} to Trey' -f $Kind) { [void](Send-WebReport -Url $url -Json $json -AppValue $script:AppHeader) })
+        $what = ConvertTo-FixItHelperText ('Send the {0} to Trey' -f $Kind)
+        if ($Kind -eq 'hello') { $what = ('Ask {0} by email to be your helper' -f (Get-FixItHelperName)) }
+        return [bool](Invoke-FixItStep $what { [void](Send-WebReport -Url $url -Json $json -AppValue $script:AppHeader) })
     }
     if ($script:DryRun) { Write-FixItLog ('Would do: send the report to {0}' -f $url) 'DRYRUN'; return $true }
     try {
         $json = Get-FixItReportJson -Text $Text -Kind $Kind
-        Write-FixItLog ('Sending the report to Trey ({0} bytes)' -f (New-Object Text.UTF8Encoding($false)).GetByteCount($json))
-        $code = Send-WebReport -Url $url -Json $json -AppValue $script:AppHeader
-        if ($code -ge 200 -and $code -lt 300) { Write-FixItLog ('Report sent (answer {0})' -f $code); return $true }
+        Write-FixItLog ('Sending the report to the report service ({0} bytes)' -f (New-Object Text.UTF8Encoding($false)).GetByteCount($json))
+        $script:LastDelivery = $null
+        $ans = ConvertTo-FixItWebAnswer (Send-WebReport -Url $url -Json $json -AppValue $script:AppHeader)
+        $code = $ans.Code
+        if ($code -ge 200 -and $code -lt 300) { Update-FixItDelivery -Body $ans.Body; Write-FixItLog ('Report sent (answer {0})' -f $code); return $true }
         Write-FixItLog ('The report was not accepted (answer {0})' -f $code) 'ERROR'
         return $false
     } catch {
@@ -2964,6 +2989,7 @@ function Save-FixItReportFile {
     param([string]$Text, [string]$Prefix)
     $dir = $OutputDir
     if (-not $dir) { $dir = Get-FixItSaveFolder -Create:(-not ($script:DryRun -or $script:TestMode)) }
+    $Prefix = [regex]::Replace((ConvertTo-FixItHelperText $Prefix), '[^\p{L}\p{N}_-]', '')
     $name = '{0}-{1}-{2}.txt' -f $Prefix, $env:COMPUTERNAME, (Get-Date -Format 'yyyyMMdd-HHmm')
     $path = Join-Path $dir $name
     $ok = Invoke-FixItStep ('Save report to {0}' -f $path) { Write-FixItTextFile -Path $path -Text $Text }
@@ -2984,7 +3010,10 @@ function Invoke-FixItReport {
     }
     if ($sent) {
         Write-FixItLog 'Finished: report for Trey (sent)'
-        return New-FixItResult $true 'Report sent' 'Report sent to Trey' $(if ($f.Ok) { @('A copy is saved ' + (Get-FixItSavedWhere -Path $f.Path) + '.') } else { @() }) @{ ReportPath = $f.Path; Sent = $true }
+        $det = @(); if ($f.Ok) { $det = @('A copy is saved ' + (Get-FixItSavedWhere -Path $f.Path) + '.') }
+        $note = Get-FixItDeliveryNote -Noun 'report'
+        if ($note) { $det = @($note) + $det }
+        return New-FixItResult $true 'Report sent' ('Report sent to ' + (Get-FixItRecipient)) $det @{ ReportPath = $f.Path; Sent = $true }
     }
     if (-not $f.Ok) {
         Write-FixItLog 'Finished: report for Trey (could not save or send)' 'ERROR'
@@ -3012,7 +3041,10 @@ function Invoke-ScamAlert {
         "2. Do not click anything else, and do not type any passwords.`r`n" +
         "3. Call Trey.`r`n`r`n" +
         'Trey never asks you for codes or to install remote-control programs unless YOU contacted him first.'
-    $sentLine = 'A report about this computer was sent to Trey.'
+    if (-not (Test-FixItHelperIsTrey)) { $msg = $msg.Replace('Trey never asks you for codes or to install remote-control programs unless YOU contacted him first.', 'Never let anyone see your screen or install a remote-control program unless YOU called Trey first.') }
+    $sentLine = 'A report about this computer was sent to ' + (Get-FixItRecipient) + '.'
+    $dnote = Get-FixItDeliveryNote -Noun 'report'
+    if ($dnote) { $sentLine = $sentLine + ' ' + $dnote }
     if ($script:DryRun) { $sentLine = 'Practice run: a report would be saved and sent to Trey.' }
     elseif (-not $sent) { $sentLine = ("The report could not be sent, so tell Trey on the phone. A copy is saved " + (Get-FixItSavedWhere -Path $f.Path) + '.') }
     Write-FixItLog ('Finished: scam alert (report sent: {0})' -f $sent) 'WARN'
@@ -3394,6 +3426,12 @@ function Invoke-NetworkFix {
         $sent = [bool](Send-FixItReport -Text $text -Kind 'report')
     } catch { Write-FixItLog ('The internet report could not be made: {0}' -f $_.Exception.Message) 'ERROR' }
     $sentLine = 'I have sent Trey a report with everything I found, so he can see what happened.'
+    if ($sent -and -not (Test-FixItHelperIsTrey)) {
+        $rcp = Get-FixItRecipient
+        $sentLine = "I have sent $rcp a report with everything I found, so $rcp can see what happened."
+        $dnote = Get-FixItDeliveryNote -Noun 'report'
+        if ($dnote) { $sentLine = $sentLine + ' ' + $dnote }
+    }
     if (-not $sent) { $sentLine = ("I tried to send Trey a report, but that needs the internet, and the internet is not working. A copy of the report is saved " + (Get-FixItSavedWhere -Path $(if ($rf) { $rf.Path } else { '' })) + " - please tell Trey when you call.") }
     $msg = "Your internet is still not working, even after restarting the router.`r`n`r`nPlease call Trey.`r`n`r`n" + $sentLine
     foreach ($h in $restartHint) { $msg += "`r`n`r`n" + $h }
@@ -3877,6 +3915,7 @@ function Invoke-DisplayFix {
 # ---------------------------------------------------------------------------
 function Invoke-ScreenShare {
     Write-FixItLog 'Started: Let Trey see my screen'
+    if (-not (Test-FixItHelperIsTrey)) { Write-FixItLog 'The helper is not Trey, so Windows Quick Assist is used'; return (Invoke-FixItQuickAssistShare) }
     $url = $script:ScreenShareUrl
     if (-not (Invoke-FixItStep ('Open the Zoho Assist join page {0}' -f $url) { Open-FixItUrl -Url $url })) {
         return New-FixItResult $false 'Could not open the page' ("Sorry, the page could not be opened. Please open your web browser and type: join.zoho.com") @()
@@ -4658,7 +4697,7 @@ function Mark-FixItUndone {
 # Plan.Does = what happens, in order. Plan.Heads = other things worth knowing. Plan.Restart / Plan.SignIn stay empty when
 # nothing is needed, otherwise they say when a restart or signing in again may be needed. The window and the tests both read this.
 function Get-FixItActionTable {
-    return @{
+    $tbl = @{
         Printer = @{ Fn = 'Invoke-PrinterFix'; Title = 'Fix my printer'; Fix = $true; Plan = @{
             Time = 'About 1 minute'
             Does = @(
@@ -4831,7 +4870,23 @@ function Get-FixItActionTable {
         Share = @{ Fn = 'Invoke-FixItShare'; Title = 'Share with a friend'; Fix = $false }
         Guides = @{ Fn = 'Invoke-GuidesHelper'; Title = 'Help me with...'; Fix = $false }
         Simple = @{ Fn = 'Invoke-SimpleToggle'; Title = 'Simple mode'; Fix = $false }
+        YourHelper = @{ Fn = 'Invoke-FixItYourHelper'; Title = 'Your helper'; Fix = $false }
     }
+    $hp = Get-FixItHelper
+    if (-not $hp.IsTrey) {
+        # another helper: the screen is shared with Windows Quick Assist (a 6-digit code), and the titles name the helper
+        $tbl.Screen.Plan = @{
+            Time = 'About 1 minute'
+            Does = @(
+                'I open Windows Quick Assist, a free program from Microsoft.',
+                'Trey gives you a 6-digit code on the phone. You type it in, click Submit, then click Allow. Only then can Trey see your screen.')
+            Heads = @(
+                'Nothing is installed ahead of time, and Trey cannot see your screen until you do this.',
+                'Only do this if YOU called Trey. If someone else asked you to, say no.')
+            Restart = ''; SignIn = '' }
+        foreach ($k in @($tbl.Keys)) { $tbl[$k].Title = ConvertTo-FixItHelperText ([string]$tbl[$k].Title) }
+    }
+    return $tbl
 }
 
 # ---------------------------------------------------------------------------
@@ -4848,9 +4903,15 @@ function Get-FixItPlan {
     if ($restart) { $restartLine = 'You may need to restart your computer. ' + $restart }
     $signInLine = 'You will not need to sign in again anywhere.'
     if ($signIn) { $signInLine = 'You may need to sign in again. ' + $signIn }
+    $does = @(@($pl.Does) | ForEach-Object { ConvertTo-FixItHelperText ([string]$_) })
+    $heads = @(@($pl.Heads) | ForEach-Object { ConvertTo-FixItHelperText ([string]$_) })
+    $hp = Get-FixItHelper
+    if (-not $hp.IsTrey -and -not $hp.Confirmed -and ($Which -eq 'Report' -or $Which -eq 'Scam')) {
+        $heads += ConvertTo-FixItHelperText ("{0} has not said yes yet, so this report goes to {1} for now." -f $hp.Name, $script:TreyMark)
+    }
     return [pscustomobject]@{
-        Which = $Which; Title = [string]$t.Title; Time = [string]$pl.Time
-        Does = @($pl.Does); Heads = @($pl.Heads)
+        Which = $Which; Title = (ConvertTo-FixItHelperText ([string]$t.Title)); Time = [string]$pl.Time
+        Does = $does; Heads = $heads
         NeedsRestart = [bool]$restart; NeedsSignIn = [bool]$signIn
         RestartLine = $restartLine; SignInLine = $signInLine
     }
@@ -5118,7 +5179,7 @@ function Invoke-HealthCheck {
     $sent = Send-FixItReport -Text $text -Kind 'health'
     Write-FixItLog ('Finished: weekly health check (needs attention: {0}, sent: {1})' -f $attn.Count, $sent)
     if ($script:DryRun) { return New-FixItResult $true 'Practice run' 'Practice run only - nothing was sent.' $o @{ ReportText = $text } }
-    return New-FixItResult $sent $(if ($sent) { 'Health check sent' } else { 'Health check not sent' }) $(if ($sent) { 'The weekly health check was sent to Trey.' } else { 'The weekly health check could not be sent.' }) @() @{ ReportText = $text; Sent = $sent }
+    return New-FixItResult $sent $(if ($sent) { 'Health check sent' } else { 'Health check not sent' }) $(if ($sent) { 'The weekly health check was sent to ' + (Get-FixItRecipient) + '.' } else { 'The weekly health check could not be sent.' }) @() @{ ReportText = $text; Sent = $sent }
 }
 
 # ---------------------------------------------------------------------------
@@ -5395,7 +5456,7 @@ function Get-FixItHardwareSections {
             $n++
             $h = Get-FixItHwText $d.Health
             $rows += (New-FixItHwRow ('Disk ' + $n) ('{0} - {1} - {2} - health: {3}' -f (Get-FixItHwText $d.Model), (Get-FixItDriveKind -MediaType $d.MediaType -BusType $d.BusType), $(if ([int64]$d.Size -gt 0) { Format-FixItGb $d.Size } else { $na }), $h))
-            if (Test-FixItDiskUnhealthy -Disk $d) { $notes += ('Disk {0} ({1}) says it is not healthy. Please tell Trey.' -f $n, (Get-FixItHwText $d.Model)) }
+            if (Test-FixItDiskUnhealthy -Disk $d) { $notes += (ConvertTo-FixItHelperText ('Disk {0} ({1}) says it is not healthy. Please tell Trey.' -f $n, (Get-FixItHwText $d.Model))) }
         }
         if ($n -eq 0) { $rows += (New-FixItHwRow 'Disks' $na) }
     }
@@ -5567,7 +5628,7 @@ function Select-FixItNewHardwareAlerts {
 function Get-FixItHardwareMessage {
     param($Alerts)
     $m = @(@($Alerts) | ForEach-Object { [string]$_.Message } | Where-Object { $_ } | Select-Object -Unique)
-    return ($m -join "`r`n`r`n")
+    return (ConvertTo-FixItHelperText ($m -join "`r`n`r`n"))
 }
 
 # The saved bits (state file). JSON in a normal setting; never written in Test mode or practice mode.
@@ -6400,6 +6461,7 @@ function Invoke-GuardianAlert {
     $path = ''
     if (-not $sent -and -not $script:DryRun) { $f = Save-FixItReportFile -Text $text -Prefix 'SCAM-Report-for-Trey'; $path = $f.Path }
     $msg = $script:GuardianCalm
+    if ($sent -and -not (Test-FixItHelperIsTrey)) { $msg = $msg.Replace('Trey has been told.', ((Get-FixItRecipient) + ' has been told.')) }
     if ($script:DryRun) { $msg = 'Practice run: ' + $script:GuardianCalm }
     elseif (-not $sent) { $msg = "You're safe. Don't call any number that page showed. I could not reach Trey, so please call him." }
     Write-FixItLog ('Guardian: finished (report sent: {0})' -f $sent) 'WARN'
@@ -6428,6 +6490,7 @@ function Start-GuardianGetOutUi {
         Set-FixItGuardianToast -Fg $Fg -Mode 'Calm' -Text ($base + "`r`n`r`n" + $script:GuardianRestoreAdvice) -Status 'Telling Trey...' -Done $false
         $r = Invoke-GuardianAlert -Close $c
         $status = 'Trey has been told.'
+        if (-not (Test-FixItHelperIsTrey)) { $status = (Get-FixItRecipient) + ' has been told.' }
         if ($Demo) { $status = '(Practice: nothing was sent.)' } elseif (-not [bool]$r.Sent) { $status = 'I could not reach Trey. Please call him.' }
         $text = [string]$r.Message
         if (-not $Demo) { $text = $text + "`r`n`r`n" + $script:GuardianRestoreAdvice }
@@ -7215,8 +7278,8 @@ function Set-FixItGuardianToast {
     if ($null -eq $script:GT -or $script:GT.Form.IsDisposed) { Show-FixItGuardianToast -Fg $Fg }
     $t = $script:GT
     foreach ($k in @('Title', 'Sub', 'Hint', 'Out', 'Fine')) { $t[$k].Visible = $false }
-    $t.Calm.Text = $Text; $t.Calm.Visible = $true
-    $t.Status.Text = $Status; $t.Status.Visible = [bool]$Status
+    $t.Calm.Text = (ConvertTo-FixItHelperText $Text); $t.Calm.Visible = $true
+    $t.Status.Text = (ConvertTo-FixItHelperText $Status); $t.Status.Visible = [bool]$Status
     $t.Close.Visible = $Done
     $t.Form.Refresh()
     [System.Windows.Forms.Application]::DoEvents()
@@ -7331,10 +7394,10 @@ function ConvertTo-FixItGuides {
     $seen = @{}
     foreach ($g in @($items | Select-Object -First 20)) {
         $id = [string](Get-FixItProp $g 'id' '')
-        $title = Clear-FixItGuideText (Get-FixItProp $g 'title' '') 60
+        $title = ConvertTo-FixItHelperText (Clear-FixItGuideText (Get-FixItProp $g 'title' '') 60)
         $steps = @()
         foreach ($st in @(Get-FixItProp $g 'steps' @() | Select-Object -First 15)) {
-            $x = Clear-FixItGuideText $st 300
+            $x = ConvertTo-FixItHelperText (Clear-FixItGuideText $st 300)
             if ($x) { $steps += $x }
         }
         $kw = @()
@@ -7355,10 +7418,10 @@ function ConvertTo-FixItGuides {
 }
 
 function Get-FixItBuiltInGuides {
-    return @([pscustomobject]@{ Id = 'screenshot'; Title = 'Take a screenshot and send it to Trey'; Keywords = @('picture', 'screen', 'capture', 'snip'); Steps = @(
+    return @([pscustomobject]@{ Id = 'screenshot'; Title = (ConvertTo-FixItHelperText 'Take a screenshot and send it to Trey'); Keywords = @('picture', 'screen', 'capture', 'snip'); Steps = @(
         'Get the problem on your screen.',
         'Press the Windows key, the Shift key and the S key all together, then drag a box over the part you want to show.',
-        'Start a new email to Trey and press the Ctrl key and the V key together. The picture appears.',
+        (ConvertTo-FixItHelperText 'Start a new email to Trey and press the Ctrl key and the V key together. The picture appears.'),
         'Add a few words about what is wrong, then click Send.') })
 }
 
@@ -7656,15 +7719,20 @@ function Save-FixItOwnerName {
 
 # Pure: what the "What's shared" window says (a title, an intro, groups of plain lines, the promise).
 function Get-FixItPrivacyContent {
-    $help = @($script:PrivacySent | Where-Object { $_.Group -eq 'help' -or $_.Group -eq 'scam' } | ForEach-Object { $_.Text })
-    $weekly = @($script:PrivacySent | Where-Object { $_.Group -eq 'weekly' -or $_.Group -eq 'alert' } | ForEach-Object { $_.Text })
-    $never = @($script:PrivacyNever | ForEach-Object { $_.Text })
+    $help = @($script:PrivacySent | Where-Object { $_.Group -eq 'help' -or $_.Group -eq 'scam' } | ForEach-Object { ConvertTo-FixItHelperText ([string]$_.Text) })
+    $weekly = @($script:PrivacySent | Where-Object { $_.Group -eq 'weekly' -or $_.Group -eq 'alert' } | ForEach-Object { ConvertTo-FixItHelperText ([string]$_.Text) })
+    $never = @($script:PrivacyNever | ForEach-Object { ConvertTo-FixItHelperText ([string]$_.Text) })
     $groups = @(
-        [pscustomobject]@{ Heading = "When you press 'Send Trey a report' or the scary pop-up help runs, Trey gets:"; Lines = $help; Kind = 'sent' },
-        [pscustomobject]@{ Heading = 'Every week, only if the weekly check-in is on, Trey also gets:'; Lines = $weekly; Kind = 'sent' },
+        [pscustomobject]@{ Heading = (ConvertTo-FixItHelperText "When you press 'Send Trey a report' or the scary pop-up help runs, Trey gets:"); Lines = $help; Kind = 'sent' },
+        [pscustomobject]@{ Heading = (ConvertTo-FixItHelperText 'Every week, only if the weekly check-in is on, Trey also gets:'); Lines = $weekly; Kind = 'sent' },
         [pscustomobject]@{ Heading = 'Never sent:'; Lines = $never; Kind = 'never' }
     )
-    return [pscustomobject]@{ Title = $script:PrivacyTitle; Intro = $script:PrivacyIntro; Groups = $groups; Promise = $script:PrivacyPromise; WeeklyOff = $script:PrivacyWeeklyOff; NameQuestion = $script:NameQuestion }
+    $intro = ConvertTo-FixItHelperText $script:PrivacyIntro
+    $hp = Get-FixItHelper
+    if (-not $hp.IsTrey) {
+        $intro = $intro + "`r`n`r`n" + (ConvertTo-FixItHelperText ("You picked {0} as your helper. Once {0} has said yes by email, reports go straight to {0} and are not kept for {1}. Until then they go to {1}. {0}'s name and email address are kept on this computer and sent with each report, and I send one email to ask {0} to say yes." -f $hp.Name, $script:TreyMark))
+    }
+    return [pscustomobject]@{ Title = (ConvertTo-FixItHelperText $script:PrivacyTitle); Intro = $intro; Groups = $groups; Promise = (ConvertTo-FixItHelperText $script:PrivacyPromise); WeeklyOff = (ConvertTo-FixItHelperText $script:PrivacyWeeklyOff); NameQuestion = (ConvertTo-FixItHelperText $script:NameQuestion) }
 }
 function Get-FixItPrivacyPlainText {
     $c = Get-FixItPrivacyContent
@@ -7676,40 +7744,42 @@ function Get-FixItPrivacyPlainText {
 
 # Pure: what to show now. Pending is set by the installer on a fresh install only.
 function Get-FixItFirstRunPlan {
-    param([string]$Pending = '', [string]$PrivacyShown = '', [string]$NameAsked = '', [bool]$Interactive = $true)
+    param([string]$Pending = '', [string]$PrivacyShown = '', [string]$NameAsked = '', [bool]$Interactive = $true, [string]$HelperAsked = '')
     $isPending = ($Pending -eq '1')
     $why = 'nothing is waiting'
-    $showPrivacy = $false; $askName = $false
+    $showPrivacy = $false; $askName = $false; $askHelper = $false
     if ($isPending -and -not $Interactive) { $why = 'this start is silent or a practice run, so it waits for the first normal window' }
     elseif ($isPending) {
         $showPrivacy = (-not $PrivacyShown)
         $askName = (-not $NameAsked)
+        $askHelper = (-not $HelperAsked)
         $why = 'fresh install'
     }
-    return [pscustomobject]@{ Pending = $isPending; ShowPrivacy = $showPrivacy; AskName = $askName; Reason = $why }
+    return [pscustomobject]@{ Pending = $isPending; ShowPrivacy = $showPrivacy; AskName = $askName; AskHelper = $askHelper; Reason = $why }
 }
 
 # The one adapter that draws the two first-run windows (replaced by the tests).
 function Show-FixItFirstRunWindows {
-    param([bool]$ShowPrivacy, [bool]$AskName)
+    param([bool]$ShowPrivacy, [bool]$AskName, [bool]$AskHelper = $false)
     if ($ShowPrivacy) { Show-FixItPrivacyForm -FirstRun $true }
     if ($AskName) { [void](Show-FixItNameForm) }
+    if ($AskHelper) { Complete-FixItHelperChange -Save (Show-FixItHelperForm -FirstRun $true) }
 }
 function Invoke-FixItFirstRun {
     $pending = Get-FixItSetting -Name 'PrivacyPending' -Default ''
     if ($script:TestMode) {
-        Write-FixItLog 'TEST MODE: after a fresh install the "What''s shared" window and the "What''s your name?" question would show once (nothing is shown or saved now).' 'TEST'
+        Write-FixItLog 'TEST MODE: after a fresh install the "What''s shared" window and the "What''s your name?" question and the "Who helps you with your computer?" question would show once (nothing is shown or saved now).' 'TEST'
         return $false
     }
     $interactive = ([bool]$script:GuiActive -and -not [bool]$script:AssumeYes -and -not [bool]$script:DryRun)
-    $plan = Get-FixItFirstRunPlan -Pending $pending -PrivacyShown (Get-FixItSetting -Name 'PrivacyShown' -Default '') -NameAsked (Get-FixItSetting -Name 'OwnerNameAsked' -Default '') -Interactive $interactive
+    $plan = Get-FixItFirstRunPlan -Pending $pending -PrivacyShown (Get-FixItSetting -Name 'PrivacyShown' -Default '') -NameAsked (Get-FixItSetting -Name 'OwnerNameAsked' -Default '') -Interactive $interactive -HelperAsked (Get-FixItSetting -Name 'HelperAsked' -Default '')
     if ($plan.Pending -and -not $interactive) { Write-FixItLog ('First-run window skipped: {0}.' -f $plan.Reason); return $false }
-    if (-not $plan.ShowPrivacy -and -not $plan.AskName) {
+    if (-not $plan.ShowPrivacy -and -not $plan.AskName -and -not $plan.AskHelper) {
         if ($plan.Pending) { Set-FixItSetting -Name 'PrivacyPending' -Value '0' }
         return $false
     }
-    Write-FixItLog ('First run: showing {0}{1}' -f $(if ($plan.ShowPrivacy) { 'the "What''s shared" window' } else { '' }), $(if ($plan.AskName) { $(if ($plan.ShowPrivacy) { ' and the name question' } else { 'the name question' }) } else { '' }))
-    try { Show-FixItFirstRunWindows -ShowPrivacy $plan.ShowPrivacy -AskName $plan.AskName } catch { Write-FixItLog ('The first-run window had a problem: {0}' -f $_.Exception.Message) 'WARN' }
+    Write-FixItLog ('First run: showing {0}{1}{2}' -f $(if ($plan.ShowPrivacy) { 'the "What''s shared" window' } else { '' }), $(if ($plan.AskName) { $(if ($plan.ShowPrivacy) { ' and the name question' } else { 'the name question' }) } else { '' }), $(if ($plan.AskHelper) { ' and the helper question' } else { '' }))
+    try { Show-FixItFirstRunWindows -ShowPrivacy $plan.ShowPrivacy -AskName $plan.AskName -AskHelper $plan.AskHelper } catch { Write-FixItLog ('The first-run window had a problem: {0}' -f $_.Exception.Message) 'WARN' }
     Set-FixItSetting -Name 'PrivacyPending' -Value '0'
     return $true
 }
@@ -7745,6 +7815,278 @@ function Invoke-FixItYourName {
     }
     if ($script:GuiActive) { [void](Show-FixItNameForm); return (New-FixItResult $true 'Your name' 'Done.' @() @{ Silent = $true }) }
     return (New-FixItResult $true 'Your name' ('Your name: ' + $(if (Get-FixItOwnerName) { Get-FixItOwnerName } else { 'not given' })))
+}
+
+# ----- Who helps you? (the helper setting) -----------------------------------------------------------------------
+# The program was made for one helper (Trey). A friend can pass it on and pick their own family member instead. The choice is
+# remembered in the settings: HelperName, HelperEmail, HelperStatus (what the report service last said), HelperPcId (a random
+# number made once, so the helper's yes is for THIS computer only) and HelperAsked. With no helper chosen everything stays as it
+# always was: every message names Trey and every report goes to Trey.
+#   ConvertTo-FixItHelperText is the one place that swaps the name in the words the program shows (buttons, results, help,
+#   plans, the share message, guides). A Trey that must stay Trey (for example "this report went to Trey for now") is written
+#   with $script:TreyMark, which the converter turns back into a plain Trey at the end.
+$script:HelperNameMax = 14
+$script:HelperEmailMax = 120
+$script:TreyMark = ('Tr' + [string][char]0x2060 + 'ey')
+$script:LastDelivery = $null
+$script:HelperChanged = $false
+$script:QuickAssistStoreId = '9P7BP5VNWKX5'
+$script:HelperQuestion = 'Who helps you with your computer?'
+
+# Pure: a first name that is safe to show and to send (letters, digits, spaces, ' and -; at most 14 characters).
+function ConvertTo-FixItHelperName {
+    param([string]$Text)
+    if ([string]::IsNullOrWhiteSpace($Text)) { return '' }
+    $t = [regex]::Replace($Text, "[^\p{L}\p{N} '\u2019-]", '')
+    $t = [regex]::Replace($t, '\s+', ' ').Trim()
+    $t = $t.Replace([string][char]0x2019, "'")
+    if ($t.Length -gt $script:HelperNameMax) { $t = $t.Substring(0, $script:HelperNameMax).Trim() }
+    return $t
+}
+# Pure: one plain email address in lower case, or '' when it is not one (the report service checks it the same way).
+function ConvertTo-FixItHelperEmail {
+    param([string]$Text)
+    if ([string]::IsNullOrWhiteSpace($Text)) { return '' }
+    $e = $Text.Trim().ToLowerInvariant()
+    if ($e.Length -lt 6 -or $e.Length -gt $script:HelperEmailMax) { return '' }
+    if ($e -notmatch "^[a-z0-9][a-z0-9._%+'-]*@[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*\.[a-z]{2,24}$") { return '' }
+    if ($e.Contains('..')) { return '' }
+    return $e
+}
+# Pure: is what was typed good enough to save? Trey (Other = false) always is.
+function Test-FixItHelperInput {
+    param([bool]$Other = $false, [string]$Name = '', [string]$Email = '')
+    if (-not $Other) { return [pscustomobject]@{ Ok = $true; Message = ''; Name = ''; Email = '' } }
+    $n = ConvertTo-FixItHelperName -Text $Name
+    $e = ConvertTo-FixItHelperEmail -Text $Email
+    $msg = ''
+    if (-not $n) { $msg = "Please type your helper's first name." }
+    elseif (-not $e) { $msg = "Please type your helper's whole email address, with the @ sign in it." }
+    return [pscustomobject]@{ Ok = (-not $msg); Message = $msg; Name = $n; Email = $e }
+}
+# The chosen helper. Never throws. IsTrey is true unless BOTH a name and a good email address are saved.
+function Get-FixItHelper {
+    $name = ''; $email = ''; $status = ''; $pc = ''
+    try {
+        $st = Get-FixItState
+        $name = ConvertTo-FixItHelperName -Text ([string](Get-FixItProp $st 'HelperName' ''))
+        $email = ConvertTo-FixItHelperEmail -Text ([string](Get-FixItProp $st 'HelperEmail' ''))
+        $status = [string](Get-FixItProp $st 'HelperStatus' '')
+        $pc = [string](Get-FixItProp $st 'HelperPcId' '')
+    } catch { }
+    if ($pc -notmatch '^[0-9a-f]{32}$') { $pc = '' }
+    $isTrey = ((-not $name) -or (-not $email))
+    if ($isTrey) { return [pscustomobject]@{ IsTrey = $true; Name = 'Trey'; Email = ''; Status = ''; PcId = $pc; Confirmed = $true } }
+    return [pscustomobject]@{ IsTrey = $false; Name = $name; Email = $email; Status = $status; PcId = $pc; Confirmed = ($status -eq 'confirmed') }
+}
+function Test-FixItHelperIsTrey { return [bool](Get-FixItHelper).IsTrey }
+function Get-FixItHelperName { return [string](Get-FixItHelper).Name }
+
+# Pure: swap the helper's name into a sentence written for Trey. With Trey as the helper only the Trey mark is cleaned up.
+function ConvertTo-FixItHelperText {
+    param([string]$Text)
+    if ([string]::IsNullOrEmpty($Text)) { return $Text }
+    $out = $Text
+    try {
+        $h = Get-FixItHelper
+        if (-not $h.IsTrey) {
+            $n = [string]$h.Name
+            $out = [regex]::Replace($out, '(?i)\b(call|ask|tell|send|contacted|phone|text) him\b', ('$1 ' + $n))
+            $out = [regex]::Replace($out, '(?i)\bhe (can|asks|will)\b', ($n + ' $1'))
+            $out = [regex]::Replace($out, "\bTrey's\b", ($n + "'s"))
+            $out = [regex]::Replace($out, '\bTrey\b', $n)
+        }
+        $out = $out.Replace($script:TreyMark, 'Trey')
+    } catch { return $Text }
+    return $out
+}
+
+# Remember the choice. Idempotent: saving the same helper again changes nothing (the yes already given is kept).
+function Save-FixItHelper {
+    param([bool]$Other = $false, [string]$Name = '', [string]$Email = '')
+    $cur = Get-FixItHelper
+    $chk = Test-FixItHelperInput -Other $Other -Name $Name -Email $Email
+    if (-not $chk.Ok) { return [pscustomobject]@{ Saved = $false; Changed = $false; EmailChanged = $false; Message = $chk.Message; Helper = $cur } }
+    $changed = $false; $emailChanged = $false
+    if (-not $Other) {
+        if (-not $cur.IsTrey) {
+            Set-FixItSetting -Name 'HelperName' -Value ''
+            Set-FixItSetting -Name 'HelperEmail' -Value ''
+            Set-FixItSetting -Name 'HelperStatus' -Value ''
+            $changed = $true
+            Write-FixItLog 'Helper set back to Trey'
+        }
+    } else {
+        if ($cur.IsTrey -or $cur.Email -ne $chk.Email) {
+            Set-FixItSetting -Name 'HelperEmail' -Value $chk.Email
+            Set-FixItSetting -Name 'HelperStatus' -Value ''
+            $changed = $true; $emailChanged = $true
+        }
+        if ($cur.IsTrey -or $cur.Name -ne $chk.Name) {
+            Set-FixItSetting -Name 'HelperName' -Value $chk.Name
+            $changed = $true
+        }
+        if (-not $cur.PcId) { Set-FixItSetting -Name 'HelperPcId' -Value ([guid]::NewGuid().ToString('N')) }
+        if ($changed) { Write-FixItLog ('Helper set to {0} (an email address was saved)' -f $chk.Name) }
+    }
+    Set-FixItSetting -Name 'HelperAsked' -Value (Get-Date -Format 'yyyy-MM-dd')
+    return [pscustomobject]@{ Saved = $true; Changed = $changed; EmailChanged = $emailChanged; Message = ''; Helper = (Get-FixItHelper) }
+}
+# The second line of the "Your helper" item on the left: the name, and "(waiting)" until the helper has said yes.
+function Get-FixItHelperStatusLine {
+    $h = Get-FixItHelper
+    if ($h.IsTrey -or $h.Confirmed) { return [string]$h.Name }
+    return ('{0} (waiting)' -f $h.Name)
+}
+
+# ----- Where did the report go? ------------------------------------------------------------------------------------
+# The report service answers with delivery = helper | trey, helperStatus = none | pending | confirmed | stopped | declined,
+# confirmSent and confirmReason. Send-FixItReport keeps the last answer here so the messages can say who really got it.
+function ConvertTo-FixItWebAnswer {
+    param($Raw)
+    if ($null -eq $Raw) { return [pscustomobject]@{ Code = 0; Body = '' } }
+    if ($Raw -is [int] -or $Raw -is [long] -or $Raw -is [double] -or $Raw -is [string]) {
+        $c = 0; [void][int]::TryParse([string]$Raw, [ref]$c)
+        return [pscustomobject]@{ Code = $c; Body = '' }
+    }
+    $code = 0; $body = ''
+    try { $code = [int]$Raw.Code } catch { }
+    try { $body = [string]$Raw.Body } catch { }
+    return [pscustomobject]@{ Code = $code; Body = $body }
+}
+function Get-FixItDeliveryFromBody {
+    param([string]$Body)
+    $d = [pscustomobject]@{ Delivery = 'trey'; Status = ''; ConfirmSent = $false; Reason = '' }
+    if ([string]::IsNullOrWhiteSpace($Body)) { return $d }
+    try {
+        $o = $Body | ConvertFrom-Json
+        if ($null -ne $o) {
+            if ([string]$o.delivery -eq 'helper') { $d.Delivery = 'helper' }
+            $d.Status = [string]$o.helperStatus
+            $d.ConfirmSent = [bool]$o.confirmSent
+            $d.Reason = [string]$o.confirmReason
+        }
+    } catch { }
+    return $d
+}
+function Update-FixItDelivery {
+    param([string]$Body)
+    $d = Get-FixItDeliveryFromBody -Body $Body
+    $script:LastDelivery = $d
+    $h = Get-FixItHelper
+    if (-not $h.IsTrey -and $d.Status -and $d.Status -ne $h.Status) {
+        Set-FixItSetting -Name 'HelperStatus' -Value $d.Status
+        Write-FixItLog ('Helper answer from the report service: {0}' -f $d.Status)
+    }
+}
+# Who got the last report: the helper's name only when the service said it was mailed to the helper, otherwise the Trey mark.
+function Get-FixItRecipient {
+    $h = Get-FixItHelper
+    if ($h.IsTrey) { return 'Trey' }
+    $d = $script:LastDelivery
+    if ($null -ne $d) { if ($d.Delivery -eq 'helper') { return $h.Name } else { return $script:TreyMark } }
+    if ($h.Confirmed) { return $h.Name }
+    return $script:TreyMark
+}
+# Plain words for "why did it go to Trey?" - empty when the helper got it (or the helper is Trey).
+function Get-FixItDeliveryNote {
+    param([string]$Noun = 'report')
+    $h = Get-FixItHelper
+    if ($h.IsTrey) { return '' }
+    $d = $script:LastDelivery
+    $n = $h.Name; $t = $script:TreyMark
+    if ($null -ne $d -and $d.Delivery -eq 'helper') { return '' }
+    $st = $h.Status; $sent = $false; $why = ''
+    if ($null -ne $d) { $st = $d.Status; $sent = $d.ConfirmSent; $why = $d.Reason }
+    if ($st -eq 'confirmed') { return ("I could not email {0} just now, so this {1} went to {2} instead." -f $n, $Noun, $t) }
+    if ($st -eq 'stopped' -or $st -eq 'declined') { return ("{0} turned these emails off, so this {1} went to {2}. You can pick someone else with 'Your helper'." -f $n, $Noun, $t) }
+    if ($st -eq 'pending' -and $sent) { return ("{0} has not said yes yet, so this {1} went to {2} for now. I just emailed {0} to ask. Once {0} says yes, reports go straight to {0}." -f $n, $Noun, $t) }
+    if ($st -eq 'pending') { return ("{0} has not said yes yet, so this {1} went to {2} for now. {0} was already asked by email." -f $n, $Noun, $t) }
+    if ($why -eq 'email-off' -or $why -eq 'limited' -or $why -eq 'send-failed') { return ("I could not email {0} yet, so this {1} went to {2} for now." -f $n, $Noun, $t) }
+    return ("{0} has not said yes yet, so this {1} went to {2} for now." -f $n, $Noun, $t)
+}
+# What the helper confirmation window says after a helper is chosen (the answer to the hello).
+function Get-FixItHelperHelloText {
+    $h = Get-FixItHelper
+    $d = $script:LastDelivery
+    if ($h.IsTrey) { return 'Your reports go to Trey.' }
+    $n = $h.Name; $t = $script:TreyMark
+    $st = $h.Status; $sent = $false
+    if ($null -ne $d) { $st = $d.Status; $sent = $d.ConfirmSent }
+    if ($st -eq 'confirmed') { return ("{0} is all set. Your reports go straight to {0}." -f $n) }
+    if ($st -eq 'stopped' -or $st -eq 'declined') { return ("{0} has turned these emails off, so your reports go to {1}. You can pick someone else with 'Your helper'." -f $n, $t) }
+    if ($sent) { return ("I emailed {0} to ask. Please ask {0} to open that email (check the spam folder too) and click Yes.`r`n`r`nUntil {0} says yes, your reports go to {1}." -f $n, $t) }
+    if ($st -eq 'pending') { return ("{0} was already asked by email. Please ask {0} to open that email (check the spam folder too) and click Yes.`r`n`r`nUntil {0} says yes, your reports go to {1}." -f $n, $t) }
+    return ("I could not email {0} just now. Your reports go to {1} until {0} says yes. I will try again the next time a report is sent." -f $n, $t)
+}
+# Sends the one-time "hello" that asks the helper to say yes. Follows test mode and practice mode like every other send.
+function Send-FixItHelperHello {
+    $h = Get-FixItHelper
+    if ($h.IsTrey) { return $false }
+    return [bool](Send-FixItReport -Text '' -Kind 'hello')
+}
+
+# ----- Windows Quick Assist (for any helper who is not Trey) -----------------------------------------------------------
+# Opens Microsoft's own Quick Assist. The helper gives a 6-digit code on the phone and the person types it in and clicks Allow.
+# Returns 'App' (opened), 'Store' (the free app is not on this PC, so its Microsoft Store page was opened) or 'Failed'.
+function Start-FixItQuickAssist {
+    if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Start-FixItQuickAssist' -Arguments $PSBoundParameters; return 'App' }
+    if (Test-FixItCommandPresent -Name 'quickassist.exe') {
+        try { Start-Process -FilePath 'quickassist.exe' | Out-Null; return 'App' } catch { Write-FixItLog ('quickassist.exe did not start: {0}' -f $_.Exception.Message) 'WARN' }
+    }
+    if (Test-FixItUriHandler -Scheme 'ms-quick-assist') {
+        try { Start-Process -FilePath 'ms-quick-assist:' | Out-Null; return 'App' } catch { Write-FixItLog ('ms-quick-assist: did not open: {0}' -f $_.Exception.Message) 'WARN' }
+    }
+    try { Start-Process -FilePath ('ms-windows-store://pdp/?ProductId=' + $script:QuickAssistStoreId) | Out-Null; return 'Store' } catch { Write-FixItLog ('The Store page did not open: {0}' -f $_.Exception.Message) 'WARN' }
+    return 'Failed'
+}
+function Invoke-FixItQuickAssistShare {
+    $n = (Get-FixItHelper).Name
+    if ($script:DryRun) { return (New-FixItResult $true 'Practice run' ('Practice run only - Windows Quick Assist would open so {0} can help.' -f $n)) }
+    $script:QuickAssistHow = 'Failed'
+    $ok = Invoke-FixItStep 'Open Windows Quick Assist' { $script:QuickAssistHow = [string](Start-FixItQuickAssist) }
+    $how = [string]$script:QuickAssistHow
+    $safe = "Only do this if YOU called $n. If someone else asked you to - on the phone, in a pop-up or in an email - stop and do not do it."
+    if ($ok -and $how -eq 'App') {
+        return (New-FixItResult $true 'Quick Assist opened' ("Quick Assist is open. $n will give you a 6-digit code.`r`n`r`nType the code in, click Submit, and when it asks, click Allow. Until then $n cannot see your screen.`r`n`r`n$safe") @())
+    }
+    if ($ok -and $how -eq 'Store') {
+        return (New-FixItResult $true 'Get Quick Assist' ("Quick Assist is a free Microsoft app and it is not on this computer yet. I opened its page in the Microsoft Store.`r`n`r`nClick Get, wait for it to finish, then click 'Let $n see my screen' again.`r`n`r`n$safe") @())
+    }
+    return (New-FixItResult $false 'Could not open Quick Assist' ("I could not open Quick Assist. You can open it yourself: hold the Windows key and Ctrl, then press Q. Then $n gives you a 6-digit code.`r`n`r`n$safe") @())
+}
+
+# ----- The "Your helper" window and what happens after it ------------------------------------------------------------
+function Complete-FixItHelperChange {
+    param($Save, [bool]$Quiet = $false)
+    if ($null -eq $Save -or -not $Save.Saved) { return }
+    if ($Save.Changed) { $script:HelperChanged = $true }
+    if ($Save.Helper.IsTrey -or -not $Save.EmailChanged) { return }
+    $script:LastDelivery = $null
+    $ok = $false
+    try { $ok = [bool](Send-FixItHelperHello) } catch { Write-FixItLog ('The hello email could not be asked for: {0}' -f $_.Exception.Message) 'WARN' }
+    if (-not $ok -and $null -eq $script:LastDelivery) { $script:LastDelivery = [pscustomobject]@{ Delivery = 'trey'; Status = ''; ConfirmSent = $false; Reason = 'send-failed' } }
+    if (-not $Quiet) { Show-FixItHelperAnswer -Text (Get-FixItHelperHelloText) }
+}
+# The one adapter that shows the answer after a helper was chosen (replaced by the tests).
+function Show-FixItHelperAnswer {
+    param([string]$Text)
+    if ($script:TestMode -or $script:DryRun -or -not $script:GuiActive) { Write-FixItLog ('Helper answer: ' + ($Text -replace '\s+', ' ')); return }
+    [void][System.Windows.Forms.MessageBox]::Show((ConvertTo-FixItHelperText $Text), 'Family Fix-It - Your helper', 'OK', 'Information')
+}
+function Invoke-FixItYourHelper {
+    Write-FixItLog 'Your helper opened'
+    $h = Get-FixItHelper
+    if ($script:TestMode) {
+        Add-FixItTestNote -Step 'Your helper' -Status 'PASS' -Text 'a click would ask "Who helps you with your computer?": Trey (the usual choice) or someone else (a first name and an email address). Someone else gets one email asking them to say yes; until they do, reports still go to Trey. Nothing is sent or saved now.'
+        return (New-FixItResult $true 'Your helper' 'Test mode only checked it.' @() @{ Silent = $true })
+    }
+    if ($script:GuiActive) {
+        $r = Show-FixItHelperForm -FirstRun $false
+        if ($null -ne $r -and $r.Saved) { Complete-FixItHelperChange -Save $r }
+        return (New-FixItResult $true 'Your helper' 'Done.' @() @{ Silent = $true })
+    }
+    return (New-FixItResult $true 'Your helper' ('Your helper: ' + $h.Name))
 }
 
 # ----- Share with a friend (v2.3.9) ------------------------------------------------------------------------------
@@ -7821,7 +8163,7 @@ function Invoke-FixItShare {
 # What the window shows. Pure data (no drawing), so it can be tested. Positions are in 96-dpi pixels.
 $script:SimpleTileIds = @('Printer', 'Network', 'Slow', 'Scam', 'Screen', 'Report')
 function Get-FixItLayout {
-    param([bool]$Simple = $false, [bool]$GuardianOn = $false, [bool]$BigText = $false, [bool]$HighContrast = $false, [bool]$CheckInOn = $false)
+    param([bool]$Simple = $false, [bool]$GuardianOn = $false, [bool]$BigText = $false, [bool]$HighContrast = $false, [bool]$CheckInOn = $false, [bool]$HelperIsTrey = $true)
     # small links on the bottom row, next to "Check for a newer version" (always shown, in both layouts): Run, text, x
     $footer = @(@('Privacy', "What's shared", 262), @('YourName', 'Your name', 364), @('Share', 'Share with a friend', 444))
     $tiles1 = @(@('Printer', 'Fix my printer', "Won't print or is stuck", 'printer'), @('Acrobat', 'Fix Acrobat in Outlook', 'Acrobat buttons are missing', 'pdf'), @('Outlook', 'Fix Outlook', "Freezes or won't open", 'mail'))
@@ -7835,8 +8177,11 @@ function Get-FixItLayout {
             @('BigText', 'Big text', 'text', $BigText, 88, 40),
             @('Contrast', 'High contrast', 'contrast', $HighContrast, 132, 40))
         $pin = @('Pin', 'Pin me to the taskbar', '', 'pin', 428, 40)
-        $donate = @('Donate', 'Thank Trey', 'Kids are expensive!', 'heart', 472, 52)   # last item on the left list, under Pin to taskbar
-        $lay = @{ Simple = $true; SideTitle = 'SETTINGS'; Nav = @(); SepY = 0; Pin = $pin; Donate = $donate; Footer = $footer; Toggles = $toggles; Groups = $groups; ScamY = 236; PrimaryY = 324; StatusY = 412; LinksY = 446; FullH = 530 }
+        $donate = @('Donate', 'Thank Trey', 'Kids are expensive!', 'heart', 472, 52)   # under Pin to taskbar
+        # "Your helper" is the very last item (the bottom row of links is full). With another helper there is no Thank Trey item, so it takes its place.
+        $helper = @('YourHelper', 'Your helper', '', 'send', 532, 52); $fullH = 590
+        if (-not $HelperIsTrey) { $donate = $null; $helper = @('YourHelper', 'Your helper', '', 'send', 472, 52); $fullH = 530 }
+        $lay = @{ Simple = $true; SideTitle = 'SETTINGS'; Nav = @(); SepY = 0; Pin = $pin; Donate = $donate; Helper = $helper; Footer = $footer; Toggles = $toggles; Groups = $groups; ScamY = 236; PrimaryY = 324; StatusY = 412; LinksY = 446; FullH = $fullH }
     } else {
         $groups = @(
             @{ Name = 'PRINTING AND EMAIL'; Y = 84; Bg = '#E6F0FA'; Tiles = $tiles1 },
@@ -7860,7 +8205,9 @@ function Get-FixItLayout {
             @('CheckIn', 'Weekly check-in', 'check', $CheckInOn, 684, 40))
         $pin = @('Pin', 'Pin me to the taskbar', '', 'pin', 740, 40)
         $donate = @('Donate', 'Thank Trey', 'Kids are expensive!', 'heart', 784, 52)   # last item on the left list, under Pin to taskbar
-        $lay = @{ Simple = $false; SideTitle = 'TOOLS'; Nav = $nav; SepY = 470; Pin = $pin; Donate = $donate; Footer = $footer; Toggles = $toggles; Groups = $groups; ScamY = 688; PrimaryY = 776; StatusY = 862; LinksY = 896; FullH = 990 }
+        $helper = @('YourHelper', 'Your helper', '', 'send', 844, 52)
+        if (-not $HelperIsTrey) { $donate = $null; $helper = @('YourHelper', 'Your helper', '', 'send', 784, 52) }   # people who got the tool from a friend do not see "Thank Trey"
+        $lay = @{ Simple = $false; SideTitle = 'TOOLS'; Nav = $nav; SepY = 470; Pin = $pin; Donate = $donate; Helper = $helper; Footer = $footer; Toggles = $toggles; Groups = $groups; ScamY = 688; PrimaryY = 776; StatusY = 862; LinksY = 896; FullH = 990 }
     }
     $ids = @()
     foreach ($g in $lay.Groups) { foreach ($t in $g.Tiles) { $ids += [string]$t[0] } }
@@ -8158,7 +8505,7 @@ function Invoke-FixItSidePaint {
 # ALL the descriptions are in this one table. Each is 2 to 3 short sentences, about 45 words at most, and follows what the real code does (see the fix functions).
 function Get-FixItHelpTable {
     $rw = $script:ReportsWhere
-    return @{
+    $tb = @{
         Printer = @{ Title = 'Fix my printer'; Text = ("I help you pick a printer and make it your main one. I restart printing, clear stuck print jobs (they must be printed again) and reconnect shared printers. I ask first, and your documents and files are never touched.") }
         Acrobat = @{ Title = 'Fix Acrobat in Outlook'; Text = ("Use this when the Acrobat buttons are missing in Outlook. I close and reopen Outlook, then switch the Acrobat add-in back on. I ask before each step, and your email accounts and passwords are never touched.") }
         Outlook = @{ Title = 'Fix Outlook'; Text = ("Use this when Outlook freezes or will not open. I close it and open it again, then ask before each next step. Your email accounts, passwords and sign-ins are never changed.") }
@@ -8173,12 +8520,16 @@ function Get-FixItHelpTable {
         Screen = @{ Title = 'Let Trey see my screen'; Text = ("I open the Zoho Assist page where you type a code from Trey. Only when you type it and click Join can Trey see your screen. Nothing is installed, so only do this if you called Trey.") }
         Report = @{ Title = 'Send Trey a report'; Text = ("I collect facts that help Trey, such as your Windows version, printers and recent problems. I save a copy $rw and send it to Trey. It has no files or passwords, and I change nothing.") }
     }
+    if (-not (Test-FixItHelperIsTrey)) {
+        $tb.Screen.Text = 'I open Windows Quick Assist, a free Microsoft program. Only when you type the 6-digit code from Trey, click Submit and then Allow can Trey see your screen. Only do this if you called Trey.'
+    }
+    return $tb
 }
 # The title and text for one button, or $null when it has no description.
 function Get-FixItHelpText {
     param([string]$Key)
     $t = Get-FixItHelpTable
-    if ($Key -and $t.ContainsKey($Key)) { return [pscustomobject]@{ Key = $Key; Title = [string]$t[$Key].Title; Text = [string]$t[$Key].Text } }
+    if ($Key -and $t.ContainsKey($Key)) { return [pscustomobject]@{ Key = $Key; Title = (ConvertTo-FixItHelperText ([string]$t[$Key].Title)); Text = (ConvertTo-FixItHelperText ([string]$t[$Key].Text)) } }
     return $null
 }
 # The main buttons of a window layout (the grid tiles, then the red pop-up button and the two bottom buttons). These are the ones that get a "?".
@@ -8329,6 +8680,8 @@ function Show-FixItHelpForm {
 function New-FixItTile {
     param([string]$Run, [string]$Title, [string]$Sub, [string]$IconKey, [string]$Style, [string]$IconBg, [int]$X, [int]$Y, [int]$W, [int]$H, [bool]$Wide = $false, [bool]$On = $false)
     $S = $script:UiScale
+    $Title = ConvertTo-FixItHelperText $Title
+    $Sub = ConvertTo-FixItHelperText $Sub
     $b = New-Object System.Windows.Forms.Button
     $bk = $script:UiBack
     if ($Style -eq 'nav' -or $Style -eq 'toggle') { $bk = $script:UiSide }
@@ -8419,7 +8772,7 @@ function Show-FixItWindowOnce {
     $checkIn = 'off'; try { if (Test-FixItTask -Name $script:CheckInTaskName) { $checkIn = 'on' } } catch { }
     $gOn = $false; try { $gOn = [bool](Test-FixItGuardianInstalled) } catch { }
     $simple = $false; try { $simple = [bool](Test-FixItSimpleMode) } catch { }
-    $lay = Get-FixItLayout -Simple $simple -GuardianOn $gOn -BigText ([bool]$script:UiBigText) -HighContrast $hc -CheckInOn ($checkIn -eq 'on')
+    $lay = Get-FixItLayout -Simple $simple -GuardianOn $gOn -BigText ([bool]$script:UiBigText) -HighContrast $hc -CheckInOn ($checkIn -eq 'on') -HelperIsTrey (Test-FixItHelperIsTrey)
     $fullH = [int]($lay.FullH * $S)
     $wa = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
     $clientH = [math]::Min($fullH, ($wa.Height - [int](50 * $S)))
@@ -8467,6 +8820,11 @@ function Show-FixItWindowOnce {
         $dt = New-FixItTile -Run $dd[0] -Title $dd[1] -Sub $dd[2] -IconKey $dd[3] -Style 'nav' -IconBg '' -X 12 -Y $dd[4] -W 184 -H $dd[5]
         $dt.AccessibleName = 'Thank Trey. Kids are expensive! Opens a web page where you can say thank you.'
         $side.Controls.Add($dt); [void]$script:FixButtons.Add($dt)
+    }
+    if ($null -ne $lay.Helper) {   # who helps this person (the name is the second line)
+        $hd = $lay.Helper
+        $ht = New-FixItTile -Run $hd[0] -Title $hd[1] -Sub (Get-FixItHelperStatusLine) -IconKey $hd[3] -Style 'nav' -IconBg '' -X 12 -Y $hd[4] -W 176 -H $hd[5]
+        $side.Controls.Add($ht); [void]$script:FixButtons.Add($ht)
     }
     $script:CheckInLinkText = $checkIn
 
@@ -8535,7 +8893,7 @@ function Show-FixItWindowOnce {
     }
     $scam = New-FixItTile -Run 'Scam' -Title 'I see a scary pop-up' -Sub "A warning telling me to call a number? Don't call it. Click here." -IconKey 'warn' -Style 'scam' -IconBg '#D9473C' -X $MX -Y $lay.ScamY -W 679 -H 72 -Wide $true
     $form.Controls.Add($scam); [void]$script:FixButtons.Add($scam); [void](Add-FixItHelpDot -Tile $scam -Key 'Scam')
-    $p1 = New-FixItTile -Run 'Screen' -Title 'Let Trey see my screen' -Sub 'Opens Zoho Assist. Trey gives you a code.' -IconKey 'mon' -Style 'primary' -IconBg '#3F8BCB' -X $MX -Y $lay.PrimaryY -W 332 -H 76 -Wide $true
+    $p1 = New-FixItTile -Run 'Screen' -Title 'Let Trey see my screen' -Sub $(if (Test-FixItHelperIsTrey) { 'Opens Zoho Assist. Trey gives you a code.' } else { 'Opens Quick Assist. Trey gives you a code.' }) -IconKey 'mon' -Style 'primary' -IconBg '#3F8BCB' -X $MX -Y $lay.PrimaryY -W 332 -H 76 -Wide $true
     $p2 = New-FixItTile -Run 'Report' -Title 'Send Trey a report' -Sub 'Something else is wrong' -IconKey 'send' -Style 'outline' -IconBg '#E6F0FA' -X ($MX + 347) -Y $lay.PrimaryY -W 332 -H 76 -Wide $true
     $form.Controls.Add($p1); $form.Controls.Add($p2); [void]$script:FixButtons.Add($p1); [void]$script:FixButtons.Add($p2)
     [void](Add-FixItHelpDot -Tile $p1 -Key 'Screen'); [void](Add-FixItHelpDot -Tile $p2 -Key 'Report')
@@ -9146,7 +9504,7 @@ function Show-FixItNameForm {
     $f.BackColor = (Get-FixItColor $script:UiBack)
     $f.ClientSize = New-Object System.Drawing.Size([int](560 * $S), [int](330 * $S))
     $q = New-Object System.Windows.Forms.Label
-    $q.AutoSize = $false; $q.Text = $script:NameQuestion
+    $q.AutoSize = $false; $q.Text = (ConvertTo-FixItHelperText $script:NameQuestion)
     $q.Font = New-Object System.Drawing.Font('Segoe UI', [single](18 * $S), [System.Drawing.FontStyle]::Bold, $px)
     $q.ForeColor = (Get-FixItColor $cText)
     $q.Location = New-Object System.Drawing.Point([int](24 * $S), [int](20 * $S)); $q.Size = New-Object System.Drawing.Size([int](512 * $S), [int](96 * $S))
@@ -9183,6 +9541,108 @@ function Show-FixItNameForm {
     return [pscustomobject]@{ Saved = $false; Name = (Get-FixItOwnerName) }
 }
 
+# ---- "Who helps you?": Trey (the usual choice) or someone else (a first name and an email address). Save, and Skip (first run) or Cancel.
+# Returns what Save-FixItHelper returns, or Saved = false. Nothing is sent from here: the caller sends the one hello email.
+function Show-FixItHelperForm {
+    param([bool]$FirstRun = $false)
+    $S = $script:UiScale; if (-not $S) { $S = 1.0 }
+    $hc = [bool]$script:UiHighContrast
+    $px = [System.Drawing.GraphicsUnit]::Pixel
+    $cText = '#1A1A1A'; $cMuted = '#555555'; if ($hc) { $cText = '#FFFFFF'; $cMuted = '#FFFFFF' }
+    $cur = Get-FixItHelper
+    $f = New-Object System.Windows.Forms.Form
+    Set-FixItFormIcon $f
+    $f.Text = 'Family Fix-It - Your helper'
+    $f.StartPosition = 'CenterScreen'
+    $f.FormBorderStyle = 'FixedDialog'
+    $f.MaximizeBox = $false; $f.MinimizeBox = $false; $f.ShowInTaskbar = $true
+    $f.BackColor = (Get-FixItColor $script:UiBack)
+    $f.ClientSize = New-Object System.Drawing.Size([int](560 * $S), [int](486 * $S))
+    $q = New-Object System.Windows.Forms.Label
+    $q.AutoSize = $false; $q.Text = $script:HelperQuestion
+    $q.Font = New-Object System.Drawing.Font('Segoe UI', [single](18 * $S), [System.Drawing.FontStyle]::Bold, $px)
+    $q.ForeColor = (Get-FixItColor $cText)
+    $q.Location = New-Object System.Drawing.Point([int](24 * $S), [int](20 * $S)); $q.Size = New-Object System.Drawing.Size([int](512 * $S), [int](52 * $S))
+    $f.Controls.Add($q)
+    $rf = New-Object System.Drawing.Font('Segoe UI', [single](17 * $S), [System.Drawing.FontStyle]::Regular, $px)
+    $r1 = New-Object System.Windows.Forms.RadioButton
+    $r1.Text = 'Trey'; $r1.Font = $rf; $r1.AutoSize = $false; $r1.ForeColor = (Get-FixItColor $cText)
+    $r1.Location = New-Object System.Drawing.Point([int](28 * $S), [int](80 * $S)); $r1.Size = New-Object System.Drawing.Size([int](500 * $S), [int](36 * $S))
+    $r1.AccessibleName = 'Trey helps me'
+    $f.Controls.Add($r1)
+    $r2 = New-Object System.Windows.Forms.RadioButton
+    $r2.Text = 'Someone else'; $r2.Font = $rf; $r2.AutoSize = $false; $r2.ForeColor = (Get-FixItColor $cText)
+    $r2.Location = New-Object System.Drawing.Point([int](28 * $S), [int](118 * $S)); $r2.Size = New-Object System.Drawing.Size([int](500 * $S), [int](36 * $S))
+    $r2.AccessibleName = 'Someone else helps me'
+    $f.Controls.Add($r2)
+    $lf = New-Object System.Drawing.Font('Segoe UI', [single](13 * $S), [System.Drawing.FontStyle]::Regular, $px)
+    $tf = New-Object System.Drawing.Font('Segoe UI', [single](16 * $S), [System.Drawing.FontStyle]::Regular, $px)
+    $l1 = New-Object System.Windows.Forms.Label
+    $l1.AutoSize = $false; $l1.Text = 'Their first name'; $l1.Font = $lf; $l1.ForeColor = (Get-FixItColor $cMuted)
+    $l1.Location = New-Object System.Drawing.Point([int](56 * $S), [int](166 * $S)); $l1.Size = New-Object System.Drawing.Size([int](480 * $S), [int](22 * $S))
+    $f.Controls.Add($l1)
+    $tn = New-Object System.Windows.Forms.TextBox
+    $tn.Font = $tf; $tn.MaxLength = $script:HelperNameMax
+    $tn.Location = New-Object System.Drawing.Point([int](56 * $S), [int](190 * $S)); $tn.Size = New-Object System.Drawing.Size([int](480 * $S), [int](36 * $S))
+    $tn.AccessibleName = 'Their first name'
+    $f.Controls.Add($tn)
+    $l2 = New-Object System.Windows.Forms.Label
+    $l2.AutoSize = $false; $l2.Text = 'Their email address'; $l2.Font = $lf; $l2.ForeColor = (Get-FixItColor $cMuted)
+    $l2.Location = New-Object System.Drawing.Point([int](56 * $S), [int](236 * $S)); $l2.Size = New-Object System.Drawing.Size([int](480 * $S), [int](22 * $S))
+    $f.Controls.Add($l2)
+    $te = New-Object System.Windows.Forms.TextBox
+    $te.Font = $tf; $te.MaxLength = $script:HelperEmailMax
+    $te.Location = New-Object System.Drawing.Point([int](56 * $S), [int](260 * $S)); $te.Size = New-Object System.Drawing.Size([int](480 * $S), [int](36 * $S))
+    $te.AccessibleName = 'Their email address'
+    $f.Controls.Add($te)
+    if ($hc) { foreach ($tbx in @($tn, $te)) { $tbx.BackColor = [System.Drawing.Color]::Black; $tbx.ForeColor = [System.Drawing.Color]::White } }
+    $msg = New-Object System.Windows.Forms.Label
+    $msg.AutoSize = $false; $msg.Font = $lf; $msg.ForeColor = (Get-FixItColor $cMuted)
+    $msg.Location = New-Object System.Drawing.Point([int](24 * $S), [int](312 * $S)); $msg.Size = New-Object System.Drawing.Size([int](512 * $S), [int](84 * $S))
+    $f.Controls.Add($msg)
+    $noteTrey = "You can change this later with 'Your helper' on the left."
+    $noteOther = "A new helper gets one email asking them to say yes. Until they do, reports go to Trey. You can change this later with 'Your helper' on the left."
+    $f.Tag = @{ R2 = $r2; N = $tn; E = $te; Msg = $msg; NoteTrey = $noteTrey; NoteOther = $noteOther; Calm = (Get-FixItColor $cMuted); Warn = (Get-FixItColor $(if ($hc) { '#FFFF00' } else { '#B3261E' })) }
+    $tog = { param($s, $e)
+        $t = $s.FindForm().Tag
+        $o = [bool]$t.R2.Checked
+        $t.N.Enabled = $o; $t.E.Enabled = $o
+        $t.Msg.ForeColor = $t.Calm
+        if ($o) { $t.Msg.Text = $t.NoteOther } else { $t.Msg.Text = $t.NoteTrey }
+    }
+    if ($cur.IsTrey) { $r1.Checked = $true } else { $r2.Checked = $true; $tn.Text = $cur.Name; $te.Text = $cur.Email }
+    $tn.Enabled = $r2.Checked; $te.Enabled = $r2.Checked
+    if ($r2.Checked) { $msg.Text = $noteOther } else { $msg.Text = $noteTrey }
+    $r1.Add_CheckedChanged($tog); $r2.Add_CheckedChanged($tog)
+    $f.Add_FormClosing({ param($s, $e)
+        if ($s.DialogResult -ne [System.Windows.Forms.DialogResult]::Yes) { return }
+        $t = $s.Tag
+        $chk = Test-FixItHelperInput -Other ([bool]$t.R2.Checked) -Name ([string]$t.N.Text) -Email ([string]$t.E.Text)
+        if (-not $chk.Ok) {
+            $e.Cancel = $true
+            $s.DialogResult = [System.Windows.Forms.DialogResult]::None
+            $t.Msg.ForeColor = $t.Warn; $t.Msg.Text = $chk.Message
+        }
+    })
+    $skipText = 'Cancel'; $skipName = 'Cancel. Keep my helper as it is.'
+    if ($FirstRun) { $skipText = 'Skip'; $skipName = 'Skip. Trey is my helper.' }
+    $save = New-FixItTile -Run '' -Title 'Save' -Sub '' -IconKey '' -Style 'yes' -IconBg '' -X 24 -Y 408 -W 240 -H 56
+    $skip = New-FixItTile -Run '' -Title $skipText -Sub '' -IconKey '' -Style 'outline' -IconBg '' -X 296 -Y 408 -W 240 -H 56
+    $save.DialogResult = 'Yes'; $skip.DialogResult = 'No'
+    $save.AccessibleName = 'Save my helper.'; $skip.AccessibleName = $skipName
+    $f.Controls.Add($save); $f.Controls.Add($skip)
+    $f.AcceptButton = $save; $f.CancelButton = $skip
+    Expand-FixItLabelsToFit -Form $f -Labels @($q, $msg) -Scale $S
+    $r = $null; $other = $false; $nm = ''; $em = ''
+    try { $r = $f.ShowDialog(); $other = [bool]$r2.Checked; $nm = [string]$tn.Text; $em = [string]$te.Text } finally { $f.Dispose() }
+    if ($r -eq 'Yes') { return (Save-FixItHelper -Other $other -Name $nm -Email $em) }
+    if ($FirstRun) {
+        Set-FixItSetting -Name 'HelperAsked' -Value (Get-Date -Format 'yyyy-MM-dd')
+        Write-FixItLog 'Helper question skipped (Trey)'
+    }
+    return [pscustomobject]@{ Saved = $false; Changed = $false; EmailChanged = $false; Message = ''; Helper = (Get-FixItHelper) }
+}
+
 # ---- "Share with a friend": a short line, then the ready-to-paste email in a read-only box, Copy message and Close. Nothing is sent or saved.
 function Show-FixItShareForm {
     $S = $script:UiScale; if (-not $S) { $S = 1.0 }
@@ -9201,7 +9661,7 @@ function Show-FixItShareForm {
     $w = [int](600 * $S); $inner = [int](552 * $S)
     $ifont = New-Object System.Drawing.Font('Segoe UI', [single](16 * $S), [System.Drawing.FontStyle]::Regular, $px)
     $mfont = New-Object System.Drawing.Font('Segoe UI', [single](15 * $S), [System.Drawing.FontStyle]::Regular, $px)
-    $introText = $(if ($url) { $script:ShareIntro } else { 'The link to share is not ready yet. Please ask Trey.' })
+    $introText = $(if ($url) { $script:ShareIntro } else { ConvertTo-FixItHelperText 'The link to share is not ready yet. Please ask Trey.' })
     $sbw = 17; try { $sbw = [System.Windows.Forms.SystemInformation]::VerticalScrollBarWidth } catch { }
     $workH = 0; try { $workH = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea.Height } catch { }
     # the intro line and the message are measured at their real width (with the shared safety margin); the window grows to fit,
@@ -9312,7 +9772,7 @@ function Show-FixItFixedDialog {
     $no = New-FixItTile -Run '' -Title 'No, still broken' -Sub '' -IconKey '' -Style 'no' -IconBg '' -X 224 -Y 206 -W 184 -H 52
     $yes.DialogResult = 'Yes'; $no.DialogResult = 'No'
     $f.Controls.Add($yes); $f.Controls.Add($no)
-    $lblNote = & $mk "If it's still broken, I'll send Trey a report automatically." 12 $false $cMuted 272 24
+    $lblNote = & $mk (ConvertTo-FixItHelperText "If it's still broken, I'll send Trey a report automatically.") 12 $false $cMuted 272 24
     $f.Controls.Add($lblNote)
     Expand-FixItLabelsToFit -Form $f -Labels @($lblTitle, $lblDetail, $lblNote) -Scale $S
     $f.CancelButton = $no
@@ -9831,7 +10291,7 @@ function Show-FixItAppsDialog {
     $sz = Get-FixItAppsDialogSize -ContentUnits $y -Scale $S -WorkingAreaHeightPx $wa
     $f.ClientSize = New-Object System.Drawing.Size([int](520 * $S), $sz.ClientH)
     $l = New-Object System.Windows.Forms.Label
-    $l.Text = 'These apps are safe to install. Trey picked them. I will not install anything else.'
+    $l.Text = (ConvertTo-FixItHelperText 'These apps are safe to install. Trey picked them. I will not install anything else.')
     $l.AutoSize = $false; $l.UseMnemonic = $false; $l.Font = $introFont
     $l.ForeColor = (Get-FixItColor $cText)
     $l.Location = New-Object System.Drawing.Point([int](24 * $S), [int](14 * $S)); $l.Size = New-Object System.Drawing.Size([int](472 * $S), [int](46 * $S))
@@ -9897,7 +10357,7 @@ function Show-FixItPcInfoForm {
     $f.BackColor = (Get-FixItColor $script:UiBack)
     $f.ClientSize = New-Object System.Drawing.Size([int](700 * $S), [int](690 * $S))
     $cap = New-Object System.Windows.Forms.Label
-    $cap.Text = 'Your PC code. Read it out if Trey asks.'
+    $cap.Text = (ConvertTo-FixItHelperText 'Your PC code. Read it out if Trey asks.')
     $cap.AutoSize = $false; $cap.Font = New-Object System.Drawing.Font('Segoe UI', [single](15 * $S), [System.Drawing.FontStyle]::Regular, $px)
     $cap.ForeColor = (Get-FixItColor $cMuted); $cap.TextAlign = 'MiddleCenter'
     $cap.Location = New-Object System.Drawing.Point([int](24 * $S), [int](12 * $S)); $cap.Size = New-Object System.Drawing.Size([int](652 * $S), [int](28 * $S))
@@ -9992,7 +10452,7 @@ function Update-FixItGuidesList {
     $hits = @(Search-FixItGuides -Guides $script:GuidesAll -Query $q)
     $script:GuidesHits = @($hits | ForEach-Object { $_.Guide })
     if ($hits.Count -eq 0) {
-        $script:GuidesMsg.Text = 'No guide for that yet - Send Trey a report?'
+        $script:GuidesMsg.Text = (ConvertTo-FixItHelperText 'No guide for that yet - Send Trey a report?')
         $b = New-FixItTile -Run ('GuideNone:' + $q) -Title 'Send Trey a report' -Sub 'Tell him what you wanted help with' -IconKey 'send' -Style 'outline' -IconBg '#E6F0FA' -X 0 -Y 6 -W 520 -H 72 -Wide $true
         $pn.Controls.Add($b)
     } else {
@@ -10370,6 +10830,13 @@ function Invoke-GuiButton {
         if ($script:TestMode) { Show-FixItTestOutcome -Title (Get-FixItActionTable)[$Which].Title -Result $pr }
         return
     }
+    if ($Which -eq 'YourHelper') {
+        # the "Who helps you?" window. After a change the main window is drawn again, so every button names the new helper.
+        $yr = Invoke-FixItYourHelper
+        if ($script:TestMode) { Show-FixItTestOutcome -Title 'Your helper' -Result $yr }
+        elseif ($script:HelperChanged) { $script:HelperChanged = $false; $script:RebuildUi = $true; $script:Form.Close() }
+        return
+    }
     if ($Which -eq 'Donate') {
         # only opens the web page: no question, no pop-up (Test mode shows its checklist instead)
         $dr = Invoke-FixItDonate
@@ -10433,7 +10900,7 @@ function Invoke-GuiButton {
     } catch {
         Write-FixItLog ('Unexpected problem: {0}' -f $_.Exception.Message) 'ERROR'
         $script:StatusLabel.Text = 'Something went wrong.'
-        [void][System.Windows.Forms.MessageBox]::Show('Sorry, something unexpected went wrong. Please click "Send Trey a report".', 'Family Fix-It', 'OK', 'Warning')
+        [void][System.Windows.Forms.MessageBox]::Show((ConvertTo-FixItHelperText 'Sorry, something unexpected went wrong. Please click "Send Trey a report".'), 'Family Fix-It', 'OK', 'Warning')
     } finally {
         $script:Form.Cursor = [System.Windows.Forms.Cursors]::Default
         foreach ($x in $script:FixButtons) { $x.Enabled = $true; $x.Invalidate() }
@@ -10517,6 +10984,7 @@ function Start-FamilyFixIt {
             'Donate'             { Show-FixItResult (Invoke-FixItDonate) }
             'Privacy'            { Show-FixItResult (Invoke-FixItPrivacy) }
             'YourName'           { Show-FixItResult (Invoke-FixItYourName) }
+            'YourHelper'         { Show-FixItResult (Invoke-FixItYourHelper) }
             'Share'              { Show-FixItResult (Invoke-FixItShare) }
             'FirstRunPending'    { Show-FixItResult (Invoke-FixItFirstRunPending) }
             'Guides'             { Show-FixItResult (Invoke-GuidesHelper) }
@@ -10539,7 +11007,7 @@ function Start-FamilyFixIt {
             Write-AdminResult (New-FixItResult $false 'Error' $_.Exception.Message)
             $exit = 1
         } else {
-            Write-Host 'Sorry, something unexpected went wrong. Please make a report and send it to Trey.'
+            Write-Host (ConvertTo-FixItHelperText 'Sorry, something unexpected went wrong. Please make a report and send it to Trey.')
             $exit = 1
         }
     }
