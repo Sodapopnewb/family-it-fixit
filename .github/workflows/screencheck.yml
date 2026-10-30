@@ -1,0 +1,66 @@
+# Pre-release SCREEN CHECK for Family Fix-It. Opens every window at 100%, 150% and 200% (and with Big text and High contrast),
+# takes pictures, and fails when any text is cut off, any button is empty, anything overlaps or the tray icon is missing.
+# Start it by hand (Actions tab -> Screen check -> Run workflow, or tools/Run-ScreenCheck.sh) or by pushing a version tag.
+# It runs only on GitHub's Windows machine and never touches a family PC.
+name: Screen check
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+jobs:
+  check:
+    name: ${{ matrix.scale }}x ${{ matrix.mode }}
+    runs-on: windows-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        scale: ['1.0', '1.5', '2.0']
+        mode: [Normal, BigText, HighContrast]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Make the screen a normal laptop size (1920 x 1080)
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tools\Set-ScreenSize.ps1 -Width 1920 -Height 1080
+      - name: Open every window and measure it
+        shell: powershell
+        run: |
+          $out = Join-Path $env:GITHUB_WORKSPACE 'out'
+          powershell -NoProfile -ExecutionPolicy Bypass -File tools\ScreenCheck.ps1 -Scale ${{ matrix.scale }} -Mode ${{ matrix.mode }} -OutDir $out
+          exit $LASTEXITCODE
+      - name: Keep the pictures and findings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screencheck-${{ matrix.scale }}x-${{ matrix.mode }}
+          path: out
+          if-no-files-found: warn
+          retention-days: 30
+  report:
+    name: Report
+    needs: check
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: screencheck-*
+          path: runs
+      - name: Join the runs into one report (fails when anything was found)
+        shell: pwsh
+        run: |
+          $note = "Commit $env:GITHUB_SHA, ref $env:GITHUB_REF_NAME."
+          ./tools/ScreenCheck-Report.ps1 -InDir runs -OutDir report -ExpectedRuns 9 -Note $note
+          $code = $LASTEXITCODE
+          if (Test-Path report/findings.md) { Get-Content report/findings.md -Raw | Add-Content -Path $env:GITHUB_STEP_SUMMARY }
+          exit $code
+      - name: Keep the report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screencheck-report
+          path: report
+          retention-days: 30
