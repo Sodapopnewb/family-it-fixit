@@ -164,6 +164,8 @@ $reviewedRaw = @{
     'Update-FixItFilesList' = 'timer, screen only'; 'Show-FixItGuidesDialog' = 'timer, screen only'
     'Set-FixItStateValue' = 'ends first in Test mode (checked below)'; 'Write-FixItUndoJournal' = 'ends first in Test mode (checked below)'; 'Write-AdminResult' = 'ends first in Test mode (checked below)'
     'Start-FixItElevated' = 'throws first in Test mode (checked below)'
+    'Stop-FixItWindowProcess' = 'closes only a Family Fix-It WINDOW, after its command line was checked again; used by updates and window replacement, never by a fix step'
+    'Request-FixItWindowClose' = 'asks a Family Fix-It window to close (the X button); same callers as above'
 }
 foreach ($b in @('Set-FixItStateValue', 'Write-FixItUndoJournal', 'Write-AdminResult')) {
     $first = @((Get-Fn $b).Body.EndBlock.Statements)[0].Extent.Text

@@ -21,7 +21,7 @@ $allFns = @($ast.FindAll({ param($n) $n -is [Management.Automation.Language.Func
 function Get-Fn { param([string]$Name) return ($allFns | Where-Object { $_.Name -eq $Name } | Select-Object -First 1) }
 function Get-Texts { param($Results) return (@($Results | ForEach-Object { $_.Status + ': ' + $_.Text }) -join ' | ') }
 
-Assert ($script:FixItVersion -eq '2.3.5') 'the program is version 2.3.5'
+Assert ([version]$script:FixItVersion -ge [version]'2.3.5') 'the program is version 2.3.5 or newer'
 
 # ================================================================ 1. administrator check
 Section 'Administrator check: deny-only admin, standard user'

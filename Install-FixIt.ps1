@@ -4,7 +4,7 @@ Install-FixIt.ps1  -  sets up Family Fix-It on this PC (no administrator needed)
 What it does, in plain words:
   1. Downloads the list of files (manifest.json) and the files from Trey's GitHub page.
   2. Checks every file against its SHA-256 fingerprint. If anything does not match, nothing is installed.
-  3. Puts the files in  %LOCALAPPDATA%\FamilyFixIt  (your own user folder).
+  3. Closes any Family Fix-It window that is still open on the old version, then puts the files in  %LOCALAPPDATA%\FamilyFixIt  (your own user folder).
   4. Makes a "Family Fix-It" shortcut (with its own icon) on the Desktop and in the Start menu.
   5. Turns on the scary-pop-up watcher (Guardian) and the weekly check-in.
   6. Opens Family Fix-It.
@@ -25,7 +25,7 @@ param(
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
-$script:InstallerVersion = '1.0.0'
+$script:InstallerVersion = '1.1.0'
 $script:InstallerPlaceholder = ('<' + 'OWNER>')   # the guard below compares with this; Publish never rewrites it
 $script:InstallerFiles = @('FamilyFixIt.ps1', 'Start-FixIt.cmd', 'README.md', 'guides.json', 'FamilyFixIt.ico')   # the only files this installer will ever write
 $script:InstallerRequired = @('FamilyFixIt.ps1', 'Start-FixIt.cmd')   # the icon is not required: a download list without it still installs
@@ -131,6 +131,87 @@ function Start-InstalledTool {
     Start-Process -FilePath $exe -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-STA', '-WindowStyle', 'Hidden', '-File', (Join-Path $Dir 'FamilyFixIt.ps1')) -WindowStyle Hidden | Out-Null
 }
 
+# ----- old windows ------------------------------------------------------------
+# A Family Fix-It window that is still open runs the OLD program. Before the files are replaced, this PC user's open Family Fix-It
+# windows are closed: first politely (the same as clicking the X), then, after about 5 seconds, by force. Only a process whose
+# command line names FamilyFixIt.ps1 and has no -Action (or -Action Gui) counts. The pop-up watcher (-Action Guardian), the weekly
+# check-in and every unrelated PowerShell are never touched; the watcher is restarted through its own GuardianOff / GuardianOn.
+$script:InstallCloseWaitSeconds = 5
+function Get-InstallGuiWindowKind {
+    param([string]$CommandLine)
+    if (-not $CommandLine) { return '' }
+    if ($CommandLine -notmatch '(?i)(?<=[\\/"''\s])FamilyFixIt\.ps1(?=["''\s]|$)') { return '' }
+    if ($CommandLine -match '(?i)\s-LibraryOnly(?=[\s"'']|$)') { return '' }
+    if ($CommandLine -match '(?i)\s-Ac[a-z]*(?:\s+|:)(?!["'']?Gui(?:["''\s]|$))\S') { return '' }
+    return 'Window'
+}
+function Get-InstallProcessTable {
+    $o = @()
+    try {
+        foreach ($p in @(Get-CimInstance -ClassName Win32_Process -Filter "Name='powershell.exe' OR Name='pwsh.exe'" -ErrorAction Stop)) {
+            $o += [pscustomobject]@{ Id = [int]$p.ProcessId; CommandLine = [string]$p.CommandLine; SessionId = [int]$p.SessionId; Owner = '' }
+        }
+    } catch { Write-InstallLog ('Could not list the running programs: ' + $_.Exception.Message) 'WARN' }
+    return @($o)
+}
+function Get-InstallProcessOwner {
+    param([int]$Id)
+    try {
+        $p = Get-CimInstance -ClassName Win32_Process -Filter ('ProcessId={0}' -f $Id) -ErrorAction Stop
+        if ($p) { $r = Invoke-CimMethod -InputObject $p -MethodName GetOwner -ErrorAction Stop; if ($r -and $r.User) { return ([string]$r.Domain + '\' + [string]$r.User) } }
+    } catch { }
+    return ''
+}
+function Get-InstallOwnSession { try { return [int][Diagnostics.Process]::GetCurrentProcess().SessionId } catch { return -1 } }
+function Get-InstallOwnUserName { return ([string]$env:USERDOMAIN + '\' + [string]$env:USERNAME) }
+function Test-InstallProcessAlive { param([int]$Id) return [bool](Get-Process -Id $Id -ErrorAction SilentlyContinue) }
+function Request-InstallWindowClose { param([int]$Id) $p = Get-Process -Id $Id -ErrorAction SilentlyContinue; if ($p) { [void]$p.CloseMainWindow() } }
+function Stop-InstallWindowProcess { param([int]$Id) Stop-Process -Id $Id -Force -ErrorAction Stop }
+
+function Get-InstallGuiProcesses {
+    $mySession = Get-InstallOwnSession
+    $me = Get-InstallOwnUserName
+    $found = @()
+    foreach ($p in @(Get-InstallProcessTable)) {
+        if ([int]$p.Id -eq $PID) { continue }
+        if (-not (Get-InstallGuiWindowKind -CommandLine ([string]$p.CommandLine))) { continue }
+        if ($mySession -ge 0 -and [int]$p.SessionId -ne $mySession) { continue }   # another person signed in on this PC
+        $owner = [string]$p.Owner
+        if (-not $owner) { $owner = [string](Get-InstallProcessOwner -Id ([int]$p.Id)) }
+        if ($owner -and $me -ne '\' -and [string]::Compare($owner, $me, $true) -ne 0) { continue }
+        $found += [int]$p.Id
+    }
+    return @($found)
+}
+
+# Closes this PC user's open Family Fix-It windows. Returns how many were closed. Never throws: an update must not fail over this.
+function Stop-InstallGuiWindows {
+    param([int]$WaitSeconds = -1)
+    if ($WaitSeconds -lt 0) { $WaitSeconds = $script:InstallCloseWaitSeconds }
+    $ids = @()
+    try { $ids = @(Get-InstallGuiProcesses) } catch { Write-InstallLog ('Could not look for open windows: ' + $_.Exception.Message) 'WARN'; return 0 }
+    if ($ids.Count -eq 0) { Write-InstallLog 'No Family Fix-It window is open'; return 0 }
+    Say '   Closing the Family Fix-It window that is open, so it can be updated ...'
+    Write-InstallLog ('Closing {0} open Family Fix-It window(s): {1}; asking politely first' -f $ids.Count, ($ids -join ', '))
+    foreach ($id in $ids) { try { Request-InstallWindowClose -Id $id } catch { Write-InstallLog ('Could not ask window {0} to close: {1}' -f $id, $_.Exception.Message) 'WARN' } }
+    $end = (Get-Date).AddSeconds($WaitSeconds)
+    while ((Get-Date) -lt $end -and @($ids | Where-Object { Test-InstallProcessAlive -Id $_ }).Count -gt 0) { Start-Sleep -Milliseconds 200 }
+    $left = @($ids | Where-Object { Test-InstallProcessAlive -Id $_ })
+    if ($left.Count -gt 0) {
+        $still = @(); try { $still = @(Get-InstallGuiProcesses) } catch { }
+        foreach ($id in $left) {
+            if ($still -notcontains $id) { Write-InstallLog ('Process {0} is no longer a Family Fix-It window; left alone' -f $id); continue }
+            try { Stop-InstallWindowProcess -Id $id; Write-InstallLog ('Window {0} did not close on its own; closed by force' -f $id) }
+            catch { Write-InstallLog ('Could not close window {0}: {1}' -f $id, $_.Exception.Message) 'WARN' }
+        }
+        $t2 = (Get-Date).AddSeconds(2)
+        while ((Get-Date) -lt $t2 -and @($left | Where-Object { Test-InstallProcessAlive -Id $_ }).Count -gt 0) { Start-Sleep -Milliseconds 100 }
+    }
+    $closed = @($ids | Where-Object { -not (Test-InstallProcessAlive -Id $_) })
+    Write-InstallLog ('Closed {0} of {1} Family Fix-It window(s): {2}' -f $closed.Count, $ids.Count, ($closed -join ', '))
+    return $closed.Count
+}
+
 # ----- the list of files ----------------------------------------------------
 # Reads manifest.json text and returns the entries, or throws a plain-English message.
 function Read-InstallManifest {
@@ -191,6 +272,8 @@ function Install-FixItFiles {
             $changed += $f.Path
         }
         if ($changed.Count -gt 0) {
+            # a window that is still open runs the old program: close it before the program file is replaced (a change to the other files alone does not need that)
+            if ($changed -contains 'FamilyFixIt.ps1') { try { [void](Stop-InstallGuiWindows) } catch { Write-InstallLog ('Closing open windows: ' + $_.Exception.Message) 'WARN' } }
             $prev = Join-Path $Dir 'previous'
             foreach ($p in $changed) {
                 $dest = Join-Path $Dir $p
@@ -296,6 +379,7 @@ function Install-FamilyFixIt {
         Say ''
         Say 'Practice run only - nothing was changed. This is what would happen:' 'Yellow'
         Say ('   - download and check {0} files into {1}' -f @($manifest.Files).Count, $Dir)
+        Say '   - close a Family Fix-It window that is still open on the old version'
         Say ('   - make a "{0}" shortcut on the Desktop and in the Start menu' -f $script:ShortcutName)
         Say ('   - make a "{0}" shortcut in the Start menu (it only checks the fixes and changes nothing)' -f $script:TestShortcutName)
         Say '   - turn on the pop-up watcher (Guardian) and the weekly check-in'

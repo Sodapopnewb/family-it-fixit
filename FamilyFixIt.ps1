@@ -37,7 +37,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 # Settings
 # ---------------------------------------------------------------------------
-$script:FixItVersion = '2.3.5'
+$script:FixItVersion = '2.3.6'
 $script:DefaultManifestUrl = 'https://raw.githubusercontent.com/Sodapopnewb/family-it-fixit/main/manifest.json'
 $script:OwnerPlaceholder = ('<' + 'OWNER>')   # the guards compare with this; Publish never rewrites it
 # Where reports are sent (a small Cloudflare Worker that Trey runs). The app header is NOT a secret.
@@ -568,6 +568,8 @@ function Get-FixItPreflight {
             if ($main -and (Test-Path -LiteralPath $main)) {
                 if (Test-FixItFileWritable -Path $main) { & $pass 'the program file can be replaced by the update' } else { & $fail 'the program file cannot be replaced (it is locked or read-only)' }
             } else { & $warn 'the program folder is not known here' }
+            $others = 0; try { $others = @(Get-FixItGuiProcesses).Count } catch { }
+            if ($others -gt 0) { & $pass ('{0} other Family Fix-It window(s) would be closed first (politely); none is closed in Test mode' -f $others) } else { & $pass 'no other Family Fix-It window is open' }
             break
         }
         'Save-WebFile' { & $pass 'a download would be saved in a temporary folder'; break }
@@ -3045,6 +3047,8 @@ function Install-FixItUpdate {
             $txt = Get-Content -LiteralPath $main -Raw
             if ($txt -notmatch ("FixItVersion = '" + [regex]::Escape([string]$Manifest.Version) + "'")) { throw 'Downloaded script version does not match the update list' }
         }
+        # Windows still open on the old version would keep running old code: close the others first (never stops the update if it cannot).
+        try { [void](Close-FixItOtherGuiWindows -Why 'update') } catch { Write-FixItLog ('Could not close the other windows: {0}' -f $_.Exception.Message) 'WARN' }
         $backup = Join-Path $script:InstallDir 'previous'
         New-Item -ItemType Directory -Path $backup -Force | Out-Null
         $done = @()
@@ -6766,7 +6770,14 @@ public static class FixItGuiFocus {
 }
 '@
 
+# Which kind of window this run is: the normal one, the Test mode one (-Test) or the practice one (-WhatIf).
+function Get-FixItGuiMode {
+    if ($script:TestMode) { return 'Test' }
+    if ($script:DryRun) { return 'Practice' }
+    return 'Normal'
+}
 function Get-FixItGuiInstanceNames {
+    param([string]$Mode = '')   # '' = this run's own mode; 'Normal', 'Test' or 'Practice' = that mode's names (used to find a window of the other kind)
     $key = $script:GuiInstanceKeyOverride
     if (-not $key) {
         try { $key = [string][Security.Principal.WindowsIdentity]::GetCurrent().User.Value } catch { $key = '' }
@@ -6774,9 +6785,10 @@ function Get-FixItGuiInstanceNames {
         if (-not $key) { $key = 'user' }
     }
     $key = ($key -replace '[^A-Za-z0-9\-]', '_')
+    if (-not $Mode) { $Mode = Get-FixItGuiMode }
     $suffix = ''
-    if ($script:TestMode) { $suffix = '-Test' }
-    elseif ($script:DryRun) { $suffix = '-Practice' }   # practice mode (-WhatIf) is its own window, so it never hides a real one
+    if ($Mode -eq 'Test') { $suffix = '-Test' }
+    elseif ($Mode -eq 'Practice') { $suffix = '-Practice' }   # practice mode (-WhatIf) is its own window, so it never hides a real one
     return [pscustomobject]@{ Mutex = ('Local\FamilyFixIt-GUI-' + $key + $suffix); Event = ('Local\FamilyFixIt-GUI-Show-' + $key + $suffix); Key = ($key + $suffix) }
 }
 function Get-FixItGuiInstanceFile {
@@ -6914,16 +6926,216 @@ function Invoke-FixItGuiShowExisting {
     return $asked
 }
 
+# ---------------------------------------------------------------------------
+# Old windows (v2.3.6). A window that is still open on an OLD version must never hide the new one (a Test mode window left open
+# on 2.3.4 swallowed the 2.3.5 start, so the test ran on old code). So:
+#   - an update (the installer or the update button) first closes the open Family Fix-It windows of this user;
+#   - a start that finds a window of a different version closes it and opens the new one;
+#   - a start that finds a window of the other kind (normal <-> Test mode) replaces it, so the TEST MODE banner is always true.
+# Only Family Fix-It WINDOWS are ever closed: a process counts only when its command line names FamilyFixIt.ps1 and either has no
+# -Action or has -Action Gui. The pop-up watcher (-Action Guardian), the weekly check-in, the administrator parts and every
+# unrelated PowerShell are never touched here. The pop-up watcher is restarted only through its own path (GuardianOff / GuardianOn).
+# ---------------------------------------------------------------------------
+$script:GuiCloseWaitSeconds = 5
+
+# 'Normal', 'Test', 'Practice' for a Family Fix-It window's command line; '' for anything else.
+function Get-FixItGuiWindowKind {
+    param([string]$CommandLine)
+    if (-not $CommandLine) { return '' }
+    if ($CommandLine -notmatch '(?i)(?<=[\\/"''\s])FamilyFixIt\.ps1(?=["''\s]|$)') { return '' }
+    if ($CommandLine -match '(?i)\s-LibraryOnly(?=[\s"'']|$)') { return '' }   # a script that only borrows the functions is not a window
+    if ($CommandLine -match '(?i)\s-Ac[a-z]*(?:\s+|:)(?!["'']?Gui(?:["''\s]|$))\S') { return '' }   # any other action (Guardian, CheckIn, *Admin ...) is not a window
+    if ($CommandLine -match '(?i)\s-Test(?=[\s"'']|$)') { return 'Test' }
+    if ($CommandLine -match '(?i)\s-(?:WhatIf|DryRun)(?=[\s"'']|$)') { return 'Practice' }
+    return 'Normal'
+}
+
+# Pretend-able Windows facts (the tests replace these).
+function Get-FixItProcessTable {
+    $o = @()
+    try {
+        foreach ($p in @(Get-CimInstance -ClassName Win32_Process -Filter "Name='powershell.exe' OR Name='pwsh.exe'" -ErrorAction Stop)) {
+            $o += [pscustomobject]@{ Id = [int]$p.ProcessId; Name = [string]$p.Name; CommandLine = [string]$p.CommandLine; SessionId = [int]$p.SessionId; Owner = '' }
+        }
+    } catch { Write-FixItLog ('Could not list the running programs: {0}' -f $_.Exception.Message) 'WARN' }
+    return @($o)
+}
+function Get-FixItProcessOwner {
+    param([int]$Id)
+    try {
+        $p = Get-CimInstance -ClassName Win32_Process -Filter ('ProcessId={0}' -f $Id) -ErrorAction Stop
+        if ($p) { $r = Invoke-CimMethod -InputObject $p -MethodName GetOwner -ErrorAction Stop; if ($r -and $r.User) { return ([string]$r.Domain + '\' + [string]$r.User) } }
+    } catch { }
+    return ''
+}
+function Get-FixItOwnSession { try { return [int][Diagnostics.Process]::GetCurrentProcess().SessionId } catch { return -1 } }
+function Get-FixItOwnUserName { return ([string]$env:USERDOMAIN + '\' + [string]$env:USERNAME) }
+function Test-FixItProcessAlive { param([int]$Id) return [bool](Get-Process -Id $Id -ErrorAction SilentlyContinue) }
+# The polite way: the same as clicking the X on the window.
+function Request-FixItWindowClose {
+    param([int]$Id)
+    $p = Get-Process -Id $Id -ErrorAction SilentlyContinue
+    if ($p) { [void]$p.CloseMainWindow() }
+}
+function Stop-FixItWindowProcess { param([int]$Id) Stop-Process -Id $Id -Force -ErrorAction Stop }
+
+# The Family Fix-It windows of this user (not this process).
+function Get-FixItGuiProcesses {
+    $mySession = Get-FixItOwnSession
+    $me = Get-FixItOwnUserName
+    $found = @()
+    foreach ($p in @(Get-FixItProcessTable)) {
+        if ([int]$p.Id -eq $PID) { continue }
+        $kind = Get-FixItGuiWindowKind -CommandLine ([string]$p.CommandLine)
+        if (-not $kind) { continue }
+        if ([int]$p.SessionId -ne $mySession -and $mySession -ge 0) { continue }   # another person signed in on this PC
+        $owner = [string](Get-FixItProp $p 'Owner' '')
+        if (-not $owner) { $owner = [string](Get-FixItProcessOwner -Id ([int]$p.Id)) }
+        if ($owner -and $me -ne '\' -and [string]::Compare($owner, $me, $true) -ne 0) { continue }
+        $found += [pscustomobject]@{ Id = [int]$p.Id; Kind = $kind }
+    }
+    return @($found)
+}
+
+# Closes the given windows: ask politely (close the window), wait a few seconds, then force only the ones that are still open
+# AND are still Family Fix-It windows. Returns the ids that were closed. -Replacing = a window being opened right now replaces them
+# (allowed in Test mode: it only touches Family Fix-It's own windows). Without it, Test mode and practice mode close nothing.
+function Close-FixItGuiProcesses {
+    param([int[]]$Ids, [string]$Why = 'update', [switch]$Replacing, [Nullable[int]]$WaitSeconds = $null)
+    $ids = @($Ids | Where-Object { $_ -gt 0 -and $_ -ne $PID })
+    if ($ids.Count -eq 0) { return @() }
+    if (($script:TestMode -or $script:DryRun) -and -not $Replacing) {
+        Write-FixItLog ('Would close {0} open Family Fix-It window(s) first ({1})' -f $ids.Count, $Why) 'DRYRUN'
+        return @()
+    }
+    $wait = $script:GuiCloseWaitSeconds; if ($null -ne $WaitSeconds) { $wait = [int]$WaitSeconds }
+    Write-FixItLog ('Closing {0} open Family Fix-It window(s) ({1}); asking politely first' -f $ids.Count, $Why)
+    foreach ($id in $ids) { try { Request-FixItWindowClose -Id $id } catch { Write-FixItLog ('Could not ask window {0} to close: {1}' -f $id, $_.Exception.Message) 'WARN' } }
+    $end = (Get-Date).AddSeconds($wait)
+    while ($true) {
+        $left = @($ids | Where-Object { Test-FixItProcessAlive -Id $_ })
+        if ($left.Count -eq 0 -or (Get-Date) -ge $end) { break }
+        Wait-FixIt -Milliseconds 200
+    }
+    $left = @($ids | Where-Object { Test-FixItProcessAlive -Id $_ })
+    if ($left.Count -gt 0) {
+        # still open: force only those that are STILL Family Fix-It windows (the id could have been reused)
+        $still = @(Get-FixItGuiProcesses | ForEach-Object { $_.Id })
+        foreach ($id in $left) {
+            if ($still -notcontains $id) { Write-FixItLog ('Process {0} is no longer a Family Fix-It window; leaving it alone' -f $id); continue }
+            try { Stop-FixItWindowProcess -Id $id; Write-FixItLog ('Window {0} did not close on its own; it was closed by force' -f $id) }
+            catch { Write-FixItLog ('Could not close window {0}: {1}' -f $id, $_.Exception.Message) 'WARN' }
+        }
+        $t2 = (Get-Date).AddSeconds(2)
+        while ((Get-Date) -lt $t2 -and @($left | Where-Object { Test-FixItProcessAlive -Id $_ }).Count -gt 0) { Wait-FixIt -Milliseconds 100 }
+    }
+    $closed = @($ids | Where-Object { -not (Test-FixItProcessAlive -Id $_) })
+    Write-FixItLog ('Closed {0} of {1} Family Fix-It window(s): {2}' -f $closed.Count, $ids.Count, ($closed -join ', '))
+    return @($closed)
+}
+
+# The update calls this before it replaces the program files: every OTHER Family Fix-It window of this user goes
+# (this window is the one running the update; it tells the person to reopen).
+function Close-FixItOtherGuiWindows {
+    param([string]$Why = 'update')
+    $ids = @(Get-FixItGuiProcesses | ForEach-Object { $_.Id })
+    if ($ids.Count -eq 0) { Write-FixItLog 'No other Family Fix-It window is open'; return @() }
+    return @(Close-FixItGuiProcesses -Ids $ids -Why $Why)
+}
+
+function Get-FixItDiskVersion {
+    param([string]$Path = '')
+    if (-not $Path) { $Path = $script:SelfPath }
+    try {
+        if ($Path -and (Test-Path -LiteralPath $Path)) {
+            $m = [regex]::Match([IO.File]::ReadAllText($Path), "FixItVersion = '(\d+\.\d+\.\d+)'")
+            if ($m.Success) { return $m.Groups[1].Value }
+        }
+    } catch { }
+    return [string]$script:FixItVersion
+}
+
+# What the window handle file says about the open window: pid, hwnd, version. $null when there is no usable file.
+function Read-FixItGuiInstanceInfo {
+    param([string]$Key)
+    $f = Get-FixItGuiInstanceFile -Key $Key
+    if (-not (Test-Path -LiteralPath $f)) { return $null }
+    try {
+        $j = Get-Content -LiteralPath $f -Raw | ConvertFrom-Json
+        if ($null -eq $j) { return $null }
+        return [pscustomobject]@{ pid = [int](Get-FixItProp $j 'pid' 0); hwnd = [int64](Get-FixItProp $j 'hwnd' 0); version = [string](Get-FixItProp $j 'version' '') }
+    } catch { return $null }
+}
+
+# 'Replace' = the open window is a different version from the program on disk, and this start IS the program on disk: close it and open this one.
+# 'Forward' = same version, or it cannot be told: bring the open window forward as before.
+function Get-FixItGuiExistingDecision {
+    param($Info, [string]$DiskVersion, [string]$OwnVersion)
+    if ($null -eq $Info -or [int](Get-FixItProp $Info 'pid' 0) -le 0) { return 'Forward' }
+    if ($DiskVersion -and $OwnVersion -and $OwnVersion -ne $DiskVersion) { return 'Forward' }   # this start is not the newest program itself: it must not replace a window
+    $has = [string](Get-FixItProp $Info 'version' '')
+    if ($has -and $DiskVersion -and $has -eq $DiskVersion) { return 'Forward' }
+    return 'Replace'   # a different version, or an old window that never said which one it is
+}
+
+# Closes the old window (only when it really is a Family Fix-It window of this user). Returns $true when it is gone.
+function Invoke-FixItGuiReplaceExisting {
+    param($Info)
+    $oldPid = [int](Get-FixItProp $Info 'pid' 0)
+    $isWindow = @(Get-FixItGuiProcesses | Where-Object { $_.Id -eq $oldPid }).Count -gt 0
+    if (-not $isWindow) { Write-FixItLog ('Process {0} is not a Family Fix-It window (or is not yours); it is left alone' -f $oldPid); return $false }
+    $closed = @(Close-FixItGuiProcesses -Ids @($oldPid) -Why 'an older window' -Replacing)
+    return ($closed.Count -gt 0)
+}
+
+# A window of the other kind (normal <-> Test mode) is closed so this start can open the kind that was asked for.
+# Practice mode (-WhatIf) is its own thing and never takes part.
+function Close-FixItOtherModeWindow {
+    $mine = Get-FixItGuiMode
+    if ($mine -eq 'Practice') { return @() }
+    $other = 'Test'; if ($mine -eq 'Test') { $other = 'Normal' }
+    $key = (Get-FixItGuiInstanceNames -Mode $other).Key
+    $info = Read-FixItGuiInstanceInfo -Key $key
+    if ($null -eq $info -or $info.pid -le 0 -or $info.pid -eq $PID) { return @() }
+    $isThat = @(Get-FixItGuiProcesses | Where-Object { $_.Id -eq $info.pid -and $_.Kind -eq $other }).Count -gt 0
+    if (-not $isThat) { return @() }
+    Write-FixItLog ('A {0} window is open; closing it so the {1} window can open instead.' -f $(if ($other -eq 'Test') { 'Test mode' } else { 'normal' }), $(if ($mine -eq 'Test') { 'Test mode' } else { 'normal' }))
+    $closed = @(Close-FixItGuiProcesses -Ids @($info.pid) -Why ('replaced by the ' + $mine + ' window') -Replacing)
+    return $closed
+}
+
 function Show-FixItWindow {
     $instance = $null
     if (Test-FixItGuiSingleInstanceApplies) {
+        # A window of the other kind (normal <-> Test mode) is replaced by the one asked for: the TEST MODE banner must always be true.
+        try { [void](Close-FixItOtherModeWindow) } catch { Write-FixItLog ('Could not check for a window of the other kind: {0}' -f $_.Exception.Message) 'WARN' }
         $instance = Enter-FixItGuiInstance
         if (-not $instance.Acquired) {
-            Write-FixItLog 'Family Fix-It is already open: bringing that window forward and closing this start.'
-            $ok = $false
-            try { $ok = Invoke-FixItGuiShowExisting -Instance $instance } catch { Write-FixItLog ('Could not reach the open window: {0}' -f $_.Exception.Message) 'WARN' }
-            if (-not $ok) { Write-FixItLog 'The open window could not be reached; it may be busy. Nothing else was opened.' 'WARN' }
-            return
+            $info = $null
+            try { $info = Read-FixItGuiInstanceInfo -Key $instance.Names.Key } catch { Write-FixItLog ('Could not read the open window''s details: {0}' -f $_.Exception.Message) 'WARN' }
+            $disk = Get-FixItDiskVersion
+            $decision = Get-FixItGuiExistingDecision -Info $info -DiskVersion $disk -OwnVersion $script:FixItVersion
+            if ($decision -eq 'Replace') {
+                $was = [string](Get-FixItProp $info 'version' '')
+                Write-FixItLog ('The open Family Fix-It window is an older version ({0}; the program on disk is {1}): closing it and opening a new one.' -f $(if ($was) { $was } else { 'unknown' }), $disk)
+                $gone = $false
+                try { $gone = Invoke-FixItGuiReplaceExisting -Info $info } catch { Write-FixItLog ('Could not replace the open window: {0}' -f $_.Exception.Message) 'WARN' }
+                if ($gone) {
+                    # the old window gave its lock back (or died holding it: that is taken over); this start becomes the window
+                    for ($try = 0; $try -lt 20 -and -not $instance.Acquired; $try++) {
+                        $instance = Enter-FixItGuiInstance
+                        if (-not $instance.Acquired) { Wait-FixIt -Milliseconds 250 }
+                    }
+                    if (-not $instance.Acquired) { Write-FixItLog 'The older window closed but the one-window lock did not come free in time' 'WARN' }
+                }
+            }
+            if (-not $instance.Acquired) {
+                Write-FixItLog 'Family Fix-It is already open: bringing that window forward and closing this start.'
+                $ok = $false
+                try { $ok = Invoke-FixItGuiShowExisting -Instance $instance } catch { Write-FixItLog ('Could not reach the open window: {0}' -f $_.Exception.Message) 'WARN' }
+                if (-not $ok) { Write-FixItLog 'The open window could not be reached; it may be busy. Nothing else was opened.' 'WARN' }
+                return
+            }
         }
     }
     try {
