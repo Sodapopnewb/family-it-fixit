@@ -48,7 +48,7 @@ $sampleDocs = [Environment]::GetFolderPath('MyDocuments')
 $sampleNames = @(
     'Quarterly tax return and the family reunion photographs 2026 FINAL version 3 (copy) (copy).docx',
     'Mom and Dad anniversary trip itinerary and hotel confirmations.pdf',
-    'Receipt.pdf', 'Averyveryveryverylongfilenamewithoutanyspacesatalltoseehowthewindowwrapsitaroundtheedge2026.xlsx',
+    'Receipt.pdf', 'IMG_20260814_153022_family_reunion_final_edited_v2.jpg',
     'School newsletter October.docx', 'Insurance card front and back.jpg')
 foreach ($n in $sampleNames) { try { $p = Join-Path $sampleDocs $n; if (-not (Test-Path -LiteralPath $p)) { [IO.File]::WriteAllText($p, 'sample') } } catch { } }
 
@@ -392,6 +392,25 @@ function Get-TileRects {
     return $out
 }
 
+$script:RefInk = @{}
+function Get-ReferenceInkWidth {
+    # how wide (in pixels) a single line of text really is when drawn the way the tiles draw it, with unlimited room
+    param([string]$Text, $Font)
+    $key = ($Font.Name + '|' + $Font.Size + '|' + $Font.Style + '|' + $Text)
+    if ($script:RefInk.ContainsKey($key)) { return $script:RefInk[$key] }
+    $bmp = New-Object System.Drawing.Bitmap(2400, 120, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    $g = [System.Drawing.Graphics]::FromImage($bmp)
+    $w = 0
+    try {
+        $g.Clear([System.Drawing.Color]::White)
+        $fl = $TF::Left -bor $TF::NoPadding -bor $TF::SingleLine -bor $TF::VerticalCenter
+        [System.Windows.Forms.TextRenderer]::DrawText($g, $Text, $Font, (New-Object System.Drawing.Rectangle(0, 0, 2400, 120)), [System.Drawing.Color]::Black, $fl)
+        $e = [ScNative]::InkExtent($bmp, 0, 0, 2400, 120, 60)
+        if ($e[1] -ge 0) { $w = $e[1] + 1 }
+    } finally { $g.Dispose(); $bmp.Dispose() }
+    $script:RefInk[$key] = $w
+    return $w
+}
 function Test-Tile {
     param($B, $Form)
     $t = $B.Tag
@@ -416,8 +435,12 @@ function Test-Tile {
         if ($null -eq $tileBmp) { $tileBmp = New-Object System.Drawing.Bitmap($B.Width, $B.Height, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb); try { $B.DrawToBitmap($tileBmp, (New-Object System.Drawing.Rectangle(0, 0, $B.Width, $B.Height))) } catch { $tileBmp.Dispose(); $tileBmp = $null } }
         if ($null -ne $tileBmp) {
             $ext = [ScNative]::InkExtent($tileBmp, $rc.X, $rc.Y, $rc.Width, $rc.Height, 60)
-            if ($ext[1] -ge 0 -and $ext[1] -ge ($rc.Width - 2) -and $sz.Width -gt ($rc.Width - 12)) {
-                Add-Finding 'clipped-text' $B ('The {0} "{1}" runs right to the edge of the {2}px it is given (it needs about {3}px), so it is cut off or ends in "...".' -f $r.Name, $r.Text, $rc.Width, $sz.Width) $Form
+            $refW = Get-ReferenceInkWidth -Text ([string]$r.Text) -Font $r.Font
+            # drawn text that is shorter than the same text drawn with unlimited room has lost its end (replaced by "...")
+            if ($ext[1] -ge 0 -and $refW -gt 0 -and ($refW - ($ext[1] + 1)) -ge 3) {
+                Add-Finding 'clipped-text' $B ('The {0} "{1}" is cut off and ends in "...": it needs {2}px but only {3}px are given.' -f $r.Name, $r.Text, $refW, $rc.Width) $Form
+            } elseif ($ext[1] -ge 0 -and $refW -gt $rc.Width) {
+                Add-Finding 'clipped-text' $B ('The {0} "{1}" needs {2}px but only {3}px are given, so it is cut off.' -f $r.Name, $r.Text, $refW, $rc.Width) $Form
             }
         }
     }
