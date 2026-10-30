@@ -1,0 +1,30 @@
+// Family Fix-It report receiver. Deploy from this folder:  wrangler deploy
+// The ids below are the ones already in use by the deployed worker (KV "family-fixit-reports", Durable Object RateLimiter).
+// Email is OFF until the lines marked EMAIL are filled in (see README.md "Who helps you? deploy steps").
+{
+  "name": "fixit-report",
+  "main": "index.js",
+  "compatibility_date": "2026-10-01",
+  "kv_namespaces": [
+    { "binding": "REPORTS", "id": "9f101a656c6540859b9d1d6261af733a" }
+  ],
+  "durable_objects": {
+    "bindings": [ { "name": "LIMITER", "class_name": "RateLimiter" } ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": [ "RateLimiter" ] }
+  ],
+  "vars": {
+    // EMAIL: the address reports and confirm emails are sent from. Its domain must be onboarded to Cloudflare Email Sending.
+    // "REPORT_FROM": "Family Fix-It <fixit@YOUR-DOMAIN>",
+    // EMAIL: Trey's own address (reports for Trey go here too, and a helper with this address is treated as Trey). Optional.
+    // "REPORT_TO": "trey@example.com",
+    // EMAIL: the public address of this worker, used in the links in the emails. Default: the address the request came in on.
+    // "PUBLIC_URL": "https://fixit-report.hg-fixit.workers.dev",
+    // Optional caps (defaults: 150 confirm emails a day, 500 report emails a day).
+    "MAX_CONFIRMS_PER_DAY": "150",
+    "MAX_MAILS_PER_DAY": "500"
+  }
+  // EMAIL: uncomment after the domain is onboarded:
+  // "send_email": [ { "name": "EMAIL" } ]
+}

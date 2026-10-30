@@ -1,0 +1,6 @@
+{
+  "name": "fixit-report-worker",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "node test.mjs && node test-helper.mjs" }
+}
