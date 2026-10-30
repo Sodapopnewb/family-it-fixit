@@ -1,4 +1,4 @@
-# Family Fix-It (v2.3.7)
+# Family Fix-It (v2.3.8)
 
 A Windows tool for family. Big plain-language buttons fix the common problems by themselves, ask "Did that fix it?", and send Trey a report when they cannot.
 Two small things can run in the background, and both have an on/off switch in the side bar: the **pop-up watcher** (on by default) and the optional **weekly check-in**.
@@ -149,6 +149,10 @@ Mock tests cover all the decisions (what counts as full screen, when to ask, wha
     - **Report line.** Every help report, scary pop-up alert, weekly check-in and hardware alert has `Name: <name>` (or `Name: not given`) on the line right under `PC code:`. `tools/report_feed.py` (parser version 2) reads it as `owner_name` (empty for old reports and for "not given"); see `dashboard/README.md`.
     - **Silent installs never hang.** The installer only leaves a note (`PrivacyPending=1`) on a fresh install and shows nothing. Silent installs, `-Yes`, practice mode and Test mode skip the windows and log it; the first normal window start after that shows them, once. Test mode reports what it would show. Updated PCs are not asked and not shown the window; they only get the two links.
     - **Check on a real PC (Windows PowerShell 5.1):** (a) the tray icon appears, its menu works, and it goes away when the watcher stops; (b) the hardware readers on a laptop and a desktop (make/model, serial, memory, drives, battery); (c) the My PC info layout; (d) Thank Trey opens the browser at the PayPal page; (e) the What's shared and Your name windows and the footer links at 100%, 150% and 200% scaling, with Big text and with High contrast; (f) fresh install: the privacy window then the name question appear once, on the first normal start; (g) a silent or `-Yes` install shows nothing, and the first normal start shows them; (h) an update shows neither.
+
+23. **What is new in 2.3.8 (two empty-looking buttons fixed):**
+    - The **Skip** button in "What's your name?" and the **I don't know** button in the Chrome question showed as an empty box: their label was drawn below the bottom edge of the 56 px button. Any button with only a title (no icon, no second line) is now drawn with the title centered. Same white button, blue border and blue label (yellow on black in High contrast). Nothing else changes; no other button in the program is drawn differently.
+    - **Check on a real PC (Windows PowerShell 5.1):** open **Your name** and the Chrome question (Test mode shows the Chrome question when Chrome is missing): the labels **Skip** and **I don't know** are visible and centered at 100%, 125% and 150% scaling and in Big text and High contrast; hover and keyboard focus still highlight them.
 
 ### Reports (Cloudflare Worker + KV)
 - The tool POSTs JSON `{pcName, version, kind, report}` with the header `X-FixIt-App: family-it-fixit` to `https://fixit-report.hg-fixit.workers.dev/report` (change with `-ReportUrl`). No secret is stored on family PCs.

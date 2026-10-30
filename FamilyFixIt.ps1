@@ -37,7 +37,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 # Settings
 # ---------------------------------------------------------------------------
-$script:FixItVersion = '2.3.7'
+$script:FixItVersion = '2.3.8'
 $script:DefaultManifestUrl = 'https://raw.githubusercontent.com/Sodapopnewb/family-it-fixit/main/manifest.json'
 $script:OwnerPlaceholder = ('<' + 'OWNER>')   # the guards compare with this; Publish never rewrites it
 # Where reports are sent (a small Cloudflare Worker that Trey runs). The app header is NOT a secret.
@@ -7259,6 +7259,15 @@ function New-FixItRoundPath {
 
 function Get-FixItColor { param([string]$Hex) return [System.Drawing.ColorTranslator]::FromHtml($Hex) }
 
+# Does this tile show only its title, centered? Yes/No/plain buttons always do. So does any other tile with no icon, not wide and no
+# subtitle (for example the outline Skip and "I don't know" buttons): the two-line layout (icon, then title, then subtitle) would draw their
+# label below the bottom of a short button, and the button would look empty (fixed in 2.3.8).
+function Test-FixItTileCenteredText {
+    param([string]$Style, [bool]$HasIcon = $false, [bool]$Wide = $false, [string]$Sub = '')
+    if ($Style -eq 'yes' -or $Style -eq 'no' -or $Style -eq 'btn') { return $true }
+    return ((-not $HasIcon) -and (-not $Wide) -and [string]::IsNullOrEmpty($Sub))
+}
+
 # Draws one tile. Everything it needs is in the button's Tag.
 function Invoke-FixItTilePaint {
     param($Btn, [System.Drawing.Graphics]$G)
@@ -7292,7 +7301,7 @@ function Invoke-FixItTilePaint {
     $G.DrawPath($pen, $path)
     $br.Dispose(); $pen.Dispose(); $path.Dispose()
     $tf = [System.Windows.Forms.TextFormatFlags]
-    if ($style -eq 'yes' -or $style -eq 'no' -or $style -eq 'btn') {
+    if (Test-FixItTileCenteredText -Style $style -HasIcon ([bool]$t.Icon) -Wide ([bool]$t.Wide) -Sub ([string]$t.Sub)) {
         $cf = $tf::HorizontalCenter -bor $tf::VerticalCenter -bor $tf::SingleLine -bor $tf::NoPadding
         $cfont = $script:UiFonts.Big; if ($style -eq 'btn') { $cfont = $script:UiFonts.Title }
         [System.Windows.Forms.TextRenderer]::DrawText($G, [string]$t.Title, $cfont, (New-Object System.Drawing.Rectangle(0, 0, $w, $h)), (Get-FixItColor $ttl), $cf)
