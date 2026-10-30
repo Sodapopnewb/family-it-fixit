@@ -388,7 +388,7 @@ foreach ($fn in $fits) {
     Assert ($t -notmatch 'NoPadding' -and $t -notmatch 'TextRenderer\]::MeasureText') "$fn : no private measuring that differs from how the label draws"
 }
 Assert ((Get-Fn 'Show-FixItPrivacyForm') -match 'AutoScroll' -and (Get-Fn 'Show-FixItPlanDialog') -match 'AutoScroll') 'the long windows (what is shared, the plan) still scroll when the screen is too small'
-foreach ($fn in @('Show-FixItShareForm', 'Show-FixItNameForm', 'Show-FixItFixedDialog', 'Show-FixItChromeAskDialog', 'Show-FixItCountdownDialog', 'Show-FixItScamForm')) {
+foreach ($fn in @('Show-FixItNameForm', 'Show-FixItFixedDialog', 'Show-FixItChromeAskDialog', 'Show-FixItCountdownDialog', 'Show-FixItScamForm')) {
     Assert ((Get-Fn $fn) -match 'Expand-FixItLabelsToFit -Form \$f') "$fn : grows to fit its text and moves the buttons down"
 }
 Assert ((Get-Fn 'Show-FixItPcInfoForm') -match 'Get-FixItLabelHeight') 'My PC info: a long value gets the height it really needs'

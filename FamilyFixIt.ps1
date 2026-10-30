@@ -37,7 +37,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 # Settings
 # ---------------------------------------------------------------------------
-$script:FixItVersion = '2.3.10'
+$script:FixItVersion = '2.3.11'
 $script:GuideFont = $null; $script:FilesMsg = $null; $script:FilesPanel = $null; $script:FilesTip = $null; $script:FilesNameFont = $null   # My files window pieces (set when the window opens)
 $script:DefaultManifestUrl = 'https://raw.githubusercontent.com/Sodapopnewb/family-it-fixit/main/manifest.json'
 $script:OwnerPlaceholder = ('<' + 'OWNER>')   # the guards compare with this; Publish never rewrites it
@@ -7331,32 +7331,68 @@ function Invoke-FixItYourName {
 # download: it always gives the newest Install-FamilyFixIt.zip (the same download link the README gives for the family). Nothing is
 # sent or saved; Copy puts the link on the clipboard.
 $script:ShareUrl = 'https://github.com/Sodapopnewb/family-it-fixit/releases/latest/download/Install-FamilyFixIt.zip'
-$script:ShareIntro = 'Want to share Family Fix-It? Copy this link and send it to a friend. When they open it, it downloads Family Fix-It to their computer.'
-$script:ShareHow = 'To install it, they open the downloaded file, choose Extract All, and double-click Install-FamilyFixIt.'
+$script:ShareIntro = 'Want to share Family Fix-It? Copy this message and paste it into an email to a friend. It has the download link and the steps to install it.'
 # The link to hand out. Empty until the program was published with the owner's name (so a practice copy never shares a broken link).
 function Get-FixItShareUrl {
     $u = [string]$script:ShareUrl
     if ([string]::IsNullOrWhiteSpace($u) -or $u.Contains($script:OwnerPlaceholder) -or $u -notmatch '^https://') { return '' }
     return $u
 }
-# What the Copy link button says: normally "Copy link", "Copied!" for a moment after a click, "Could not copy" if Windows refused.
+# What the Copy button says: normally "Copy message", "Copied!" for a moment after a click, "Could not copy" if Windows refused.
 function Get-FixItShareButtonText {
     param([string]$State = 'Idle')
     if ($State -eq 'Copied') { return 'Copied!' }
     if ($State -eq 'Failed') { return 'Could not copy' }
-    return 'Copy link'
+    return 'Copy message'
+}
+# The ready-to-paste email (v2.3.11): warm, short, plain words, written as the person who is sharing it. Plain text only, and every line break is a
+# Windows CRLF pair, so it pastes cleanly into an email. The steps match what the zip and the installer really do (Install-FamilyFixIt.cmd is in the
+# zip; it needs no administrator; it opens Family Fix-It and puts a shortcut on the Desktop). Empty when there is no published link to share.
+function Get-FixItShareMessage {
+    param([string]$Url = (Get-FixItShareUrl), [string]$Name = '')
+    if ([string]::IsNullOrWhiteSpace($Url)) { return '' }
+    $nl = [string][char]13 + [string][char]10
+    $lines = @(
+        'Hi,',
+        '',
+        'I wanted to share something that has helped me. Family Fix-It is a free helper that fixes common PC problems with one click.',
+        '',
+        'It is for Windows PCs.',
+        '',
+        'Here is the download link:',
+        $Url,
+        '',
+        'To install it:',
+        '1. Click the link above. A file called Install-FamilyFixIt.zip downloads to your computer.',
+        '2. Open that downloaded zip file. It is usually in your Downloads folder.',
+        '3. Double-click Install-FamilyFixIt.cmd. A window shows a few short steps for about a minute, then closes by itself.',
+        '4. Windows may ask you to confirm. If a small box asks, click Run. If a blue box says "Windows protected your PC", click More info, then Run anyway. You only need to do this if a box really appears for Install-FamilyFixIt.cmd.',
+        '5. Family Fix-It opens, and a Family Fix-It icon is added to your desktop. Next time, just double-click that icon.',
+        '',
+        'If you get stuck, let me know and I will help.'
+    )
+    $n = ([string]$Name).Trim()
+    if ($n) { $lines += @('', $n) }
+    return ($lines -join $nl)
+}
+# Puts the message on the clipboard as plain text with Windows line breaks (CRLF), so it pastes cleanly into an email. True when it was copied.
+function Copy-FixItShareMessage {
+    param([string]$Message)
+    if ([string]::IsNullOrWhiteSpace($Message)) { return $false }
+    $text = [regex]::Replace($Message, '\r\n|\r|\n', ([string][char]13 + [string][char]10))
+    try { return [bool](Set-FixItClipboard -Text $text) } catch { return $false }
 }
 function Invoke-FixItShare {
     Write-FixItLog 'Share with a friend opened'
     $url = Get-FixItShareUrl
     if ($script:TestMode) {
-        if ($url) { Add-FixItTestNote -Step 'Share with a friend' -Status 'PASS' -Text ('a click would open a small window with this link in a read-only box: {0}  - a Copy link button (it changes to "Copied!" for a moment) and a Close button; nothing is sent or saved' -f $url) }
+        if ($url) { Add-FixItTestNote -Step 'Share with a friend' -Status 'PASS' -Text ('a click would open a small window with a ready-to-paste email message (it has this link and the install steps) in a read-only box: {0}  - a Copy message button (it changes to "Copied!" for a moment) and a Close button; nothing is sent or saved' -f $url) }
         else { Add-FixItTestNote -Step 'Share with a friend' -Status 'WARN' -Text 'the share link is not set up in this copy (it is filled in when the program is published), so the window would say so' }
         return (New-FixItResult $true 'Share with a friend' 'Test mode only checked it.' @() @{ Silent = $true })
     }
     if ($script:GuiActive) { Show-FixItShareForm; return (New-FixItResult $true 'Share with a friend' 'Shown.' @() @{ Silent = $true }) }
     if (-not $url) { return (New-FixItResult $false 'Share with a friend' 'The link to share is not ready yet. Please ask Trey.') }
-    return (New-FixItResult $true 'Share with a friend' ($script:ShareIntro + "`r`n`r`n" + $url + "`r`n`r`n" + $script:ShareHow))
+    return (New-FixItResult $true 'Share with a friend' ($script:ShareIntro + [string][char]13 + [string][char]10 + [string][char]13 + [string][char]10 + (Get-FixItShareMessage -Url $url -Name (Get-FixItOwnerName))))
 }
 
 # What the window shows. Pure data (no drawing), so it can be tested. Positions are in 96-dpi pixels.
@@ -8692,13 +8728,14 @@ function Show-FixItNameForm {
     return [pscustomobject]@{ Saved = $false; Name = (Get-FixItOwnerName) }
 }
 
-# ---- "Share with a friend": plain words, a read-only box with the link, Copy link and Close. Nothing is sent or saved.
+# ---- "Share with a friend": a short line, then the ready-to-paste email in a read-only box, Copy message and Close. Nothing is sent or saved.
 function Show-FixItShareForm {
     $S = $script:UiScale; if (-not $S) { $S = 1.0 }
     $hc = [bool]$script:UiHighContrast
     $px = [System.Drawing.GraphicsUnit]::Pixel
-    $cText = '#1A1A1A'; $cMuted = '#555555'; if ($hc) { $cText = '#FFFFFF'; $cMuted = '#FFFFFF' }
+    $cText = '#1A1A1A'; if ($hc) { $cText = '#FFFFFF' }
     $url = Get-FixItShareUrl
+    $msg = Get-FixItShareMessage -Url $url -Name (Get-FixItOwnerName)
     $f = New-Object System.Windows.Forms.Form
     Set-FixItFormIcon $f
     $f.Text = 'Family Fix-It - Share with a friend'
@@ -8706,37 +8743,55 @@ function Show-FixItShareForm {
     $f.FormBorderStyle = 'FixedDialog'
     $f.MaximizeBox = $false; $f.MinimizeBox = $false; $f.ShowInTaskbar = $true
     $f.BackColor = (Get-FixItColor $script:UiBack)
-    $f.ClientSize = New-Object System.Drawing.Size([int](560 * $S), [int](400 * $S))
+    $w = [int](600 * $S); $inner = [int](552 * $S)
+    $ifont = New-Object System.Drawing.Font('Segoe UI', [single](16 * $S), [System.Drawing.FontStyle]::Regular, $px)
+    $mfont = New-Object System.Drawing.Font('Segoe UI', [single](15 * $S), [System.Drawing.FontStyle]::Regular, $px)
+    $introText = $(if ($url) { $script:ShareIntro } else { 'The link to share is not ready yet. Please ask Trey.' })
+    $sbw = 17; try { $sbw = [System.Windows.Forms.SystemInformation]::VerticalScrollBarWidth } catch { }
+    $workH = 0; try { $workH = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea.Height } catch { }
+    # the intro line and the message are measured at their real width (with the shared safety margin); the window grows to fit,
+    # up to about 85% of the screen's height, and only past that does the message box get a scroll bar
+    $boxPad = [int](14 * $S)
+    $chrome = [int](20 * $S) + [int](16 * $S) + [int](20 * $S) + [int](56 * $S) + [int](24 * $S)
+    $ih = [int](60 * $S); $mh = [int](200 * $S)
+    try {
+        $ih = Get-FixItLabelHeight -Text $introText -Font $ifont -Width $inner -Scale $S -Min ([int](30 * $S)) -PadUnits 6
+        if ($msg) { $mh = (Get-FixItLabelHeight -Text $msg -Font $mfont -Width ($inner - $boxPad) -Scale $S -PadUnits 8) + $boxPad }
+    } catch { Write-FixItLog ('Share window: could not measure the text: {0}' -f $_.Exception.Message) 'WARN' }
+    $plan = Get-FixItTextWindowPlan -TitleHeight $ih -BodyHeight $mh -ChromeHeight $chrome -WorkAreaHeight $workH
+    if ($plan.Scroll -and $msg) {
+        try { $mh = (Get-FixItLabelHeight -Text $msg -Font $mfont -Width ($inner - $boxPad - $sbw) -Scale $S -PadUnits 8) + $boxPad } catch { }
+        $plan = Get-FixItTextWindowPlan -TitleHeight $ih -BodyHeight $mh -ChromeHeight $chrome -WorkAreaHeight $workH
+    }
+    $y = [int](20 * $S)
     $intro = New-Object System.Windows.Forms.Label
-    $intro.AutoSize = $false
-    $intro.Text = $(if ($url) { $script:ShareIntro } else { 'The link to share is not ready yet. Please ask Trey.' })
-    $intro.Font = New-Object System.Drawing.Font('Segoe UI', [single](16 * $S), [System.Drawing.FontStyle]::Regular, $px)
+    $intro.AutoSize = $false; $intro.UseMnemonic = $false
+    $intro.Text = $introText
+    $intro.Font = $ifont
     $intro.ForeColor = (Get-FixItColor $cText)
-    $intro.Location = New-Object System.Drawing.Point([int](24 * $S), [int](20 * $S)); $intro.Size = New-Object System.Drawing.Size([int](512 * $S), [int](124 * $S))
+    $intro.Location = New-Object System.Drawing.Point([int](24 * $S), $y); $intro.Size = New-Object System.Drawing.Size($inner, [int]$ih)
     $f.Controls.Add($intro)
+    $y += [int]$ih + [int](16 * $S)
     $tb = New-Object System.Windows.Forms.TextBox
-    $tb.ReadOnly = $true
-    $tb.Font = New-Object System.Drawing.Font('Segoe UI', [single](13 * $S), [System.Drawing.FontStyle]::Regular, $px)
-    $tb.Text = $url
-    $tb.Location = New-Object System.Drawing.Point([int](24 * $S), [int](152 * $S)); $tb.Size = New-Object System.Drawing.Size([int](512 * $S), [int](36 * $S))
-    $tb.AccessibleName = 'The link to send to a friend'
+    $tb.Multiline = $true; $tb.ReadOnly = $true; $tb.WordWrap = $true
+    $tb.ScrollBars = $(if ($plan.Scroll) { 'Vertical' } else { 'None' })
+    $tb.Font = $mfont
+    $tb.Text = $msg
+    $tb.Location = New-Object System.Drawing.Point([int](24 * $S), $y); $tb.Size = New-Object System.Drawing.Size($inner, [int]$plan.ViewHeight)
+    $tb.AccessibleName = 'The email message to send to a friend'
     if ($hc) { $tb.BackColor = [System.Drawing.Color]::Black; $tb.ForeColor = [System.Drawing.Color]::White }
     $tb.Add_GotFocus({ param($s, $e) $s.SelectAll() })
     $f.Controls.Add($tb)
-    $how = New-Object System.Windows.Forms.Label
-    $how.AutoSize = $false; $how.Text = $(if ($url) { $script:ShareHow } else { '' })
-    $how.Font = New-Object System.Drawing.Font('Segoe UI', [single](13 * $S), [System.Drawing.FontStyle]::Regular, $px)
-    $how.ForeColor = (Get-FixItColor $cMuted)
-    $how.Location = New-Object System.Drawing.Point([int](24 * $S), [int](200 * $S)); $how.Size = New-Object System.Drawing.Size([int](512 * $S), [int](84 * $S))
-    $f.Controls.Add($how)
-    $cp = New-FixItTile -Run '' -Title (Get-FixItShareButtonText -State 'Idle') -Sub '' -IconKey '' -Style 'yes' -IconBg '' -X 24 -Y 316 -W 240 -H 56
-    $cp.Tag['Url'] = $url
-    $cp.AccessibleName = 'Copy link. Puts the link on the clipboard so you can paste it into a message.'
-    $cp.Enabled = [bool]$url
+    $y += [int]$plan.ViewHeight + [int](20 * $S)
+    $cp = New-FixItTile -Run '' -Title (Get-FixItShareButtonText -State 'Idle') -Sub '' -IconKey '' -Style 'yes' -IconBg '' -X 24 -Y 0 -W 268 -H 56
+    $cp.Location = New-Object System.Drawing.Point([int](24 * $S), $y)
+    $cp.Tag['Message'] = $msg
+    $cp.AccessibleName = 'Copy message. Puts the whole email message on the clipboard so you can paste it into an email.'
+    $cp.Enabled = [bool]$msg
     $cp.Add_Click({ param($s, $e)
         $ok = $false
-        try { $ok = [bool](Set-FixItClipboard -Text ([string]$s.Tag['Url'])) } catch { }
-        if ($ok) { Write-FixItLog 'Share link copied' } else { Write-FixItLog 'Share link could not be copied' 'WARN' }
+        try { $ok = [bool](Copy-FixItShareMessage -Message ([string]$s.Tag['Message'])) } catch { }
+        if ($ok) { Write-FixItLog 'Share message copied' } else { Write-FixItLog 'Share message could not be copied' 'WARN' }
         $s.Tag.Title = (Get-FixItShareButtonText -State $(if ($ok) { 'Copied' } else { 'Failed' }))
         $s.Invalidate()
         $tm = New-Object System.Windows.Forms.Timer
@@ -8747,13 +8802,14 @@ function Show-FixItShareForm {
         })
         $tm.Start()
     })
-    $cl = New-FixItTile -Run '' -Title 'Close' -Sub '' -IconKey '' -Style 'outline' -IconBg '' -X 296 -Y 316 -W 240 -H 56
+    $cl = New-FixItTile -Run '' -Title 'Close' -Sub '' -IconKey '' -Style 'outline' -IconBg '' -X 308 -Y 0 -W 268 -H 56
+    $cl.Location = New-Object System.Drawing.Point([int](308 * $S), $y)
     $cl.AccessibleName = 'Close this window.'
     $cl.DialogResult = 'Cancel'
     $f.Controls.Add($cp); $f.Controls.Add($cl)
     $f.AcceptButton = $cp; $f.CancelButton = $cl
-    Expand-FixItLabelsToFit -Form $f -Labels @($intro, $how) -Scale $S
-    try { [void]$f.ShowDialog() } finally { $f.Dispose() }
+    $f.ClientSize = New-Object System.Drawing.Size($w, ($y + [int](56 * $S) + [int](24 * $S)))
+    try { [void]$f.ShowDialog() } finally { $f.Dispose(); $ifont.Dispose(); $mfont.Dispose() }
     Write-FixItLog 'Share with a friend window closed'
 }
 

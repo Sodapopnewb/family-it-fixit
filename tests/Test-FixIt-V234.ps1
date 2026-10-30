@@ -170,7 +170,7 @@ $reviewedRaw = @{
     'Show-FixItHardwareAlert' = 'shows one message box only; returns first in Test mode and practice mode'
     'Get-FixItSaveFolder' = 'only with -Create: makes the Family Fix-It Reports folder in Documents and proves it is writable with a temporary file it removes; callers pass -Create only when the person asked for a file to be saved (reports, Test mode results)'
     'Add-FixItHelpDot' = 'screen only: .SetValue turns on double buffering of the little ? button'
-    'Show-FixItShareForm' = 'screen only: .Start starts the timer that changes Copied! back to Copy link'
+    'Show-FixItShareForm' = 'screen only: .Start starts the timer that changes Copied! back to Copy message'
 }
 foreach ($b in @('Set-FixItStateValue', 'Write-FixItUndoJournal', 'Write-AdminResult')) {
     $first = @((Get-Fn $b).Body.EndBlock.Statements)[0].Extent.Text

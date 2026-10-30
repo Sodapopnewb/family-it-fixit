@@ -50,9 +50,9 @@ Assert ((Get-FixItShareUrl) -eq 'https://github.com/Sodapopnewb/family-it-fixit/
 $script:ShareUrl = 'http://example.test/x.zip'
 Assert ((Get-FixItShareUrl) -eq '') 'a link that is not https is never shared'
 $script:ShareUrl = $oldShare
-Assert ((Get-FixItShareButtonText) -eq 'Copy link' -and (Get-FixItShareButtonText -State 'Copied') -eq 'Copied!' -and (Get-FixItShareButtonText -State 'Failed') -eq 'Could not copy') 'button texts: Copy link, Copied!, Could not copy'
+Assert ((Get-FixItShareButtonText) -eq 'Copy message' -and (Get-FixItShareButtonText -State 'Copied') -eq 'Copied!' -and (Get-FixItShareButtonText -State 'Failed') -eq 'Could not copy') 'button texts: Copy message, Copied!, Could not copy'
 $form = Get-Fn 'Show-FixItShareForm'
-Assert ($form -match 'ReadOnly' -and $form -match 'Get-FixItShareButtonText' -and $form -match 'Close' -and $form -match 'Timer') 'the window has a read-only box, a Copy link button that changes text for a moment, and Close'
+Assert ($form -match 'ReadOnly' -and $form -match 'Get-FixItShareButtonText' -and $form -match 'Close' -and $form -match 'Timer') 'the window has a read-only box, a Copy message button that changes text for a moment, and Close'
 Assert ($form -match 'UiHighContrast' -and $form -match 'UiScale') 'the share window follows Big text and High contrast'
 Assert ($form -match 'Write-FixItLog') 'copying is logged'
 Assert ((Get-Fn 'Invoke-FixItShare') -match 'Write-FixItLog' -and (Get-Fn 'Invoke-FixItShare') -match 'Add-FixItTestNote') 'a click is logged, and Test mode adds a note instead of opening anything'
