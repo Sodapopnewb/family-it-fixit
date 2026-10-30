@@ -4,8 +4,8 @@
   "files": [
     {
       "path": "FamilyFixIt.ps1",
-      "sha256": "25ac1d6850870425688f47d6b3ad185cec3c12a8c64fc1b1b3d8ff19b37aba68",
-      "size": 744232
+      "sha256": "f02d925da0b2ec98aec8fe348ed49a37474fe1b8c80d833ba23a90d7d539a6eb",
+      "size": 752338
     },
     {
       "path": "Start-FixIt.cmd",
@@ -14,8 +14,8 @@
     },
     {
       "path": "README.md",
-      "sha256": "5f47f8943452c63c41e6a7cc73981883eb3e25ba0ee43b143f1419077e71b3c0",
-      "size": 60434
+      "sha256": "faf0b1a6ac4baac9512a038358e2ac8383f24823f71af9dd813cebb55479b731",
+      "size": 61731
     },
     {
       "path": "guides.json",

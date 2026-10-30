@@ -278,8 +278,8 @@ function New-Measurer { param([double]$CharW, [int]$LineH, [double]$Shrink = 0.0
 }
 $script:CharW = 8.1; $script:LineH = 24; $script:Shrink = 0.0
 $m = New-Measurer -CharW 8.1 -LineH 24
-Assert ((Get-FixItWrappedTextHeight -Text 'abc' -Width 472 -Scale 1.0 -Measure { param($t, $w) $script:SeenW = $w; return 21.2 }) -eq 22 -and $script:SeenW -eq 464) 'text is measured 8 pixels narrower than the label, and the height is rounded up'
-Assert ((Get-FixItWrappedTextHeight -Text 'abc' -Width 944 -Scale 2.0 -Measure { param($t, $w) $script:SeenW = $w; return 10 }) -eq 10 -and $script:SeenW -eq 928) 'the safety margin grows with the screen scale'
+Assert ((Get-FixItWrappedTextHeight -Text 'abc' -Width 472 -Scale 1.0 -Measure { param($t, $w) $script:SeenW = $w; return 21.2 }) -eq 22 -and $script:SeenW -eq 450) 'text is measured 8 pixels (plus 3 percent of the width, v2.3.13) narrower than the label, and the height is rounded up'
+Assert ((Get-FixItWrappedTextHeight -Text 'abc' -Width 944 -Scale 2.0 -Measure { param($t, $w) $script:SeenW = $w; return 10 }) -eq 10 -and $script:SeenW -eq 900) 'the safety margin grows with the screen scale (16 + 3 percent of 944)'
 Assert ((Get-FixItWrappedTextHeight -Text 'abc' -Width 3 -Scale 1.0 -Measure { param($t, $w) $script:SeenW = $w; return 1 }) -eq 1 -and $script:SeenW -ge 1) 'a tiny width never measures at zero or less'
 Assert ((Get-FixItGrowDelta -Needed 100 -Current 80) -eq 20 -and (Get-FixItGrowDelta -Needed 60 -Current 80) -eq 0 -and (Get-FixItGrowDelta -Needed 80 -Current 80) -eq 0) 'a label grows by what it is missing and never shrinks'
 $gs = Get-Fn 'Get-FixItGuideStepLayout'
@@ -388,9 +388,10 @@ foreach ($fn in $fits) {
     Assert ($t -notmatch 'NoPadding' -and $t -notmatch 'TextRenderer\]::MeasureText') "$fn : no private measuring that differs from how the label draws"
 }
 Assert ((Get-Fn 'Show-FixItPrivacyForm') -match 'AutoScroll' -and (Get-Fn 'Show-FixItPlanDialog') -match 'AutoScroll') 'the long windows (what is shared, the plan) still scroll when the screen is too small'
-foreach ($fn in @('Show-FixItNameForm', 'Show-FixItFixedDialog', 'Show-FixItChromeAskDialog', 'Show-FixItCountdownDialog', 'Show-FixItScamForm')) {
+foreach ($fn in @('Show-FixItNameForm', 'Show-FixItFixedDialog', 'Show-FixItChromeAskDialog', 'Show-FixItCountdownDialog')) {
     Assert ((Get-Fn $fn) -match 'Expand-FixItLabelsToFit -Form \$f') "$fn : grows to fit its text and moves the buttons down"
 }
+Assert (((Get-Fn 'Show-FixItScamForm') -match 'Get-FixItLabelHeight') -and ((Get-Fn 'Show-FixItScamForm') -match 'Limit-FixItDialogToScreen')) 'Show-FixItScamForm : (v2.3.13) its text sits in a scrolling panel sized by the shared helper, the window is capped to the screen and OK stays visible'
 Assert ((Get-Fn 'Show-FixItPcInfoForm') -match 'Get-FixItLabelHeight') 'My PC info: a long value gets the height it really needs'
 $allShow = @($ast.FindAll({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -like 'Show-*' }, $true))
 $raw = @($allShow | Where-Object { $_.Name -ne 'Show-FixItGuideSteps' -and $_.Extent.Text -match 'TextRenderer\]::MeasureText' } | ForEach-Object { $_.Name })

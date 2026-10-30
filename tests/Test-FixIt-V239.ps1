@@ -236,7 +236,7 @@ Assert (-not $zs.Scrolls -and $zs.ClientH -eq 184) 'a short list needs no scroll
 foreach ($dh in 0, 18, 36, 54) { $rl = Get-FixItAppRowLayout -DescHeight $dh; Assert (($rl.DescY + $rl.DescH) -le $rl.RowH -and $rl.RowH -ge 64 -and ($rl.BtnY + $rl.BtnH) -le $rl.RowH -and $rl.BtnY -ge 0) "app row with a description ${dh} units high: name, description and Install button fit without overlap" }
 $dlg = Get-Fn 'Show-FixItAppsDialog'
 Assert ($dlg -match 'AutoScroll = \$true' -and $dlg -match 'Get-FixItAppSections' -and $dlg -match 'Get-FixItAppsDialogSize' -and $dlg -match 'WorkingArea') 'the window puts the rows in a scrolling panel, grouped by section, and caps its height by the screen'
-Assert ($dlg -match 'UiHighContrast' -and $dlg -match 'UiScale' -and $dlg -match 'Measure-FixItText') 'Big text and High contrast are handled and descriptions are measured'
+Assert ($dlg -match 'UiHighContrast' -and $dlg -match 'UiScale' -and $dlg -match 'Get-FixItLabelHeight') 'Big text and High contrast are handled and descriptions are measured'
 Assert ($dlg -notmatch '120 \+ 60') 'the old fixed-height window is gone'
 # Spotify is installed from a normal (not administrator) window and never through the admin helper
 $inst = Get-Fn 'Invoke-InstallApp'

@@ -2998,6 +2998,14 @@ $sumLine = @($v2313 | Where-Object { $_ -match '^Passed: \d+\s+Failed: \d+' }) |
 if ($sumLine -match 'Passed: (\d+)\s+Failed: (\d+)') { $script:Pass += [int]$Matches[1]; $script:Fail += [int]$Matches[2] }
 else { $script:Fail++; Write-Host '  FAIL: the 2.3.13 test file did not finish'; $v2313 | Select-Object -Last 15 | ForEach-Object { Write-Host ('    ' + $_) } }
 
+# ---- version 2.3.13 layout tests (text fits, windows fit the screen)
+Section 'Version 2.3.13 layout tests (own process)'
+$v2313l = & $pwshExe -NoProfile -File (Join-Path $PSScriptRoot 'Test-FixIt-V2313Layout.ps1') 2>&1 | ForEach-Object { [string]$_ }
+foreach ($ln in $v2313l) { if ($ln -match 'FAIL:|^==') { Write-Host $ln } }
+$sumLine = @($v2313l | Where-Object { $_ -match '^Passed: \d+\s+Failed: \d+' }) | Select-Object -Last 1
+if ($sumLine -match 'Passed: (\d+)\s+Failed: (\d+)') { $script:Pass += [int]$Matches[1]; $script:Fail += [int]$Matches[2] }
+else { $script:Fail++; Write-Host '  FAIL: the 2.3.13 layout test file did not finish'; $v2313l | Select-Object -Last 15 | ForEach-Object { Write-Host ('    ' + $_) } }
+
 Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host ''
 Write-Host ('Passed: {0}   Failed: {1}' -f $script:Pass, $script:Fail)

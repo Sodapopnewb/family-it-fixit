@@ -7854,13 +7854,13 @@ function Get-FixItLayout {
             @('Guides', 'Help me with...', 'Step-by-step guides', 'guides', 400, 52))
         $toggles = @(
             @('Simple', 'Simple mode', 'simple', $false, 484, 40),
-            @('Guardian', 'Watch for scary pop-ups', 'shield', $GuardianOn, 528, 52),
-            @('BigText', 'Big text', 'text', $BigText, 584, 40),
-            @('Contrast', 'High contrast', 'contrast', $HighContrast, 628, 40),
-            @('CheckIn', 'Weekly check-in', 'check', $CheckInOn, 672, 40))
-        $pin = @('Pin', 'Pin me to the taskbar', '', 'pin', 728, 40)
-        $donate = @('Donate', 'Thank Trey', 'Kids are expensive!', 'heart', 772, 52)   # last item on the left list, under Pin to taskbar
-        $lay = @{ Simple = $false; SideTitle = 'TOOLS'; Nav = $nav; SepY = 470; Pin = $pin; Donate = $donate; Footer = $footer; Toggles = $toggles; Groups = $groups; ScamY = 688; PrimaryY = 776; StatusY = 862; LinksY = 896; FullH = 980 }
+            @('Guardian', 'Watch for scary pop-ups', 'shield', $GuardianOn, 528, 60),
+            @('BigText', 'Big text', 'text', $BigText, 596, 40),
+            @('Contrast', 'High contrast', 'contrast', $HighContrast, 640, 40),
+            @('CheckIn', 'Weekly check-in', 'check', $CheckInOn, 684, 40))
+        $pin = @('Pin', 'Pin me to the taskbar', '', 'pin', 740, 40)
+        $donate = @('Donate', 'Thank Trey', 'Kids are expensive!', 'heart', 784, 52)   # last item on the left list, under Pin to taskbar
+        $lay = @{ Simple = $false; SideTitle = 'TOOLS'; Nav = $nav; SepY = 470; Pin = $pin; Donate = $donate; Footer = $footer; Toggles = $toggles; Groups = $groups; ScamY = 688; PrimaryY = 776; StatusY = 862; LinksY = 896; FullH = 990 }
     }
     $ids = @()
     foreach ($g in $lay.Groups) { foreach ($t in $g.Tiles) { $ids += [string]$t[0] } }
@@ -7912,22 +7912,31 @@ function Show-FixItScamForm {
     $h.Location = New-Object System.Drawing.Point([int](24 * $S), [int](18 * $S))
     $h.Size = New-Object System.Drawing.Size([int](572 * $S), [int](48 * $S))
     $f.Controls.Add($h)
+    $tp = New-Object System.Windows.Forms.Panel
+    $tp.AutoScroll = $true; $tp.BackColor = $f.BackColor
+    $tp.Location = New-Object System.Drawing.Point([int](24 * $S), [int](76 * $S))
     $t = New-Object System.Windows.Forms.Label
     $t.Text = [string]$Result.Message
     $t.Font = New-Object System.Drawing.Font('Segoe UI', [single](19 * $S), [System.Drawing.FontStyle]::Regular, [System.Drawing.GraphicsUnit]::Pixel)
     $t.AutoSize = $false; $t.UseMnemonic = $false
-    $t.Location = New-Object System.Drawing.Point([int](24 * $S), [int](76 * $S))
-    $t.Size = New-Object System.Drawing.Size([int](572 * $S), [int](370 * $S))
-    $f.Controls.Add($t)
+    $t.Location = New-Object System.Drawing.Point(0, 0)
+    $textW = [int](572 * $S) - [int][System.Windows.Forms.SystemInformation]::VerticalScrollBarWidth
+    $textH = [int](370 * $S)
+    try { $textH = [int][math]::Max($textH, (Get-FixItLabelHeight -Text ([string]$t.Text) -Font $t.Font -Width $textW -Scale $S)) } catch { }
+    $t.Size = New-Object System.Drawing.Size($textW, $textH)
+    $tp.Controls.Add($t)
+    $tp.Size = New-Object System.Drawing.Size([int](572 * $S), $textH)
+    $f.Controls.Add($tp)
+    $f.ClientSize = New-Object System.Drawing.Size([int](620 * $S), ([int](76 * $S) + $textH + [int](74 * $S)))
     $ok = New-Object System.Windows.Forms.Button
     $ok.Text = 'OK'
     $ok.Font = New-Object System.Drawing.Font('Segoe UI', [single](18 * $S), [System.Drawing.FontStyle]::Bold, [System.Drawing.GraphicsUnit]::Pixel)
     $ok.Size = New-Object System.Drawing.Size([int](160 * $S), [int](48 * $S))
-    $ok.Location = New-Object System.Drawing.Point([int](230 * $S), [int](452 * $S))
+    $ok.Location = New-Object System.Drawing.Point([int](230 * $S), ([int](76 * $S) + $textH + [int](6 * $S)))
     $ok.DialogResult = 'OK'
     $f.AcceptButton = $ok
     $f.Controls.Add($ok)
-    Expand-FixItLabelsToFit -Form $f -Labels @($t) -Scale $S
+    [void](Limit-FixItDialogToScreen -Form $f -Panel $tp -Pinned @($ok) -Scale $S)
     [void]$f.ShowDialog()
 }
 
@@ -8376,6 +8385,14 @@ function Add-FixItLink {
 function Show-FixItWindowOnce {
     param([bool]$FirstTime)
     $S = $script:UiScale
+    # v2.3.13: the window is 940 units wide; at 200% (and 250% with Big text) that is wider than a 1920 pixel screen, so it got a sideways scroll bar and
+    # hung off the screen. The scale is lowered just enough to fit (only while this window is open).
+    $scaleBefore = $script:UiScale
+    try {
+        $waW = [int][System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea.Width
+        $fit = Get-FixItMainScaleCap -Scale $S -WorkAreaWidth $waW -ScrollBarWidth ([int][System.Windows.Forms.SystemInformation]::VerticalScrollBarWidth)
+        if ($fit -lt $S) { Write-FixItLog ('The screen is {0}px wide: the window is drawn at {1} instead of {2} so it fits.' -f $waW, $fit, $S); $S = $fit; $script:UiScale = $fit }
+    } catch { Write-FixItLog ('Could not check the window width: {0}' -f $_.Exception.Message) 'WARN' }
     $px = [System.Drawing.GraphicsUnit]::Pixel
     $hc = [bool]$script:UiHighContrast
     $cText = '#1A1A1A'; $cMuted = '#616161'; $cLink = '#0F6CBD'; $cFaint = '#6B6B6B'
@@ -8408,7 +8425,7 @@ function Show-FixItWindowOnce {
     $clientH = [math]::Min($fullH, ($wa.Height - [int](50 * $S)))
     $extra = 0; if ($clientH -lt $fullH) { $extra = [System.Windows.Forms.SystemInformation]::VerticalScrollBarWidth }
     $clientW = [int](940 * $S) + $extra
-    if ($clientW -gt ($wa.Width - 20)) { $clientW = $wa.Width - 20 }
+    if ($clientW -gt ($wa.Width - 56)) { $clientW = $wa.Width - 56 }
     $form.AutoScroll = $true
     $form.AutoScrollMinSize = New-Object System.Drawing.Size(0, $fullH)
     $form.ClientSize = New-Object System.Drawing.Size($clientW, $clientH)
@@ -8417,7 +8434,7 @@ function Show-FixItWindowOnce {
     $side = New-Object System.Windows.Forms.Panel
     $side.BackColor = (Get-FixItColor $script:UiSide)
     $side.Location = New-Object System.Drawing.Point(0, 0)
-    $side.Size = New-Object System.Drawing.Size([int](200 * $S), $fullH)
+    $side.Size = New-Object System.Drawing.Size([int](208 * $S), $fullH)
     $form.Controls.Add($side)
     $sl = New-Object System.Windows.Forms.Label
     $sl.Text = $lay.SideTitle
@@ -8427,27 +8444,27 @@ function Show-FixItWindowOnce {
     $side.Controls.Add($sl)
     $script:FixButtons = New-Object System.Collections.ArrayList
     foreach ($nd in @($lay.Nav)) {
-        $nt = New-FixItTile -Run $nd[0] -Title $nd[1] -Sub $nd[2] -IconKey $nd[3] -Style 'nav' -IconBg '' -X 12 -Y $nd[4] -W 176 -H $nd[5]
+        $nt = New-FixItTile -Run $nd[0] -Title $nd[1] -Sub $nd[2] -IconKey $nd[3] -Style 'nav' -IconBg '' -X 12 -Y $nd[4] -W 184 -H $nd[5]
         $side.Controls.Add($nt); [void]$script:FixButtons.Add($nt)
     }
     if ($lay.SepY -gt 0) {
         $sep = New-Object System.Windows.Forms.Label
         $sep.BackColor = (Get-FixItColor $(if ($hc) { '#FFFFFF' } else { '#DDE3EC' }))
-        $sep.Location = New-Object System.Drawing.Point([int](12 * $S), [int]($lay.SepY * $S)); $sep.Size = New-Object System.Drawing.Size([int](176 * $S), 1)
+        $sep.Location = New-Object System.Drawing.Point([int](12 * $S), [int]($lay.SepY * $S)); $sep.Size = New-Object System.Drawing.Size([int](184 * $S), 1)
         $side.Controls.Add($sep)
     }
     foreach ($td in @($lay.Toggles)) {
-        $tt = New-FixItTile -Run $td[0] -Title $td[1] -Sub '' -IconKey $td[2] -Style 'toggle' -IconBg '' -X 12 -Y $td[4] -W 176 -H $td[5] -On $td[3]
+        $tt = New-FixItTile -Run $td[0] -Title $td[1] -Sub '' -IconKey $td[2] -Style 'toggle' -IconBg '' -X 12 -Y $td[4] -W 184 -H $td[5] -On $td[3]
         $tt.AccessibleName = ('{0}: {1}' -f $td[1], $(if ($td[3]) { 'on' } else { 'off' }))
         $side.Controls.Add($tt)
     }
     # last item on the left bar: how to pin this program to the taskbar (Windows does not let a program pin itself)
     $pd = $lay.Pin
-    $pt = New-FixItTile -Run $pd[0] -Title $pd[1] -Sub $pd[2] -IconKey $pd[3] -Style 'nav' -IconBg '' -X 12 -Y $pd[4] -W 176 -H $pd[5]
+    $pt = New-FixItTile -Run $pd[0] -Title $pd[1] -Sub $pd[2] -IconKey $pd[3] -Style 'nav' -IconBg '' -X 12 -Y $pd[4] -W 184 -H $pd[5]
     $side.Controls.Add($pt); [void]$script:FixButtons.Add($pt)
     if ($null -ne $lay.Donate) {   # always shown, for everyone
         $dd = $lay.Donate
-        $dt = New-FixItTile -Run $dd[0] -Title $dd[1] -Sub $dd[2] -IconKey $dd[3] -Style 'nav' -IconBg '' -X 12 -Y $dd[4] -W 176 -H $dd[5]
+        $dt = New-FixItTile -Run $dd[0] -Title $dd[1] -Sub $dd[2] -IconKey $dd[3] -Style 'nav' -IconBg '' -X 12 -Y $dd[4] -W 184 -H $dd[5]
         $dt.AccessibleName = 'Thank Trey. Kids are expensive! Opens a web page where you can say thank you.'
         $side.Controls.Add($dt); [void]$script:FixButtons.Add($dt)
     }
@@ -8462,7 +8479,13 @@ function Show-FixItWindowOnce {
     $h1.Text = "Hi! What's going wrong?"
     $h1.Font = New-Object System.Drawing.Font('Segoe UI', [single](26 * $S), [System.Drawing.FontStyle]::Bold, $px)
     $h1.ForeColor = (Get-FixItColor $cText); $h1.AutoSize = $false
-    $h1.Location = New-Object System.Drawing.Point([int](($MX + 58) * $S), [int](14 * $S)); $h1.Size = New-Object System.Drawing.Size([int](380 * $S), [int](36 * $S))
+    $h1.Location = New-Object System.Drawing.Point([int](($MX + 58) * $S), [int](14 * $S)); $h1.Size = New-Object System.Drawing.Size([int](326 * $S), [int](36 * $S))
+    try {
+        $h1Max = [int](322 * $S)
+        $h1Text = [string]$h1.Text
+        $h1Size = Get-FixItFittingFontSize -StartSize (26 * $S) -MinSize (18 * $S) -MaxWidth $h1Max -Measure { param($sz) $tf = New-Object System.Drawing.Font('Segoe UI', [single]$sz, [System.Drawing.FontStyle]::Bold, $px); try { return [int](Measure-FixItText -Text $h1Text -Font $tf).Width } finally { $tf.Dispose() } }
+        if ($h1Size -lt (26 * $S)) { $h1.Font = New-Object System.Drawing.Font('Segoe UI', [single]$h1Size, [System.Drawing.FontStyle]::Bold, $px) }
+    } catch { Write-FixItLog ('Could not fit the heading: {0}' -f $_.Exception.Message) 'WARN' }
     $form.Controls.Add($h1)
     $h2 = New-Object System.Windows.Forms.Label
     $h2.Text = "Pick the closest match and I'll try to fix it for you."
@@ -8474,7 +8497,7 @@ function Show-FixItWindowOnce {
     $form.Controls.Add($h2)
     $script:PillLabel = New-Object System.Windows.Forms.Label
     $script:PillLabel.Font = New-Object System.Drawing.Font('Segoe UI', [single](11.5 * $S), [System.Drawing.FontStyle]::Regular, $px)
-    $script:PillLabel.AutoSize = $false; $script:PillLabel.TextAlign = 'MiddleCenter'
+    $script:PillLabel.AutoSize = $false; $script:PillLabel.TextAlign = 'MiddleCenter'; $script:PillLabel.AutoEllipsis = $true
     $script:PillLabel.Location = New-Object System.Drawing.Point([int](($MX + 392) * $S), [int](20 * $S)); $script:PillLabel.Size = New-Object System.Drawing.Size([int](287 * $S), [int](26 * $S))
     $script:PillLabel.Visible = $false
     $form.Controls.Add($script:PillLabel)
@@ -8550,6 +8573,11 @@ function Show-FixItWindowOnce {
                 $pl = $script:PillLabel
                 $dot = [string][char]0x25CF
                 $pl.Text = ($dot + '  ' + $pill.Text)
+                try {   # a long message gets a smaller font (never wider than the pill)
+                    $pillText = [string]$pl.Text; $pillPx = [System.Drawing.GraphicsUnit]::Pixel
+                    $pillSize = Get-FixItFittingFontSize -StartSize (11.5 * $script:UiScale) -MinSize (9 * $script:UiScale) -MaxWidth ([int]($pl.Width - 24 * $script:UiScale)) -Measure { param($sz) $tf = New-Object System.Drawing.Font('Segoe UI', [single]$sz, [System.Drawing.FontStyle]::Regular, $pillPx); try { return [int](Measure-FixItText -Text $pillText -Font $tf).Width } finally { $tf.Dispose() } }
+                    if ($pillSize -lt (11.5 * $script:UiScale)) { $pl.Font = New-Object System.Drawing.Font('Segoe UI', [single]$pillSize, [System.Drawing.FontStyle]::Regular, $pillPx) }
+                } catch { }
                 if ($script:UiHighContrast) { $pl.BackColor = [System.Drawing.Color]::Black; $pl.ForeColor = (Get-FixItColor '#FFFF00') }
                 elseif ($pill.Ok) { $pl.BackColor = (Get-FixItColor '#EAF6EE'); $pl.ForeColor = (Get-FixItColor '#2F5E42') }
                 else { $pl.BackColor = (Get-FixItColor '#FFF1D6'); $pl.ForeColor = (Get-FixItColor '#7A4A00') }
@@ -8569,7 +8597,7 @@ function Show-FixItWindowOnce {
     })
     # While a fix is running the window keeps responding (it is not frozen), so closing it must wait until the fix is done.
     $form.Add_FormClosing({ param($fs, $fe) if ($script:ActionBusy) { $fe.Cancel = $true; Write-FixItLog 'The window was asked to close while a fix is running: it stays open until the fix is done.' } })
-    [void]$form.ShowDialog()
+    try { [void]$form.ShowDialog() } finally { $script:UiScale = $scaleBefore }
     if ($showTimer) { try { $showTimer.Stop(); $showTimer.Dispose() } catch { } }
     $form.Dispose()
 }
@@ -9364,12 +9392,15 @@ function Show-FixItPlanDialog {
     $sub.Text = ('Here is what I will do. How long it takes: {0}.' -f ([string]$Plan.Time).ToLower()); $sub.AutoSize = $false
     $sub.Font = New-Object System.Drawing.Font('Segoe UI', [single](15 * $S), [System.Drawing.FontStyle]::Regular, $px)
     $sub.ForeColor = (Get-FixItColor $cMuted)
-    $sub.Location = New-Object System.Drawing.Point([int](24 * $S), [int](56 * $S)); $sub.Size = New-Object System.Drawing.Size($panelW, [int](26 * $S))
+    $subH = [int](26 * $S)
+    try { $subH = Get-FixItLabelHeight -Text ([string]$sub.Text) -Font $sub.Font -Width $panelW -Scale $S -Min ([int](26 * $S)) -PadUnits 4 } catch { }
+    $sub.Location = New-Object System.Drawing.Point([int](24 * $S), [int](56 * $S)); $sub.Size = New-Object System.Drawing.Size($panelW, $subH)
     $f.Controls.Add($sub)
+    $listTop = [int](56 * $S) + $subH + [int](10 * $S)
 
     $pn = New-Object System.Windows.Forms.Panel
     $pn.AutoScroll = $true; $pn.BackColor = (Get-FixItColor $script:UiBack)
-    $pn.Location = New-Object System.Drawing.Point([int](24 * $S), [int](92 * $S))
+    $pn.Location = New-Object System.Drawing.Point([int](24 * $S), $listTop)
     $y = 0; $n = 1
     foreach ($d in @($Plan.Does)) {
         $hh = Get-FixItLabelHeight -Text ([string]$d) -Font $fontBody -Width $stepW -Scale $S -Min ([int](34 * $S)) -PadUnits 8
@@ -9414,12 +9445,12 @@ function Show-FixItPlanDialog {
         $pn.Controls.Add($bp)
         $y += $by + [int](10 * $S)
     }
-    $maxPanel = $wa.Height - [int](260 * $S)
+    $maxPanel = $wa.Height - $listTop - [int](170 * $S)
     $panelH = [math]::Min($y, $maxPanel)
     $extraW = 0; if ($y -gt $maxPanel) { $extraW = [System.Windows.Forms.SystemInformation]::VerticalScrollBarWidth }
     $pn.Size = New-Object System.Drawing.Size(($panelW + $extraW), $panelH)
     $f.Controls.Add($pn)
-    $btnY = [int](92 * $S) + $panelH + [int](14 * $S)
+    $btnY = $listTop + $panelH + [int](14 * $S)
     $go = New-FixItTile -Run '' -Title 'Proceed' -Sub '' -IconKey '' -Style 'yes' -IconBg '' -X 24 -Y ([int]($btnY / $S)) -W 290 -H 60
     $back = New-FixItTile -Run '' -Title 'Go Back' -Sub '' -IconKey '' -Style 'no' -IconBg '' -X 332 -Y ([int]($btnY / $S)) -W 290 -H 60
     $go.DialogResult = 'OK'; $back.DialogResult = 'Cancel'
@@ -9427,6 +9458,7 @@ function Show-FixItPlanDialog {
     $f.Controls.Add($go); $f.Controls.Add($back)
     $f.CancelButton = $back
     $f.ClientSize = New-Object System.Drawing.Size(([int](24 * $S) * 2 + $panelW + $extraW), ($btnY + [int](60 * $S) + [int](22 * $S)))
+    [void](Limit-FixItDialogToScreen -Form $f -Panel $pn -Pinned @($go, $back) -Scale $S)
     $r = $f.ShowDialog($script:Form)
     $f.Dispose()
     return ($r -eq 'OK')
@@ -9641,7 +9673,8 @@ function Set-FixItFilesMessage {
     $m.Text = $Text
     $hpx = 0
     try { $hpx = [int](Measure-FixItText -Text $Text -Font $m.Font -Width ([int](552 * $S))).Height } catch { Write-FixItLog ('My files: could not measure the note: {0}' -f $_.Exception.Message) 'WARN' }
-    $lay = Get-FixItFilesTopLayout -NoteHeightPx $hpx -Scale $S
+    $clientUnits = 620; try { if ($script:FilesDialog) { $clientUnits = [int][math]::Floor($script:FilesDialog.ClientSize.Height / $S) } } catch { }   # the window may have been made shorter to fit the screen
+    $lay = Get-FixItFilesTopLayout -NoteHeightPx $hpx -Scale $S -ClientH $clientUnits
     $m.Size = New-Object System.Drawing.Size([int](552 * $S), [int]($lay.NoteH * $S))
     if ($script:FilesPanel) {
         $script:FilesPanel.Location = New-Object System.Drawing.Point([int](24 * $S), [int]($lay.PanelY * $S))
@@ -9746,6 +9779,7 @@ function Show-FixItFilesDialog {
     $pn.AutoScroll = $true; $pn.BackColor = (Get-FixItColor $script:UiBack)
     $pn.Location = New-Object System.Drawing.Point([int](24 * $S), [int](138 * $S)); $pn.Size = New-Object System.Drawing.Size([int](560 * $S), [int](466 * $S))
     $f.Controls.Add($pn); $script:FilesPanel = $pn
+    [void](Limit-FixItDialogToScreen -Form $f -Panel $pn -Scale $S)
     $f.AcceptButton = $go
     $f.Add_Shown({ param($s, $e) $script:FilesTb.Focus(); Update-FixItFilesList -Query '' })
     $f.Add_FormClosing({ param($s, $e)
@@ -9785,7 +9819,7 @@ function Show-FixItAppsDialog {
         $y += 40
         foreach ($a in @($sec.Apps)) {
             $dh = 18
-            if ([string]$a.Description) { try { $dh = [math]::Ceiling([double](Measure-FixItText -Text ([string]$a.Description) -Font $dfont -Width $descW).Height / $S) + 2 } catch { $dh = 18 * 2 } }
+            if ([string]$a.Description) { try { $dh = [math]::Ceiling([double](Get-FixItLabelHeight -Text ([string]$a.Description) -Font $dfont -Width $descW -Scale $S -PadUnits 2) / $S) } catch { $dh = 18 * 2 } }
             else { $dh = 0 }
             $rl = Get-FixItAppRowLayout -DescHeight $dh
             $items += [pscustomobject]@{ Kind = 'app'; Y = $y; App = $a; Row = $rl }
@@ -9941,6 +9975,7 @@ function Show-FixItPcInfoForm {
     $cl = New-FixItTile -Run '' -Title 'Close' -Sub '' -IconKey '' -Style 'no' -IconBg '' -X 370 -Y 620 -W 200 -H 52
     $cl.Add_Click({ param($s, $e) $s.FindForm().Close() })
     $f.Controls.Add($cl)
+    [void](Limit-FixItDialogToScreen -Form $f -Panel $pn -Pinned @($cp, $cl) -Scale $S)
     $f.CancelButton = $null
     [void]$f.ShowDialog($script:Form)
     $f.Dispose()
@@ -10008,6 +10043,7 @@ function Show-FixItGuidesDialog {
     $pn.AutoScroll = $true; $pn.BackColor = (Get-FixItColor $script:UiBack)
     $pn.Location = New-Object System.Drawing.Point([int](24 * $S), [int](154 * $S)); $pn.Size = New-Object System.Drawing.Size([int](560 * $S), [int](470 * $S))
     $f.Controls.Add($pn); $script:GuidesPanel = $pn
+    [void](Limit-FixItDialogToScreen -Form $f -Panel $pn -Scale $S)
     $tm = New-Object System.Windows.Forms.Timer
     $tm.Interval = 180
     $tm.Add_Tick({ param($ts, $te) $ts.Stop(); try { Update-FixItGuidesList -Query $script:GuidesTb.Text } catch { Write-FixItLog ('Guide search failed: {0}' -f $_.Exception.Message) 'WARN' } })
@@ -10038,7 +10074,7 @@ function Show-FixItGuidesDialog {
 function Get-FixItWrappedTextHeight {
     param([string]$Text, [int]$Width, [double]$Scale = 1.0, [scriptblock]$Measure)
     if ($Scale -le 0) { $Scale = 1.0 }
-    $safety = [int][math]::Ceiling(8 * $Scale)
+    $safety = [int][math]::Ceiling(8 * $Scale) + [int][math]::Floor($Width * 0.03)   # v2.3.13: a hair more room on wide labels (a 2x label drew one line more than measured)
     $w = [int][math]::Max(1, $Width - $safety)
     return [int][math]::Ceiling([double](& $Measure $Text $w))
 }
@@ -10052,6 +10088,62 @@ function Get-FixItLabelHeight {
 }
 # Pure: how much taller a label has to grow (0 when it already fits).
 function Get-FixItGrowDelta { param([int]$Needed, [int]$Current) return [int][math]::Max(0, $Needed - $Current) }
+
+# ----- keeping windows on the screen (v2.3.13) ----------------------------------------------------------------------------------
+# Pure: how tall a window may be. FrameHeight = title bar + borders (the window's height minus its client height). Delta = how much too tall it is.
+function Get-FixItDialogHeightPlan {
+    param([int]$ClientHeight, [int]$WorkAreaHeight, [int]$FrameHeight = 40, [double]$Scale = 1.0, [double]$MarginUnits = 12)
+    if ($Scale -le 0) { $Scale = 1.0 }
+    if ($WorkAreaHeight -le 0) { return [pscustomobject]@{ Cap = $ClientHeight; ClientHeight = $ClientHeight; Delta = 0; TooTall = $false } }
+    $cap = [int]($WorkAreaHeight - $FrameHeight - [math]::Ceiling($MarginUnits * $Scale))
+    if ($cap -lt 240) { $cap = 240 }
+    if ($ClientHeight -le $cap) { return [pscustomobject]@{ Cap = $cap; ClientHeight = $ClientHeight; Delta = 0; TooTall = $false } }
+    return [pscustomobject]@{ Cap = $cap; ClientHeight = $cap; Delta = ($ClientHeight - $cap); TooTall = $true }
+}
+# Pure: the biggest scale the main window can have and still fit across the screen (its width is 940 units, plus a scroll bar and the frame).
+function Get-FixItMainScaleCap {
+    param([double]$Scale, [int]$WorkAreaWidth, [int]$ScrollBarWidth = 17, [double]$BaseWidth = 940, [int]$FramePx = 56)
+    if ($Scale -le 0) { return 1.0 }
+    if ($WorkAreaWidth -le 0) { return $Scale }
+    $cap = [math]::Floor((($WorkAreaWidth - $FramePx - $ScrollBarWidth) / $BaseWidth) * 100) / 100
+    if ($cap -lt 1.0) { $cap = 1.0 }
+    return [double][math]::Min($Scale, $cap)
+}
+# Pure: the biggest font size (down to MinSize) whose text still fits MaxWidth. -Measure is called as & $Measure $size and returns the text width.
+function Get-FixItFittingFontSize {
+    param([double]$StartSize, [double]$MinSize, [int]$MaxWidth, [scriptblock]$Measure)
+    $size = $StartSize
+    $step = [math]::Max(0.5, $StartSize * 0.04)
+    while ($size -gt $MinSize) {
+        if ([double](& $Measure $size) -le $MaxWidth) { return [double]$size }
+        $size = $size - $step
+    }
+    return [double]$MinSize
+}
+# Makes a window fit the screen: when it is taller than the usable screen it is made shorter, the scrolling panel gives up the height, and the
+# controls under the panel (the buttons) move up with it, so they stay on the screen. Call it after the window and all its controls are built.
+function Limit-FixItDialogToScreen {
+    param($Form, $Panel = $null, $Pinned = @(), [double]$Scale = 1.0)
+    try {
+        $wa = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+        $frame = [int]($Form.Height - $Form.ClientSize.Height)
+        $least = [int]([System.Windows.Forms.SystemInformation]::CaptionHeight + 2 * [System.Windows.Forms.SystemInformation]::FixedFrameBorderSize.Height)
+        if ($frame -lt $least) { $frame = $least }
+        $plan = Get-FixItDialogHeightPlan -ClientHeight $Form.ClientSize.Height -WorkAreaHeight $wa.Height -FrameHeight $frame -Scale $Scale
+        if (-not $plan.TooTall) { return $false }
+        $d = [int]$plan.Delta
+        if ($null -ne $Panel) {
+            $room = [int]($Panel.Height - [math]::Ceiling(100 * $Scale))
+            if ($room -lt 0) { $room = 0 }
+            if ($d -gt $room) { $d = $room }
+            $Panel.Height = $Panel.Height - $d
+            foreach ($c in @($Pinned)) { if ($null -ne $c) { $c.Top = $c.Top - $d } }
+        }
+        $Form.ClientSize = New-Object System.Drawing.Size($Form.ClientSize.Width, ($Form.ClientSize.Height - $d))
+        Write-FixItLog ('A window was taller than the screen: made it {0}px shorter and let its list scroll.' -f $d)
+        return $true
+    } catch { Write-FixItLog ('Could not fit a window on the screen: {0}' -f $_.Exception.Message) 'WARN'; return $false }
+}
 # Pure: the size of a window that holds a title, a body of wrapped text and some fixed pieces (buttons, margins). The window grows to fit the
 # text; it stops at about 85% of the screen's working-area height, and only then does the body scroll.
 function Get-FixItTextWindowPlan {
@@ -10141,6 +10233,7 @@ function Show-FixItGuideSteps {
     $f.Controls.Add($back)
     $no = New-FixItTile -Run ('GuideHelp:' + [string]$Guide.Id) -Title "This didn't help - tell Trey" -Sub '' -IconKey '' -Style 'btn' -IconBg '' -X 214 -Y 622 -W 422 -H 56
     $f.Controls.Add($no)
+    [void](Limit-FixItDialogToScreen -Form $f -Panel $pn -Pinned @($back, $no) -Scale $S)
     $script:GuideShown = $Guide
     try { [void]$f.ShowDialog($script:Form) } finally { $f.Dispose(); $script:GuideFont.Dispose(); $nfont.Dispose(); $script:GuideFont = $null }
 }
@@ -10183,12 +10276,14 @@ function Show-FixItTextDialog {
     $tb.Select(0, 0)
     $bar = New-Object System.Windows.Forms.Panel
     $bar.Dock = 'Bottom'; $bar.Height = [int](52 * $S)
+    $bar.Size = New-Object System.Drawing.Size($f.ClientSize.Width, [int](52 * $S))   # as wide as the window BEFORE the button is added: a button anchored to the right of a 200px bar jumped out of it when the bar was docked
     $ok = New-Object System.Windows.Forms.Button
     $ok.Text = 'Close'; $ok.Size = New-Object System.Drawing.Size([int](120 * $S), [int](36 * $S))
-    $ok.Location = New-Object System.Drawing.Point([int](620 * $S), [int](8 * $S)); $ok.Anchor = 'Top,Right'
+    $ok.Location = New-Object System.Drawing.Point(($f.ClientSize.Width - [int](140 * $S)), [int](8 * $S)); $ok.Anchor = 'Top,Right'
     $ok.DialogResult = 'OK'
     $bar.Controls.Add($ok)
     $f.Controls.Add($tb); $f.Controls.Add($bar); $f.Controls.Add($bn)
+    [void](Limit-FixItDialogToScreen -Form $f -Scale $S)
     $f.AcceptButton = $ok
     [void]$f.ShowDialog()
     $f.Dispose()
