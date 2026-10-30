@@ -46,9 +46,15 @@ Assert ($stepLines[3] -match 'Windows protected your PC' -and $stepLines[3] -mat
 Assert ($stepLines[3].IndexOf('More info') -lt $stepLines[3].IndexOf('Run anyway')) 'More info comes before Run anyway'
 Assert ($stepLines[4] -match 'opens' -and $stepLines[4] -match 'icon' -and $stepLines[4] -match 'desktop') 'step 5: it opens and an icon is added to the desktop'
 Assert ($msg -match 'let me know and I will help') 'warm closing offer'
+$scare = 'virus|danger|dangerous|warning|threat|malware|infect|hack|scam|risk|unsafe|attack|harm|unblock|damage'
+$safety = 'Please only install this if you know and trust the person who sent it to you.'
+$ml = @($msg -split "`r`n")
+Assert ($ml[-1] -ceq $safety -and $ml[-2] -ceq '' -and $ml[-3] -ceq 'If you get stuck, let me know and I will help.') 'the safety line is last: after the offer to help, with one blank line between'
+Assert (([regex]::Matches($msg, [regex]::Escape($safety))).Count -eq 1) 'the safety line is there once'
+Assert ($msg.IndexOf($safety) -gt $msg.IndexOf('Next time, just double-click that icon.') -and $msg.IndexOf($safety) -gt $msg.IndexOf($url)) 'the safety line comes after the link and every step'
+Assert ($safety -notmatch '[^\x20-\x7E]' -and $safety -notmatch ('(?i)\b(' + $scare + ')')) 'the safety line is plain ASCII and calm (no scare words)'
 Assert (@($msg -split "`r`n").Count -le 22) 'short: about twenty lines'
 Assert ((($msg -split '\s+') | Where-Object { $_ }).Count -le 230) 'short: under about 230 words'
-$scare = 'virus|danger|dangerous|warning|threat|malware|infect|hack|scam|risk|unsafe|attack|harm|unblock|damage'
 Assert ($msg -notmatch ('(?i)\b(' + $scare + ')')) 'no scare words'
 $jargon = '\b(PowerShell|script|administrator|admin|SHA|manifest|registry|mutex|command line|terminal|execution policy)\b'
 Assert ($msg -notmatch ('(?i)' + $jargon)) 'no jargon'
@@ -72,7 +78,7 @@ Assert ($inst -match 'Windows PowerShell|powershell\.exe|5\.1' -or $readme -matc
 
 Section 'The email message: signing and empty cases'
 $named = Get-FixItShareMessage -Url $url -Name 'Grandma Sue'
-Assert ($named.EndsWith($CRLF + $CRLF + 'Grandma Sue') -and $named.StartsWith($msg)) 'a saved name signs the note (the rest is unchanged)'
+Assert ($named.EndsWith($safety + $CRLF + $CRLF + 'Grandma Sue') -and $named.StartsWith($msg)) 'a saved name signs the note after the safety line (the rest is unchanged)'
 Assert ((Get-FixItShareMessage -Url $url -Name '   ') -eq $msg) 'a blank name adds nothing'
 Assert ((Get-FixItShareMessage -Url '') -eq '' -and (Get-FixItShareMessage -Url '   ') -eq '') 'no link, no message (a practice copy never shares a broken one)'
 $oldShare = $script:ShareUrl
@@ -86,7 +92,7 @@ $script:ShareUrl = $oldShare
 Section 'Line breaks: Windows CRLF, nothing else'
 Assert ($msg.Contains($CRLF)) 'the message has CRLF line breaks'
 Assert (($msg -replace "`r`n", '') -notmatch "[`r`n]") 'every line break is a CRLF pair (no lone CR or LF)'
-Assert (-not $msg.EndsWith($CRLF)) 'no extra blank line at the end'
+Assert (-not $msg.EndsWith($CRLF) -and $msg.EndsWith($safety)) 'no extra blank line at the end; it ends with the safety line'
 Assert ($msg -notmatch "(`r`n){3}") 'never two blank lines in a row'
 Assert (@($msg -split "`r`n").Count -eq ([regex]::Matches($msg, "`r`n")).Count + 1) 'line count matches the break count'
 Assert ($named -notmatch "(?<!`r)`n" -and $named -notmatch "`r(?!`n)") 'a signed note has clean breaks too'
@@ -132,8 +138,8 @@ Assert ($form -match 'Write-FixItLog') 'copying is logged'
 Assert ($script:ShareIntro -match 'Copy this message' -and $script:ShareIntro -match 'email' -and (($script:ShareIntro -split '\s+').Count -le 30)) 'the intro line is short and says what to do'
 Assert (-not (Get-Variable -Name ShareHow -Scope Script -ErrorAction SilentlyContinue)) 'the old install sentence is gone from the window (the message holds the steps)'
 
-# the size the window asks for, with pretend measuring (an average letter 9 px wide, lines 24 px tall)
-$base = { param($t, $w) $per = [math]::Max(1, [int][math]::Floor($w / 9)); $n = 0; foreach ($ln in ($t -split "`r`n")) { $n += [math]::Max(1, [int][math]::Ceiling($ln.Length / $per)) }; return ($n * 24) }
+# the size the window asks for, with pretend measuring (an average letter 7 px wide, lines 24 px tall)
+$base = { param($t, $w) $per = [math]::Max(1, [int][math]::Floor($w / 7)); $n = 0; foreach ($ln in ($t -split "`r`n")) { $n += [math]::Max(1, [int][math]::Ceiling($ln.Length / $per)) }; return ($n * 24) }
 $wide = Get-FixItWrappedTextHeight -Text $msg -Width 552 -Scale 1.0 -Measure $base
 $narrow = Get-FixItWrappedTextHeight -Text $msg -Width 552 -Scale 1.0 -Measure { param($t, $w) & $base $t ($w - 40) }
 Assert ($wide -gt 0 -and $narrow -ge $wide) 'a narrower box needs at least as much height'

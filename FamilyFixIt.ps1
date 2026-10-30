@@ -37,7 +37,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 # Settings
 # ---------------------------------------------------------------------------
-$script:FixItVersion = '2.3.11'
+$script:FixItVersion = '2.3.12'
 $script:GuideFont = $null; $script:FilesMsg = $null; $script:FilesPanel = $null; $script:FilesTip = $null; $script:FilesNameFont = $null   # My files window pieces (set when the window opens)
 $script:DefaultManifestUrl = 'https://raw.githubusercontent.com/Sodapopnewb/family-it-fixit/main/manifest.json'
 $script:OwnerPlaceholder = ('<' + 'OWNER>')   # the guards compare with this; Publish never rewrites it
@@ -7369,7 +7369,9 @@ function Get-FixItShareMessage {
         '4. Windows may ask you to confirm. If a small box asks, click Run. If a blue box says "Windows protected your PC", click More info, then Run anyway. You only need to do this if a box really appears for Install-FamilyFixIt.cmd.',
         '5. Family Fix-It opens, and a Family Fix-It icon is added to your desktop. Next time, just double-click that icon.',
         '',
-        'If you get stuck, let me know and I will help.'
+        'If you get stuck, let me know and I will help.',
+        '',
+        'Please only install this if you know and trust the person who sent it to you.'
     )
     $n = ([string]$Name).Trim()
     if ($n) { $lines += @('', $n) }

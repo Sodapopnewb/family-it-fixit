@@ -1,4 +1,4 @@
-# Family Fix-It (v2.3.11)
+# Family Fix-It (v2.3.12)
 
 A Windows tool for family. Big plain-language buttons fix the common problems by themselves, ask "Did that fix it?", and send Trey a report when they cannot.
 Two small things can run in the background, and both have an on/off switch in the side bar: the **pop-up watcher** (on by default) and the optional **weekly check-in**.
@@ -172,6 +172,7 @@ Mock tests cover all the decisions (what counts as full screen, when to ask, wha
     - The box is sized with the shared fit helper (measured with a safety margin; the window grows to fit, up to about 85 % of the screen's height, and a scroll bar appears only past that).
     - **Copy message** (it says **Copied!** for a moment) puts the whole message on the clipboard as plain text with Windows line breaks (CRLF), so it pastes cleanly into an email. Nothing is sent or saved. With no window (`-Action Share`) the same message is shown for copying.
     - **Check on a real PC (Windows PowerShell 5.1):** (a) the window at 100/125/150 % scale, Big text, High contrast and on a small screen: the whole message is visible (scroll bar only when the screen is too small); (b) click **Copy message**, paste into Outlook, Gmail in the browser and Notepad: the lines and numbering stay as written, the link is clickable; (c) the steps work as written on a PC that never had Family Fix-It.
+27. **What is new in 2.3.12 (a safety line in the share message):** the ready-to-paste email from *Share with a friend* now ends, after "If you get stuck, let me know and I will help." and one blank line, with: "Please only install this if you know and trust the person who sent it to you." It comes before the optional name signature. Plain ASCII, CRLF line breaks. **Check on a real PC:** the Share window shows the new last line without scrolling on a normal screen, and Copy message pastes it into an email as its own paragraph.
 
 ### Reports (Cloudflare Worker + KV)
 - The tool POSTs JSON `{pcName, version, kind, report}` with the header `X-FixIt-App: family-it-fixit` to `https://fixit-report.hg-fixit.workers.dev/report` (change with `-ReportUrl`). No secret is stored on family PCs.
