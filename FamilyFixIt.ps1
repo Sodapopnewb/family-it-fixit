@@ -13,7 +13,7 @@ Command-line use (for Trey):
   Guardian (runs at sign-in, hidden) watches for a full-screen browser page and offers a way out; GuardianOn/GuardianOff/GuardianDemo.
 #>
 param(
-    [ValidateSet('Gui', 'TestAll', 'Printer', 'Acrobat', 'AcrobatRepair', 'Outlook', 'Network', 'Slow', 'Sound', 'Browser', 'WinUpdate', 'OneDrive', 'Scam', 'Screen', 'Report', 'Pin', 'Update', 'Restart', 'Status', 'Undo', 'CheckIn', 'CheckInOn', 'CheckInOff', 'HealthCheck', 'History', 'Files', 'Install', 'Guardian', 'GuardianOn', 'GuardianOff', 'GuardianDemo', 'PCInfo', 'Guides', 'Simple',
+    [ValidateSet('Gui', 'TestAll', 'Printer', 'Acrobat', 'AcrobatRepair', 'Outlook', 'Network', 'Slow', 'Sound', 'Browser', 'WinUpdate', 'OneDrive', 'Scam', 'Screen', 'Report', 'Pin', 'Update', 'Restart', 'Status', 'Undo', 'CheckIn', 'CheckInOn', 'CheckInOff', 'HealthCheck', 'History', 'Files', 'Install', 'Guardian', 'GuardianOn', 'GuardianOff', 'GuardianDemo', 'PCInfo', 'Guides', 'Simple', 'Donate', 'Privacy', 'YourName', 'FirstRunPending',
         'PrinterAdmin', 'AcrobatAdmin', 'AcrobatRepairAdmin', 'NetworkAdmin', 'SlowAdmin', 'SoundAdmin', 'OutlookAdmin', 'DefenderScanAdmin', 'WinUpdateAdmin', 'WinUpdateDeepAdmin', 'UndoAdmin')]
     [string]$Action = 'Gui',
     [Alias('DryRun')][switch]$WhatIf,
@@ -37,7 +37,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 # Settings
 # ---------------------------------------------------------------------------
-$script:FixItVersion = '2.3.6'
+$script:FixItVersion = '2.3.7'
 $script:DefaultManifestUrl = 'https://raw.githubusercontent.com/Sodapopnewb/family-it-fixit/main/manifest.json'
 $script:OwnerPlaceholder = ('<' + 'OWNER>')   # the guards compare with this; Publish never rewrites it
 # Where reports are sent (a small Cloudflare Worker that Trey runs). The app header is NOT a secret.
@@ -66,7 +66,7 @@ $script:EchoLog = $false
 $script:GuiActive = $false
 # Background work (the installer, the sign-in watcher, the weekly check-in, the administrator parts) has nobody at the keyboard.
 # It must never ask a question: a hidden window that waits for typing waits forever.
-$script:BackgroundActions = @('Guardian', 'GuardianOn', 'GuardianOff', 'CheckInOn', 'CheckInOff', 'HealthCheck', 'PrinterAdmin', 'AcrobatAdmin', 'AcrobatRepairAdmin', 'NetworkAdmin', 'SlowAdmin', 'SoundAdmin', 'OutlookAdmin', 'DefenderScanAdmin', 'WinUpdateAdmin', 'WinUpdateDeepAdmin', 'UndoAdmin')
+$script:BackgroundActions = @('FirstRunPending', 'Guardian', 'GuardianOn', 'GuardianOff', 'CheckInOn', 'CheckInOff', 'HealthCheck', 'PrinterAdmin', 'AcrobatAdmin', 'AcrobatRepairAdmin', 'NetworkAdmin', 'SlowAdmin', 'SoundAdmin', 'OutlookAdmin', 'DefenderScanAdmin', 'WinUpdateAdmin', 'WinUpdateDeepAdmin', 'UndoAdmin')
 $script:Background = $false
 $script:AssumeYes = [bool]$Yes
 $script:AddinName = 'PDFMaker.OfficeAddin'
@@ -674,7 +674,7 @@ function Complete-FixItTestRecords {
 }
 
 # The buttons that "Test all buttons" runs (every fix, the report, the restart, the undo, the toggles and the update check).
-$script:TestAllKeys = @('Printer', 'Acrobat', 'AcrobatRepair', 'Outlook', 'Network', 'Slow', 'Sound', 'Browser', 'WinUpdate', 'OneDrive', 'Scam', 'Screen', 'Report', 'Update', 'Restart', 'Undo', 'CheckIn', 'Guardian', 'HealthCheck')
+$script:TestAllKeys = @('Printer', 'Acrobat', 'AcrobatRepair', 'Outlook', 'Network', 'Slow', 'Sound', 'Browser', 'WinUpdate', 'OneDrive', 'Scam', 'Screen', 'Report', 'Update', 'Restart', 'Undo', 'CheckIn', 'Guardian', 'HealthCheck', 'PCInfo', 'Donate', 'Privacy', 'YourName')
 
 function Get-FixItTestResultsPath {
     $dir = $OutputDir
@@ -2708,8 +2708,9 @@ function Get-FixItReportText {
     else { $o.Add('FAMILY FIX-IT REPORT') }
     $o.Add('Made: ' + (Get-Date -Format 'yyyy-MM-dd HH:mm') + '   Tool version: ' + $script:FixItVersion)
     foreach ($l in (Invoke-ReportItem 'PC code' { Get-FixItPcCodeLine })) { $o.Add([string]$l) }
+    $o.Add((Get-FixItNameLine))
     $o.Add('This report is saved on the Desktop and sent to Trey by the tool.')
-    $o.Add('(It includes the computer name, the Windows user name and the printer names.)')
+    $o.Add('(It includes your name if you gave it, the computer name, the Windows user name and the printer names.)')
     if ($Note) { $o.Add(''); $o.Add('NOTE: ' + $Note) }
 
     Add-ReportSection $o 'Windows' {
@@ -2727,6 +2728,7 @@ function Get-FixItReportText {
         }
         Invoke-ReportItem 'Running as administrator' { 'Running as administrator: ' + (Test-FixItAdmin) }
     }
+    Add-ReportSection $o 'Hardware' { Invoke-ReportItem 'Hardware details' { Get-FixItHardwareReportLines } }
     if ($Kind -eq 'scam') { Add-ReportSection $o 'Scam check: remote-control programs, recent installs and downloads' { Get-FixItScamLines } }
     Add-ReportSection $o 'Health check' { Get-FixItHealthLines }
     Add-ReportSection $o 'Printing' {
@@ -4379,6 +4381,9 @@ function Get-FixItActionTable {
         Install = @{ Fn = 'Invoke-InstallApp'; Title = 'Install an app safely'; Fix = $false }
         Guardian = @{ Fn = 'Invoke-GuardianToggle'; Title = 'Scary pop-up watcher'; Fix = $false }
         PCInfo = @{ Fn = 'Invoke-PcInfo'; Title = 'My PC info'; Fix = $false }
+        Donate = @{ Fn = 'Invoke-FixItDonate'; Title = 'Thank Trey'; Fix = $false }
+        Privacy = @{ Fn = 'Invoke-FixItPrivacy'; Title = "What's shared"; Fix = $false }
+        YourName = @{ Fn = 'Invoke-FixItYourName'; Title = 'Your name'; Fix = $false }
         Guides = @{ Fn = 'Invoke-GuidesHelper'; Title = 'Help me with...'; Fix = $false }
         Simple = @{ Fn = 'Invoke-SimpleToggle'; Title = 'Simple mode'; Fix = $false }
     }
@@ -4650,14 +4655,573 @@ function Invoke-HealthCheck {
         Write-FixItLog ('Health check failed: {0}' -f $_.Exception.Message) 'ERROR'
         return New-FixItResult $false 'Health check failed' 'The health check could not be completed.'
     }
-    $o = @('FAMILY FIX-IT WEEKLY HEALTH CHECK', ('Made: {0}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm')), (Get-FixItPcCodeLine), '')
-    if (@($h.Attention).Count -eq 0) { $o += 'ATTENTION: nothing - all fine.' } else { $o += 'ATTENTION:'; foreach ($a in $h.Attention) { $o += ('  * ' + $a) } }
+    # The hardware monitor (drives, blue screens, memory, battery). It only reads. A serious NEW problem shows the person one plain
+    # message and sends Trey a full report right away; everything else only goes into this weekly report.
+    $mon = $null
+    try { $mon = Invoke-FixItHardwareMonitor } catch { Write-FixItLog ('Hardware monitor did not finish: {0}' -f $_.Exception.Message) }
+    $hwLines = @()
+    try { $hwLines = @(Get-FixItHardwareReportLines) } catch { Write-FixItLog ('Hardware summary not available: {0}' -f $_.Exception.Message) }
+    $attn = @($h.Attention)
+    if ($null -ne $mon) { foreach ($a in @($mon.Alerts)) { $attn += [string]$a.Detail } }
+    $o = @('FAMILY FIX-IT WEEKLY HEALTH CHECK', ('Made: {0}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm')), (Get-FixItPcCodeLine), (Get-FixItNameLine), '')
+    if ($attn.Count -eq 0) { $o += 'ATTENTION: nothing - all fine.' } else { $o += 'ATTENTION:'; foreach ($a in $attn) { $o += ('  * ' + $a) } }
     $o += ''; $o += $h.Lines
+    if ($null -ne $mon) { $o += ''; $o += @($mon.Lines) }
+    if ($hwLines.Count -gt 0) { $o += ''; $o += 'HARDWARE SUMMARY:'; $o += $hwLines }
+    if ($null -ne $mon) { try { [void](Invoke-FixItHardwareAlerts -Monitor $mon -HealthText '') } catch { Write-FixItLog ('Hardware alert did not finish: {0}' -f $_.Exception.Message) 'WARN' } }
     $text = $o -join "`r`n"
     $sent = Send-FixItReport -Text $text -Kind 'health'
-    Write-FixItLog ('Finished: weekly health check (needs attention: {0}, sent: {1})' -f @($h.Attention).Count, $sent)
+    Write-FixItLog ('Finished: weekly health check (needs attention: {0}, sent: {1})' -f $attn.Count, $sent)
     if ($script:DryRun) { return New-FixItResult $true 'Practice run' 'Practice run only - nothing was sent.' $o @{ ReportText = $text } }
     return New-FixItResult $sent $(if ($sent) { 'Health check sent' } else { 'Health check not sent' }) $(if ($sent) { 'The weekly health check was sent to Trey.' } else { 'The weekly health check could not be sent.' }) @() @{ ReportText = $text; Sent = $sent }
+}
+
+# ---------------------------------------------------------------------------
+# Hardware facts (v2.3.7): the "My PC info" screen, the hardware part of every report, and the weekly hardware monitor.
+# Everything here only READS (no administrator rights). Each piece is read on its own, in the background worker with a time
+# limit, so one piece that cannot be read (or hangs) only becomes "not available" and never stops the others.
+# ---------------------------------------------------------------------------
+$script:HwSeconds = 25
+$script:HwNotAvailable = 'not available'
+$script:HwFullPercent = 90          # a drive over this many percent full gets a mild note (and one alert)
+$script:HwWearAlert = 90            # SSD wear (percent used) at or above this is serious
+$script:HwCrashAlert = 2            # MORE than this many blue screens (or unexpected shutdowns) in 7 days is serious
+$script:HwBatteryLowHealth = 50     # battery that holds less than this percent of its original charge (info only)
+$script:HwRepeatDays = 7            # the same alert is never shown or sent twice within this many days
+
+# ----- readers (replaced by pretend versions in the tests) -----
+function Get-FixItHwComputer {
+    if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Get-FixItHwComputer' -Arguments $PSBoundParameters -TimeoutSeconds $script:HwSeconds) }
+    $o = [ordered]@{ Maker = ''; Model = ''; Serial = ''; BiosDate = $null }
+    $any = $false
+    try { $cs = Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction Stop; $o.Maker = [string]$cs.Manufacturer; $o.Model = [string]$cs.Model; $any = $true } catch { }
+    try { $b = Get-CimInstance -ClassName Win32_BIOS -ErrorAction Stop; $o.Serial = [string]$b.SerialNumber; if ($b.ReleaseDate) { $o.BiosDate = [datetime]$b.ReleaseDate }; $any = $true } catch { }
+    if (-not $any) { throw 'the computer details could not be read' }
+    return [pscustomobject]$o
+}
+function Get-FixItHwCpu {
+    if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Get-FixItHwCpu' -Arguments $PSBoundParameters -TimeoutSeconds $script:HwSeconds) }
+    $p = @(Get-CimInstance -ClassName Win32_Processor -ErrorAction Stop)
+    if ($p.Count -eq 0) { throw 'no processor was listed' }
+    $cores = 0; $threads = 0; $loads = @()
+    foreach ($x in $p) {
+        if ($null -ne $x.NumberOfCores) { $cores += [int]$x.NumberOfCores }
+        if ($null -ne $x.NumberOfLogicalProcessors) { $threads += [int]$x.NumberOfLogicalProcessors }
+        if ($null -ne $x.LoadPercentage) { $loads += [double]$x.LoadPercentage }
+    }
+    $load = $null; if ($loads.Count -gt 0) { $load = [int][math]::Round(($loads | Measure-Object -Average).Average) }
+    return [pscustomobject]@{ Name = ([string]$p[0].Name -replace '\s+', ' ').Trim(); Cores = $cores; Threads = $threads; LoadPercent = $load }
+}
+function Get-FixItHwMemory {
+    if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Get-FixItHwMemory' -Arguments $PSBoundParameters -TimeoutSeconds $script:HwSeconds) }
+    $os = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop
+    $o = [ordered]@{ TotalBytes = ([int64]$os.TotalVisibleMemorySize * 1KB); FreeBytes = ([int64]$os.FreePhysicalMemory * 1KB); Sticks = $null; SpeedMHz = $null; Slots = $null }
+    try {
+        $m = @(Get-CimInstance -ClassName Win32_PhysicalMemory -ErrorAction Stop)
+        $o.Sticks = $m.Count
+        $speeds = @($m | ForEach-Object { if ($_.ConfiguredClockSpeed) { [int]$_.ConfiguredClockSpeed } elseif ($_.Speed) { [int]$_.Speed } } | Where-Object { $_ -gt 0 })
+        if ($speeds.Count -gt 0) { $o.SpeedMHz = [int]($speeds | Measure-Object -Maximum).Maximum }
+    } catch { }
+    try {
+        $a = @(Get-CimInstance -ClassName Win32_PhysicalMemoryArray -ErrorAction Stop)
+        $n = 0; foreach ($x in $a) { if ($null -ne $x.MemoryDevices) { $n += [int]$x.MemoryDevices } }
+        if ($n -gt 0) { $o.Slots = $n }
+    } catch { }
+    return [pscustomobject]$o
+}
+function Get-FixItHwDisks {
+    if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Get-FixItHwDisks' -Arguments $PSBoundParameters -TimeoutSeconds $script:HwSeconds) }
+    foreach ($d in @(Get-PhysicalDisk -ErrorAction Stop)) {
+        $model = [string]$d.FriendlyName
+        if ($d.PSObject.Properties['Model'] -and [string]$d.Model) { $model = [string]$d.Model }
+        [pscustomobject]@{ Id = ([string]$d.FriendlyName + '|' + [string]$d.SerialNumber); Model = ($model -replace '\s+', ' ').Trim(); MediaType = [string]$d.MediaType; BusType = [string]$d.BusType; Size = [int64]$d.Size; Health = [string]$d.HealthStatus; Status = (@($d.OperationalStatus) -join ', ') }
+    }
+}
+function Get-FixItHwVolumes {
+    if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Get-FixItHwVolumes' -Arguments $PSBoundParameters -TimeoutSeconds $script:HwSeconds) }
+    foreach ($v in @(Get-CimInstance -ClassName Win32_LogicalDisk -Filter 'DriveType=2 OR DriveType=3' -ErrorAction Stop)) {
+        if ($null -eq $v.Size -or [int64]$v.Size -le 0) { continue }   # an empty card reader or USB slot
+        [pscustomobject]@{ Letter = [string]$v.DeviceID; Label = [string]$v.VolumeName; Total = [int64]$v.Size; Free = [int64]$v.FreeSpace; Removable = ([int]$v.DriveType -eq 2) }
+    }
+}
+function Get-FixItHwGraphics {
+    if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Get-FixItHwGraphics' -Arguments $PSBoundParameters -TimeoutSeconds $script:HwSeconds) }
+    foreach ($g in @(Get-CimInstance -ClassName Win32_VideoController -ErrorAction Stop)) {
+        $w = $null; $h = $null; $hz = $null
+        if ($g.CurrentHorizontalResolution) { $w = [int]$g.CurrentHorizontalResolution }
+        if ($g.CurrentVerticalResolution) { $h = [int]$g.CurrentVerticalResolution }
+        if ($g.CurrentRefreshRate) { $hz = [int]$g.CurrentRefreshRate }
+        [pscustomobject]@{ Name = [string]$g.Name; Width = $w; Height = $h; Hz = $hz }
+    }
+}
+function Get-FixItHwBattery {
+    if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Get-FixItHwBattery' -Arguments $PSBoundParameters -TimeoutSeconds $script:HwSeconds) }
+    $b = @(Get-CimInstance -ClassName Win32_Battery -ErrorAction Stop)
+    if ($b.Count -eq 0) { return [pscustomobject]@{ Present = $false; ChargePercent = $null; State = ''; HealthPercent = $null } }
+    $charge = $null; if ($null -ne $b[0].EstimatedChargeRemaining) { $charge = [int]$b[0].EstimatedChargeRemaining }
+    $state = ''
+    switch ([int]$b[0].BatteryStatus) { 1 { $state = 'running on battery' } 4 { $state = 'running on battery' } 5 { $state = 'running on battery' } 2 { $state = 'plugged in' } 3 { $state = 'fully charged' } { $_ -in 6, 7, 8, 9 } { $state = 'charging' } }
+    $health = $null
+    try {
+        $full = @(Get-CimInstance -Namespace 'root\wmi' -ClassName 'BatteryFullChargedCapacity' -ErrorAction Stop)
+        $design = @(Get-CimInstance -Namespace 'root\wmi' -ClassName 'BatteryStaticData' -ErrorAction Stop)
+        if ($full.Count -gt 0 -and $design.Count -gt 0 -and [double]$design[0].DesignedCapacity -gt 0) { $health = [int][math]::Round(100.0 * [double]$full[0].FullChargedCapacity / [double]$design[0].DesignedCapacity) }
+    } catch { }
+    return [pscustomobject]@{ Present = $true; ChargePercent = $charge; State = $state; HealthPercent = $health }
+}
+function Get-FixItHwWindows {
+    if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Get-FixItHwWindows' -Arguments $PSBoundParameters -TimeoutSeconds $script:HwSeconds) }
+    $os = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop
+    $up = $null; if ($os.LastBootUpTime) { $up = (Get-Date) - [datetime]$os.LastBootUpTime }
+    return [pscustomobject]@{ Caption = [string]$os.Caption; Version = [string]$os.Version; Build = [string]$os.BuildNumber; Arch = [string]$os.OSArchitecture; UptimeHours = $(if ($up) { [double]$up.TotalHours } else { $null }) }
+}
+function Get-FixItHwNetwork {
+    if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Get-FixItHwNetwork' -Arguments $PSBoundParameters -TimeoutSeconds $script:HwSeconds) }
+    $ad = $null
+    try {
+        $r = @(Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction Stop | Sort-Object { [int]$_.RouteMetric + [int]$_.InterfaceMetric })
+        if ($r.Count -gt 0) { $ad = Get-NetAdapter -InterfaceIndex $r[0].ifIndex -ErrorAction Stop }
+    } catch { }
+    if ($null -eq $ad) { $ad = @(Get-NetAdapter -Physical -ErrorAction Stop | Where-Object { $_.Status -eq 'Up' }) | Select-Object -First 1 }
+    if ($null -eq $ad) { throw 'no network adapter is connected' }
+    $kind = 'network'
+    $pm = ([string]$ad.PhysicalMediaType + ' ' + [string]$ad.MediaType + ' ' + [string]$ad.InterfaceDescription)
+    if ($pm -match '(?i)802\.11|wi-?fi|wireless|wlan') { $kind = 'Wi-Fi' } elseif ($pm -match '(?i)802\.3|ethernet') { $kind = 'cable (Ethernet)' }
+    $bps = $null
+    try { if ($ad.ReceiveLinkSpeed) { $bps = [uint64]$ad.ReceiveLinkSpeed } } catch { }
+    return [pscustomobject]@{ Name = [string]$ad.Name; Description = [string]$ad.InterfaceDescription; Kind = $kind; BitsPerSecond = $bps }
+}
+# Monitor-only readers
+function Get-FixItHwReliability {
+    if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Get-FixItHwReliability' -Arguments $PSBoundParameters -TimeoutSeconds $script:HwSeconds) }
+    $denied = $null; $got = 0
+    foreach ($d in @(Get-PhysicalDisk -ErrorAction Stop)) {
+        try {
+            $c = $d | Get-StorageReliabilityCounter -ErrorAction Stop
+            if ($null -eq $c) { continue }
+            $got++
+            $num = { param($v) if ($null -eq $v -or [string]$v -eq '') { $null } else { [double]$v } }
+            [pscustomobject]@{ Id = ([string]$d.FriendlyName + '|' + [string]$d.SerialNumber); Name = [string]$d.FriendlyName; Wear = (& $num $c.Wear); Temperature = (& $num $c.Temperature); TemperatureMax = (& $num $c.TemperatureMax); ReadErrorsUncorrected = (& $num $c.ReadErrorsUncorrected) }
+        } catch { if (Test-FixItAccessDenied -Err $_) { $denied = $_ } }
+    }
+    if ($got -eq 0 -and $null -ne $denied) { throw $denied }
+}
+function Get-FixItHwEventCount {
+    param([string]$Provider, [int[]]$Ids = @(), [int]$Days = 7, [int[]]$Levels = @(), [string]$MessageLike = '')
+    if (Test-FixItOffUiWanted) { return (Invoke-FixItOffUi -Command 'Get-FixItHwEventCount' -Arguments $PSBoundParameters -TimeoutSeconds $script:HwSeconds) }
+    $f = @{ LogName = 'System'; ProviderName = $Provider; StartTime = (Get-Date).AddDays(-$Days) }
+    if ($Ids.Count -gt 0) { $f['Id'] = $Ids }
+    if ($Levels.Count -gt 0) { $f['Level'] = $Levels }
+    try { $ev = @(Get-WinEvent -FilterHashtable $f -MaxEvents 200 -ErrorAction Stop) } catch { if (Test-FixItNoEvents -Err $_) { return 0 }; throw }
+    if ($MessageLike) { $ev = @($ev | Where-Object { ([string]$_.Message) -match $MessageLike }) }
+    return [int]$ev.Count
+}
+# Shows the one plain message (background run). Replaced in the tests. Test mode and practice mode never show anything.
+function Show-FixItHardwareAlert {
+    param([string]$Text)
+    if ($script:TestMode -or $script:DryRun) { return $false }
+    try {
+        Add-Type -AssemblyName System.Windows.Forms
+        [void][System.Windows.Forms.MessageBox]::Show($Text, 'Family Fix-It', 'OK', 'Information')
+        return $true
+    } catch { Write-FixItLog ('Could not show the hardware message: {0}' -f $_.Exception.Message) 'WARN'; return $false }
+}
+
+# ----- one piece at a time: a piece that cannot be read is "not available", never an error ----
+function Get-FixItHwPiece {
+    param([string]$Name, [scriptblock]$Read)
+    try { return [pscustomobject]@{ Ok = $true; Data = @(& $Read); Error = '' } }
+    catch {
+        $why = [string]$_.Exception.Message
+        Write-FixItLog ('Hardware: {0} is not available here ({1})' -f $Name, $why)
+        return [pscustomobject]@{ Ok = $false; Data = @(); Error = $why }
+    }
+}
+function Get-FixItHwOne { param($Piece) if ($null -ne $Piece -and $Piece.Ok -and @($Piece.Data).Count -gt 0) { return @($Piece.Data)[0] }; return $null }
+
+function Get-FixItHardwareInfo {
+    return [pscustomobject]@{
+        Computer = (Get-FixItHwPiece 'the computer details' { Get-FixItHwComputer })
+        Cpu = (Get-FixItHwPiece 'the processor' { Get-FixItHwCpu })
+        Memory = (Get-FixItHwPiece 'the memory' { Get-FixItHwMemory })
+        Disks = (Get-FixItHwPiece 'the disks' { Get-FixItHwDisks })
+        Volumes = (Get-FixItHwPiece 'the drive letters' { Get-FixItHwVolumes })
+        Graphics = (Get-FixItHwPiece 'the graphics card' { Get-FixItHwGraphics })
+        Battery = (Get-FixItHwPiece 'the battery' { Get-FixItHwBattery })
+        Windows = (Get-FixItHwPiece 'Windows' { Get-FixItHwWindows })
+        Network = (Get-FixItHwPiece 'the network adapter' { Get-FixItHwNetwork })
+    }
+}
+
+# ----- plain words (pure, tested) -----
+function Format-FixItGb {
+    param([double]$Bytes)
+    return ('{0:N1} GB' -f ($Bytes / 1GB))
+}
+function Get-FixItPercentUsed {
+    param([double]$Total, [double]$Free)
+    if ($Total -le 0) { return $null }
+    $p = [int][math]::Round(100.0 * ($Total - $Free) / $Total, 0, [MidpointRounding]::AwayFromZero)
+    if ($p -lt 0) { $p = 0 }; if ($p -gt 100) { $p = 100 }
+    return $p
+}
+function Get-FixItDriveKind {
+    param([string]$MediaType, [string]$BusType)
+    if ($BusType -match '(?i)nvme') { return 'NVMe SSD' }
+    if ($MediaType -match '(?i)^SSD$') { return 'SSD' }
+    if ($MediaType -match '(?i)^HDD$') { return 'HDD' }
+    if ($BusType -match '(?i)usb') { return 'USB drive' }
+    return 'type not known'
+}
+function Format-FixItLinkSpeed {
+    param($BitsPerSecond)
+    if ($null -eq $BitsPerSecond) { return '' }
+    $b = [double]$BitsPerSecond
+    if ($b -le 0 -or $b -ge 1e15) { return '' }
+    if ($b -ge 1e9) { return ('{0:0.#} Gbps' -f ($b / 1e9)) }
+    return ('{0:0.#} Mbps' -f ($b / 1e6))
+}
+function Format-FixItUptime {
+    param($Hours)
+    if ($null -eq $Hours) { return '' }
+    $h = [double]$Hours
+    if ($h -lt 1) { return 'less than an hour' }
+    if ($h -lt 48) { return ('{0} hour{1}' -f [int][math]::Floor($h), $(if ([int][math]::Floor($h) -eq 1) { '' } else { 's' })) }
+    $d = [int][math]::Floor($h / 24); $rest = [int][math]::Floor($h - 24 * $d)
+    return ('{0} days, {1} hour{2}' -f $d, $rest, $(if ($rest -eq 1) { '' } else { 's' }))
+}
+function Test-FixItDiskUnhealthy {
+    param($Disk)
+    return ([string]$Disk.Health -match '(?i)^(unhealthy|warning)$')
+}
+
+# A section is @{ Title; Rows = @(@{ Label; Value; Percent }); Notes = @() }. The window draws it; the copy text and the report print it.
+function New-FixItHwRow { param([string]$Label, [string]$Value, $Percent = $null) return [pscustomobject]@{ Label = $Label; Value = $Value; Percent = $Percent } }
+function New-FixItHwSection { param([string]$Title, $Rows, $Notes = @()) return [pscustomobject]@{ Title = $Title; Rows = @($Rows); Notes = @($Notes) } }
+function Get-FixItHwText { param($Value, [string]$Default = '') $s = ([string]$Value).Trim(); if ($s) { return $s }; return $(if ($Default) { $Default } else { $script:HwNotAvailable }) }
+
+function Get-FixItHardwareSections {
+    param($Hw)
+    $na = $script:HwNotAvailable
+    $out = @()
+
+    # Computer
+    $c = Get-FixItHwOne $Hw.Computer
+    if ($null -eq $c) { $out += (New-FixItHwSection 'Computer' @((New-FixItHwRow 'Computer' $na))) }
+    else {
+        $bd = $na; if ($null -ne $c.BiosDate) { $bd = ([datetime]$c.BiosDate).ToString('yyyy-MM-dd') }
+        $out += (New-FixItHwSection 'Computer' @((New-FixItHwRow 'Maker' (Get-FixItHwText $c.Maker)), (New-FixItHwRow 'Model' (Get-FixItHwText $c.Model)), (New-FixItHwRow 'Serial number' (Get-FixItHwText $c.Serial)), (New-FixItHwRow 'BIOS date' $bd)))
+    }
+
+    # Processor
+    $p = Get-FixItHwOne $Hw.Cpu
+    if ($null -eq $p) { $out += (New-FixItHwSection 'Processor' @((New-FixItHwRow 'Processor' $na))) }
+    else {
+        $cores = $na; if ([int]$p.Cores -gt 0) { $cores = ('{0} cores, {1} threads' -f $p.Cores, $p.Threads) }
+        $load = $na; $lp = $null; if ($null -ne $p.LoadPercent) { $load = ('{0}%' -f $p.LoadPercent); $lp = [int]$p.LoadPercent }
+        $out += (New-FixItHwSection 'Processor' @((New-FixItHwRow 'Name' (Get-FixItHwText $p.Name)), (New-FixItHwRow 'Cores' $cores), (New-FixItHwRow 'Busy right now' $load $lp)))
+    }
+
+    # Memory
+    $m = Get-FixItHwOne $Hw.Memory
+    if ($null -eq $m) { $out += (New-FixItHwSection 'Memory (RAM)' @((New-FixItHwRow 'Memory' $na))) }
+    else {
+        $rows = @()
+        $pu = Get-FixItPercentUsed -Total $m.TotalBytes -Free $m.FreeBytes
+        if ($null -ne $pu) {
+            $used = [double]$m.TotalBytes - [double]$m.FreeBytes
+            $rows += (New-FixItHwRow 'In use' ('{0} of {1} ({2}% used)' -f (Format-FixItGb $used), (Format-FixItGb $m.TotalBytes), $pu) $pu)
+            $rows += (New-FixItHwRow 'Free' (Format-FixItGb $m.FreeBytes))
+        } else { $rows += (New-FixItHwRow 'In use' $na) }
+        $rows += (New-FixItHwRow 'Memory sticks' $(if ($null -ne $m.Sticks) { [string]$m.Sticks } else { $na }))
+        $rows += (New-FixItHwRow 'Speed' $(if ($null -ne $m.SpeedMHz) { ('{0} MHz' -f $m.SpeedMHz) } else { $na }))
+        $free = $na; if ($null -ne $m.Slots -and $null -ne $m.Sticks) { $f = [int]$m.Slots - [int]$m.Sticks; if ($f -lt 0) { $f = 0 }; $free = ('{0} of {1}' -f $f, $m.Slots) }
+        $rows += (New-FixItHwRow 'Free memory slots' $free)
+        $out += (New-FixItHwSection 'Memory (RAM)' $rows)
+    }
+
+    # Drives
+    $rows = @(); $notes = @()
+    $dk = $Hw.Disks
+    if ($null -eq $dk -or -not $dk.Ok) { $rows += (New-FixItHwRow 'Disks' $na) }
+    else {
+        $n = 0
+        foreach ($d in @($dk.Data)) {
+            $n++
+            $h = Get-FixItHwText $d.Health
+            $rows += (New-FixItHwRow ('Disk ' + $n) ('{0} - {1} - {2} - health: {3}' -f (Get-FixItHwText $d.Model), (Get-FixItDriveKind -MediaType $d.MediaType -BusType $d.BusType), $(if ([int64]$d.Size -gt 0) { Format-FixItGb $d.Size } else { $na }), $h))
+            if (Test-FixItDiskUnhealthy -Disk $d) { $notes += ('Disk {0} ({1}) says it is not healthy. Please tell Trey.' -f $n, (Get-FixItHwText $d.Model)) }
+        }
+        if ($n -eq 0) { $rows += (New-FixItHwRow 'Disks' $na) }
+    }
+    $vl = $Hw.Volumes
+    if ($null -eq $vl -or -not $vl.Ok) { $rows += (New-FixItHwRow 'Drive letters' $na) }
+    else {
+        foreach ($v in @($vl.Data)) {
+            $pu = Get-FixItPercentUsed -Total $v.Total -Free $v.Free
+            $name = [string]$v.Letter; if ($v.Label) { $name += (' (' + $v.Label + ')') }
+            $rows += (New-FixItHwRow $name ('{0} used of {1} - {2} free ({3}% used)' -f (Format-FixItGb ([double]$v.Total - [double]$v.Free)), (Format-FixItGb $v.Total), (Format-FixItGb $v.Free), $pu) $pu)
+            if ($null -ne $pu -and $pu -gt $script:HwFullPercent) { $notes += ('Drive {0} is almost full ({1}% used). Freeing some space will help the computer run better.' -f $v.Letter, $pu) }
+        }
+    }
+    $out += (New-FixItHwSection 'Drives' $rows $notes)
+
+    # Graphics
+    $gr = $Hw.Graphics
+    if ($null -eq $gr -or -not $gr.Ok -or @($gr.Data).Count -eq 0) { $out += (New-FixItHwSection 'Graphics and screen' @((New-FixItHwRow 'Graphics card' $na))) }
+    else {
+        $rows = @(); $res = $na
+        foreach ($g in @($gr.Data)) { $rows += (New-FixItHwRow 'Graphics card' (Get-FixItHwText $g.Name)); if ($null -ne $g.Width -and $null -ne $g.Height -and $res -eq $na) { $res = ('{0} x {1}' -f $g.Width, $g.Height); if ($g.Hz) { $res += (' at {0} Hz' -f $g.Hz) } } }
+        $rows += (New-FixItHwRow 'Screen size' $res)
+        $out += (New-FixItHwSection 'Graphics and screen' $rows)
+    }
+
+    # Battery
+    $b = Get-FixItHwOne $Hw.Battery
+    if ($null -eq $b) { $out += (New-FixItHwSection 'Battery' @((New-FixItHwRow 'Battery' $na))) }
+    elseif (-not [bool]$b.Present) { $out += (New-FixItHwSection 'Battery' @((New-FixItHwRow 'Battery' 'this computer has no battery'))) }
+    else {
+        $rows = @()
+        $rows += (New-FixItHwRow 'Charge' $(if ($null -ne $b.ChargePercent) { ('{0}%{1}' -f $b.ChargePercent, $(if ($b.State) { ' (' + $b.State + ')' } else { '' })) } else { $na }) $b.ChargePercent)
+        $rows += (New-FixItHwRow 'Battery health' $(if ($null -ne $b.HealthPercent) { ('holds {0}% of its original charge' -f $b.HealthPercent) } else { $na }) $b.HealthPercent)
+        $out += (New-FixItHwSection 'Battery' $rows)
+    }
+
+    # Windows and network
+    $rows = @()
+    $w = Get-FixItHwOne $Hw.Windows
+    if ($null -eq $w) { $rows += (New-FixItHwRow 'Windows' $na); $rows += (New-FixItHwRow 'Turned on for' $na) }
+    else {
+        $rows += (New-FixItHwRow 'Windows' ('{0} (version {1}, build {2}, {3})' -f (Get-FixItHwText $w.Caption), $w.Version, $w.Build, $w.Arch))
+        $up = Format-FixItUptime $w.UptimeHours
+        $rows += (New-FixItHwRow 'Turned on for' $(if ($up) { $up } else { $na }))
+    }
+    $nw = Get-FixItHwOne $Hw.Network
+    if ($null -eq $nw) { $rows += (New-FixItHwRow 'Network' $na) }
+    else {
+        $sp = Format-FixItLinkSpeed $nw.BitsPerSecond
+        $rows += (New-FixItHwRow 'Network' ('{0} - {1}{2}' -f $nw.Kind, (Get-FixItHwText $nw.Description (Get-FixItHwText $nw.Name)), $(if ($sp) { ', speed ' + $sp } else { '' })))
+    }
+    $out += (New-FixItHwSection 'Windows and network' $rows)
+    return @($out)
+}
+
+# Plain text (the Copy button, the report, the command line). Notes come last under their section.
+function Format-FixItHardwareText {
+    param($Sections)
+    $o = @()
+    foreach ($s in @($Sections)) {
+        $o += ('--- ' + $s.Title + ' ---')
+        foreach ($r in @($s.Rows)) { $o += ('{0}: {1}' -f $r.Label, $r.Value) }
+        foreach ($n in @($s.Notes)) { $o += ('Note: ' + $n) }
+        $o += ''
+    }
+    if ($o.Count -gt 0) { $o = @($o[0..($o.Count - 2)]) }
+    return @($o)
+}
+function Get-FixItHardwareReportLines {
+    $hw = Get-FixItHardwareInfo
+    return @(Format-FixItHardwareText -Sections (Get-FixItHardwareSections -Hw $hw))
+}
+
+# ---------------------------------------------------------------------------
+# The weekly hardware monitor (part of the weekly check-in; no new scheduled task)
+# ---------------------------------------------------------------------------
+# What each finding says to the family member. One plain message, no jargon.
+$script:HwMessages = @{
+    Storage = "Your computer's storage drive is starting to fail. Please call Trey soon."
+    Crashes = 'Your computer has crashed or turned itself off several times this week. Please call Trey soon.'
+    Memory = "Your computer's memory is reporting errors. Please call Trey soon."
+    Full = 'A drive on your computer is almost full. Please call Trey soon.'
+}
+
+# Pure: decides what is serious (Alerts) and what is only for the report (Info). Nothing here touches Windows.
+# $Previous: @{ <disk id> = @{ ReadErrors = n } } from the last run (or $null).
+function Get-FixItHardwareFindings {
+    param($Disks = $null, $Reliability = $null, $Previous = $null, $Events = $null, $Battery = $null, $Volumes = $null)
+    $alerts = New-Object System.Collections.ArrayList
+    $info = New-Object System.Collections.ArrayList
+    $add = { param([string]$Key, [string]$Kind, [string]$Detail) [void]$alerts.Add([pscustomobject]@{ Key = $Key; Kind = $Kind; Message = [string]$script:HwMessages[$Kind]; Detail = $Detail }) }
+
+    $dl = @(); if ($null -ne $Disks) { $dl = @($Disks) }
+    foreach ($d in $dl) {
+        $nm = Get-FixItHwText $d.Model 'a disk'
+        if (Test-FixItDiskUnhealthy -Disk $d) { & $add ('disk:' + [string]$d.Id) 'Storage' ('Disk "{0}" reports health {1} (status {2}).' -f $nm, $d.Health, $d.Status) }
+        elseif ([string]$d.Status -match '(?i)predictive|failed|io error') { & $add ('disk:' + [string]$d.Id) 'Storage' ('Disk "{0}" reports status {1} (health {2}).' -f $nm, $d.Status, $d.Health) }
+        else {
+            [void]$info.Add(('Disk "{0}": health {1}, status {2}' -f $nm, (Get-FixItHwText $d.Health), (Get-FixItHwText $d.Status)))
+            if ([string]$d.Status -and [string]$d.Status -notmatch '(?i)^(ok|unknown)$') { [void]$info.Add(('Disk "{0}": status is "{1}" (not raised)' -f $nm, $d.Status)) }
+        }
+    }
+    foreach ($r in @($Reliability | Where-Object { $null -ne $_ })) {
+        $nm = Get-FixItHwText $r.Name 'a disk'
+        $wear = ''; if ($null -ne $r.Wear) { $wear = ('wear {0}%' -f [int]$r.Wear) }
+        $temp = ''; if ($null -ne $r.Temperature) { $temp = ('temperature {0} C' -f [int]$r.Temperature); if ($null -ne $r.TemperatureMax) { $temp += (' (limit {0} C)' -f [int]$r.TemperatureMax) } }
+        $errs = ''; if ($null -ne $r.ReadErrorsUncorrected) { $errs = ('uncorrected read errors {0}' -f [int64]$r.ReadErrorsUncorrected) }
+        $bits = @($wear, $temp, $errs | Where-Object { $_ })
+        if ($bits.Count -gt 0) { [void]$info.Add(('Disk "{0}" counters: {1}' -f $nm, ($bits -join ', '))) }
+        if ($null -ne $r.Wear -and [double]$r.Wear -ge $script:HwWearAlert) { & $add ('wear:' + [string]$r.Id) 'Storage' ('SSD "{0}" has used {1}% of its life (alert at {2}%).' -f $nm, [int]$r.Wear, $script:HwWearAlert) }
+        if ($null -ne $r.Temperature -and $null -ne $r.TemperatureMax -and [double]$r.TemperatureMax -gt 0 -and [double]$r.Temperature -ge [double]$r.TemperatureMax) { [void]$info.Add(('Disk "{0}" is at or above its temperature limit ({1} C, limit {2} C) (not raised)' -f $nm, [int]$r.Temperature, [int]$r.TemperatureMax)) }
+        if ($null -ne $r.ReadErrorsUncorrected) {
+            $prev = $null
+            if ($null -ne $Previous) {
+                $pk = [string]$r.Id
+                if ($Previous -is [System.Collections.IDictionary]) { if ($Previous.Contains($pk)) { $prev = $Previous[$pk] } }
+                elseif ($Previous.PSObject.Properties[$pk]) { $prev = $Previous.$pk }
+            }
+            $pv = $null
+            if ($null -ne $prev) { if ($prev -is [System.Collections.IDictionary]) { if ($prev.Contains('ReadErrors')) { $pv = $prev['ReadErrors'] } } elseif ($prev.PSObject.Properties['ReadErrors']) { $pv = $prev.ReadErrors } }
+            if ($null -ne $pv -and [double]$r.ReadErrorsUncorrected -gt [double]$pv) { & $add ('readerrors:' + [string]$r.Id) 'Storage' ('Disk "{0}": uncorrected read errors rose from {1} to {2} since the last check.' -f $nm, [int64]$pv, [int64]$r.ReadErrorsUncorrected) }
+        }
+    }
+    if ($null -ne $Events) {
+        $bs = $Events.BugChecks; $sd = $Events.Shutdowns
+        if ($null -ne $bs) { [void]$info.Add(('Blue screens in the last 7 days: {0}' -f $bs)) }
+        if ($null -ne $sd) { [void]$info.Add(('Unexpected shutdowns in the last 7 days: {0}' -f $sd)) }
+        if ($null -ne $Events.WheaErrors) { [void]$info.Add(('Hardware error events (WHEA) in the last 7 days: {0}' -f $Events.WheaErrors)) }
+        $crash = $false
+        if ($null -ne $bs -and [int]$bs -gt $script:HwCrashAlert) { $crash = $true }
+        if ($null -ne $sd -and [int]$sd -gt $script:HwCrashAlert) { $crash = $true }
+        if ($crash) { & $add 'crashes' 'Crashes' ('{0} blue screen(s) and {1} unexpected shutdown(s) in the last 7 days (alert above {2}).' -f $(if ($null -ne $bs) { $bs } else { 'unknown number of' }), $(if ($null -ne $sd) { $sd } else { 'unknown number of' }), $script:HwCrashAlert) }
+        $mem = 0; if ($null -ne $Events.WheaMemory) { $mem += [int]$Events.WheaMemory }; if ($null -ne $Events.MemoryDiagnosticErrors) { $mem += [int]$Events.MemoryDiagnosticErrors }
+        if ($mem -gt 0) { & $add 'memory' 'Memory' ('Memory errors found: {0} hardware memory event(s), {1} Windows memory test error report(s).' -f [int]$Events.WheaMemory, [int]$Events.MemoryDiagnosticErrors) }
+        elseif ($null -ne $Events.WheaMemory -or $null -ne $Events.MemoryDiagnosticErrors) { [void]$info.Add('Memory errors: none found') }
+    }
+    if ($null -ne $Battery -and [bool]$Battery.Present -and $null -ne $Battery.HealthPercent) {
+        [void]$info.Add(('Battery health: holds {0}% of its original charge' -f $Battery.HealthPercent))
+        if ([int]$Battery.HealthPercent -lt $script:HwBatteryLowHealth) { [void]$info.Add(('Battery is worn: it holds less than {0}% of its original charge (not raised)' -f $script:HwBatteryLowHealth)) }
+    }
+    foreach ($v in @($Volumes | Where-Object { $null -ne $_ })) {
+        $pu = Get-FixItPercentUsed -Total $v.Total -Free $v.Free
+        if ($null -eq $pu) { continue }
+        [void]$info.Add(('Drive {0}: {1}% used, {2} free' -f $v.Letter, $pu, (Format-FixItGb $v.Free)))
+        if ($pu -gt $script:HwFullPercent -and -not [bool]$v.Removable) { & $add ('full:' + [string]$v.Letter) 'Full' ('Drive {0} is {1}% full ({2} free).' -f $v.Letter, $pu, (Format-FixItGb $v.Free)) }
+        elseif ($pu -gt $script:HwFullPercent) { [void]$info.Add(('Drive {0} is {1}% full (removable, not raised)' -f $v.Letter, $pu)) }
+    }
+    return [pscustomobject]@{ Alerts = @($alerts); Info = @($info) }
+}
+
+# Pure: which alerts have NOT been shown or sent within the last week? $Sent is @{ key = 'yyyy-MM-ddTHH:mm:ss' }.
+function Select-FixItNewHardwareAlerts {
+    param($Alerts, $Sent = $null, [datetime]$Now = (Get-Date))
+    $out = @()
+    foreach ($a in @($Alerts)) {
+        $last = $null
+        if ($null -ne $Sent) {
+            $k = [string]$a.Key; $raw = $null
+            if ($Sent -is [System.Collections.IDictionary]) { if ($Sent.Contains($k)) { $raw = $Sent[$k] } } elseif ($Sent.PSObject.Properties[$k]) { $raw = $Sent.$k }
+            $d = [datetime]::MinValue
+            if ($raw -and [datetime]::TryParse([string]$raw, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind, [ref]$d)) { $last = $d }
+        }
+        if ($null -ne $last -and ($Now - $last).TotalDays -lt $script:HwRepeatDays -and $last -le $Now.AddMinutes(5)) { continue }
+        $out += $a
+    }
+    return @($out)
+}
+# Pure: ONE message for the person, each plain sentence once.
+function Get-FixItHardwareMessage {
+    param($Alerts)
+    $m = @(@($Alerts) | ForEach-Object { [string]$_.Message } | Where-Object { $_ } | Select-Object -Unique)
+    return ($m -join "`r`n`r`n")
+}
+
+# The saved bits (state file). JSON in a normal setting; never written in Test mode or practice mode.
+function Get-FixItHwSavedMap {
+    param([string]$Name)
+    $raw = Get-FixItSetting -Name $Name -Default ''
+    if (-not $raw) { return @{} }
+    try {
+        $o = $raw | ConvertFrom-Json
+        $h = @{}
+        foreach ($p in $o.PSObject.Properties) { $h[$p.Name] = $p.Value }
+        return $h
+    } catch { return @{} }
+}
+function Save-FixItHwSavedMap {
+    param([string]$Name, $Map)
+    Set-FixItSetting -Name $Name -Value (ConvertTo-Json -InputObject $Map -Compress -Depth 4)
+}
+
+# Reads what the monitor needs (every piece on its own; a piece that needs administrator rights and cannot get them is skipped quietly).
+function Get-FixItHardwareFacts {
+    $f = [ordered]@{ Disks = $null; Reliability = $null; Events = $null; Battery = $null; Volumes = $null; Skipped = @() }
+    $try = {
+        param([string]$Name, [scriptblock]$Read)
+        $p = Get-FixItHwPiece $Name $Read
+        if (-not $p.Ok) { $f.Skipped += $Name; return $null }
+        return $p
+    }
+    $p = & $try 'the disk health' { Get-FixItHwDisks };       if ($p) { $f.Disks = @($p.Data) }
+    $p = & $try 'the disk counters' { Get-FixItHwReliability }; if ($p) { $f.Reliability = @($p.Data) }
+    $p = & $try 'the battery' { Get-FixItHwBattery };          if ($p) { $f.Battery = (Get-FixItHwOne $p) }
+    $p = & $try 'the drive letters' { Get-FixItHwVolumes };   if ($p) { $f.Volumes = @($p.Data) }
+    $ev = [ordered]@{ BugChecks = $null; Shutdowns = $null; WheaErrors = $null; WheaMemory = $null; MemoryDiagnosticErrors = $null }
+    $q = & $try 'blue-screen events' { Get-FixItHwEventCount -Provider 'Microsoft-Windows-WER-SystemErrorReporting' -Ids @(1001) -Days 7 }; if ($q) { $ev.BugChecks = [int](@($q.Data)[0]) }
+    $k = & $try 'unexpected-shutdown events (power)' { Get-FixItHwEventCount -Provider 'Microsoft-Windows-Kernel-Power' -Ids @(41) -Days 7 }
+    $e = & $try 'unexpected-shutdown events (log)' { Get-FixItHwEventCount -Provider 'EventLog' -Ids @(6008) -Days 7 }
+    $kv = $null; if ($k) { $kv = [int](@($k.Data)[0]) }; $evv = $null; if ($e) { $evv = [int](@($e.Data)[0]) }
+    if ($null -ne $kv -or $null -ne $evv) { $ev.Shutdowns = [int][math]::Max([int]$kv, [int]$evv) }   # one bad shutdown writes both; count it once
+    $q = & $try 'hardware error events' { Get-FixItHwEventCount -Provider 'Microsoft-Windows-WHEA-Logger' -Days 7 -Levels @(1, 2) }; if ($q) { $ev.WheaErrors = [int](@($q.Data)[0]) }
+    $q = & $try 'memory error events' { Get-FixItHwEventCount -Provider 'Microsoft-Windows-WHEA-Logger' -Days 7 -MessageLike '(?i)memory' }; if ($q) { $ev.WheaMemory = [int](@($q.Data)[0]) }
+    $q = & $try 'the Windows memory test results' { Get-FixItHwEventCount -Provider 'Microsoft-Windows-MemoryDiagnostics-Results' -Ids @(1102) -Days 30 }; if ($q) { $ev.MemoryDiagnosticErrors = [int](@($q.Data)[0]) }
+    $f.Events = [pscustomobject]$ev
+    return [pscustomobject]$f
+}
+
+# The monitor. Returns the lines for the health report, every current alert, and the ones that are new this week.
+function Invoke-FixItHardwareMonitor {
+    $facts = Get-FixItHardwareFacts
+    $prev = Get-FixItHwSavedMap -Name 'HwPrev'
+    $res = Get-FixItHardwareFindings -Disks $facts.Disks -Reliability $facts.Reliability -Previous $prev -Events $facts.Events -Battery $facts.Battery -Volumes $facts.Volumes
+    $sent = Get-FixItHwSavedMap -Name 'HwAlertSent'
+    $new = @(Select-FixItNewHardwareAlerts -Alerts $res.Alerts -Sent $sent -Now (Get-Date))
+    # remember this run's counters for next week's comparison (only the disks that could be read this time)
+    if ($null -ne $facts.Reliability -and @($facts.Reliability).Count -gt 0) {
+        $map = @{}
+        foreach ($k in @($prev.Keys)) { $map[$k] = $prev[$k] }
+        foreach ($r in @($facts.Reliability)) { if ($null -ne $r.ReadErrorsUncorrected) { $map[[string]$r.Id] = @{ ReadErrors = [int64]$r.ReadErrorsUncorrected; At = (Get-Date).ToString('s') } } }
+        Save-FixItHwSavedMap -Name 'HwPrev' -Map $map
+    }
+    if ($script:TestMode) {
+        Add-FixItTestNote -Step 'Hardware monitor' -Status 'PASS' -Text ('read-only checks ran: {0} serious finding(s); {1} piece(s) not readable on this PC (a real run skips those quietly). Nothing is changed, shown or sent in Test mode.' -f @($res.Alerts).Count, @($facts.Skipped).Count)
+    }
+    $lines = @('Hardware monitor:')
+    if (@($res.Alerts).Count -eq 0) { $lines += '  ATTENTION: nothing - the drives, memory and crash history look fine.' }
+    foreach ($a in @($res.Alerts)) { $lines += ('  ALERT: {0}' -f $a.Detail) }
+    foreach ($i in @($res.Info)) { $lines += ('  ' + $i) }
+    foreach ($s in @($facts.Skipped)) { $lines += ('  (not checked on this PC: {0})' -f $s) }
+    return [pscustomobject]@{ Lines = @($lines); Alerts = @($res.Alerts); NewAlerts = $new; Facts = $facts; Sent = $sent }
+}
+
+# After the monitor: one plain message (only for new serious problems) and a full report to Trey. Everything else stays in the weekly report.
+function Invoke-FixItHardwareAlerts {
+    param($Monitor, [string]$HealthText = '')
+    $new = @($Monitor.NewAlerts)
+    if ($new.Count -eq 0) {
+        if (@($Monitor.Alerts).Count -gt 0) { Write-FixItLog ('Hardware: {0} serious finding(s), all already reported in the last {1} days; nothing new is shown' -f @($Monitor.Alerts).Count, $script:HwRepeatDays) }
+        return [pscustomobject]@{ Shown = $false; Sent = $false; Message = '' }
+    }
+    $msg = Get-FixItHardwareMessage -Alerts $new
+    if ($script:TestMode) {
+        Add-FixItTestNote -Step 'Hardware monitor: serious problem' -Status 'WARN' -Text ("a real run WOULD show this one message, and send Trey a full report: {0}" -f ($msg -replace '\s+', ' '))
+        return [pscustomobject]@{ Shown = $false; Sent = $false; Message = $msg }
+    }
+    if ($script:DryRun) { Write-FixItLog ('Would do: show "{0}" and send Trey a hardware report' -f ($msg -replace '\s+', ' ')) 'DRYRUN'; return [pscustomobject]@{ Shown = $false; Sent = $false; Message = $msg } }
+    Write-FixItLog ('Hardware: {0} new serious finding(s): {1}' -f $new.Count, (($new | ForEach-Object { $_.Detail }) -join ' | ')) 'WARN'
+    $o = @('FAMILY FIX-IT *** HARDWARE ALERT ***', ('Made: {0}   Tool version: {1}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm'), $script:FixItVersion), (Get-FixItPcCodeLine), (Get-FixItNameLine), '', 'The family member was told:', $msg, '', 'WHAT WAS FOUND:')
+    foreach ($a in $new) { $o += ('  * ' + $a.Detail) }
+    $o += ''; $o += @($Monitor.Lines)
+    try { $o += ''; $o += @(Get-FixItHardwareReportLines) } catch { }
+    if ($HealthText) { $o += ''; $o += $HealthText }
+    $sent = [bool](Send-FixItReport -Text ($o -join "`r`n") -Kind 'report')
+    $shown = [bool](Show-FixItHardwareAlert -Text $msg)
+    $stamp = @{}
+    foreach ($k in @($Monitor.Sent.Keys)) { $stamp[$k] = $Monitor.Sent[$k] }
+    $now = (Get-Date).ToString('s')
+    foreach ($a in $new) { $stamp[[string]$a.Key] = $now }
+    if ($sent -or $shown) { Save-FixItHwSavedMap -Name 'HwAlertSent' -Map $stamp }
+    Write-FixItLog ('Hardware alert: message shown={0}, report sent={1}' -f $shown, $sent)
+    return [pscustomobject]@{ Shown = $shown; Sent = $sent; Message = $msg }
 }
 
 # ---------------------------------------------------------------------------
@@ -4689,7 +5253,7 @@ function Invoke-CheckInToggle {
     if ($Mode -eq 'On') { $wantOn = $true } elseif ($Mode -eq 'Off') { $wantOn = $false }
     if ($wantOn) {
         if (-not $on -and $Mode -eq 'Toggle') {
-            if (-not (Confirm-FixItStep "Turn on the weekly check-in?`r`n`r`nOnce a week this computer quietly sends Trey a small summary: free disk space, updates, antivirus, OneDrive backup and when it was last restarted. It never sends your files, documents or passwords. You can turn it off here at any time.")) {
+            if (-not (Confirm-FixItStep "Turn on the weekly check-in?`r`n`r`nOnce a week this computer quietly sends Trey a small summary: free disk space, updates, antivirus, OneDrive backup, when it was last restarted, and how healthy its drives, memory and battery are. If something serious is wrong with the hardware, it tells you once and tells Trey straight away. It never sends your files, documents or passwords. You can turn it off here at any time.")) {
                 return New-FixItResult $true 'Not turned on' 'OK, the weekly check-in stays off.'
             }
         }
@@ -5196,6 +5760,7 @@ function Get-FixItGuardianNote {
     param($Details, [string]$Reason, [int]$Closed, [string[]]$ClosedNames = @(), [string]$SessionNote = '')
     $why = 'a browser page took over the whole screen and the person clicked "Get me out of here"'
     if ($Reason -eq 'hotkey') { $why = 'the person pressed Ctrl+Shift+F (the panic key)' }
+    elseif ($Reason -eq 'tray') { $why = 'the person chose "Get me out of a scary page" from the Family Fix-It tray icon' }
     $o = @()
     $o += ('GUARDIAN: ' + $why + '.')
     if ($Details.Browser) { $o += ('Browser in front: {0} (process {1})' -f $Details.Browser, $Details.ProcessId) } else { $o += 'Browser in front: none was in front' }
@@ -5366,7 +5931,14 @@ function Invoke-GuardianTick {
         $day = $now.ToString('yyyy-MM-dd')
         if ($script:GLastDay -ne $day) { if ($script:GLastDay) { Initialize-FixItLog }; $script:GLastDay = $day }
         if ($script:GBusy) { Update-FixItGuardianTopMost; return }
+        if (Test-FixItGuardianStopRequested) {
+            Write-FixItLog 'Guardian: asked to stop'
+            Close-FixItGuardianToast
+            [System.Windows.Forms.Application]::ExitThread()
+            return
+        }
         $fg = Get-FixItForeground
+        Update-FixItGuardianLastWindow -Fg $fg -Now $now
         $d = Get-FixItGuardianDecision -Fg $fg -State $script:GState -Now $now
         if ($d -eq 'Show') {
             Write-FixItLog ('Guardian: a full-screen {0} page was found. Title: {1}' -f $fg.ProcessName, $fg.Title) 'WARN'
@@ -5386,20 +5958,27 @@ function Invoke-GuardianTick {
 function Invoke-GuardianRun {
     if ($script:DryRun) {
         Write-FixItLog ('Would do: watch the front window every {0} seconds, and register the {1} key' -f ($script:GuardianPollMs / 1000), $script:GuardianHotkeyText) 'DRYRUN'
-        return New-FixItResult $true 'Practice run' ('Practice run only - the watcher would check the front window about every {0} seconds and listen for {1}.' -f ($script:GuardianPollMs / 1000), $script:GuardianHotkeyText)
+        $trayText = Get-FixItTrayPreviewText
+        Write-FixItLog ('Would do: show the tray icon - {0}' -f $trayText) 'DRYRUN'
+        if ($script:TestMode) { Add-FixItTestNote -Step 'Watcher tray icon' -Status 'PASS' -Text ($trayText + ' Nothing is created in Test mode.') }
+        return New-FixItResult $true 'Practice run' ('Practice run only - the watcher would check the front window about every {0} seconds and listen for {1}, and show a small icon in the notification area.' -f ($script:GuardianPollMs / 1000), $script:GuardianHotkeyText)
     }
     $mutex = Enter-FixItGuardianMutex
     if ($null -eq $mutex) { Write-FixItLog 'Guardian is already running; this copy will stop'; return New-FixItResult $true 'Already running' 'The watcher is already running.' }
-    $hk = $null
+    $hk = $null; $tray = $null
     try {
         Initialize-FixItGuardianNative
         $script:GState = New-FixItGuardianState
         $script:GLastDay = (Get-Date).ToString('yyyy-MM-dd')
+        $script:GStop = New-FixItGuardianStopEvent
         try { $hk = New-FixItGuardianHotkey } catch { Write-FixItLog ('Hotkey setup failed: {0}' -f $_.Exception.Message) 'WARN' }
-        Write-FixItLog ('Guardian started (version {0}); hotkey {1}' -f $script:FixItVersion, $(if ($hk) { 'ready' } else { 'NOT available' }))
+        try { $tray = New-FixItGuardianTray } catch { Write-FixItLog ('Tray icon setup failed: {0}' -f $_.Exception.Message) 'WARN' }
+        Write-FixItLog ('Guardian started (version {0}); hotkey {1}; tray icon {2}' -f $script:FixItVersion, $(if ($hk) { 'ready' } else { 'NOT available' }), $(if ($tray) { 'shown' } else { 'NOT available' }))
         Start-FixItGuardianLoop
     } finally {
+        Remove-FixItGuardianTray
         if ($hk) { try { $hk.Dispose() } catch { } }
+        if ($null -ne $script:GStop) { try { $script:GStop.Dispose() } catch { }; $script:GStop = $null }
         Release-FixItGuardianMutex $mutex
         Write-FixItLog 'Guardian stopped'
     }
@@ -5708,6 +6287,8 @@ function Start-FixItGuardianProcess {
 }
 function Stop-FixItGuardianProcess {
     if ($script:TestMode) { Invoke-FixItProbe -Adapter 'Stop-FixItGuardianProcess' -Arguments $PSBoundParameters; return }
+    # Ask politely first: the watcher then removes its tray icon itself. A watcher from before 2.3.7 (or one that is stuck) is stopped the old way.
+    if (Send-FixItGuardianStopSignal) { [void](Wait-FixItGuardianGone -Seconds 6) }
     $me = $PID
     foreach ($p in @(Get-CimInstance -ClassName Win32_Process -Filter "Name='powershell.exe' OR Name='pwsh.exe'" -ErrorAction SilentlyContinue)) {
         if ($p.ProcessId -ne $me -and [string]$p.CommandLine -match 'FamilyFixIt\.ps1.*-Action\s+Guardian(\s|"|$)') {
@@ -5734,6 +6315,148 @@ function Start-FixItGuardianLoop {
     $tm.Add_Tick({ Invoke-GuardianTick })
     $tm.Start()
     try { [System.Windows.Forms.Application]::Run() } finally { $tm.Stop(); $tm.Dispose() }
+}
+
+# ----- the tray icon (v2.3.7): owned by the watcher, nothing else ------------------------------------
+# A small icon in the notification area, so the family can see the watcher is on and has a way out.
+# Right-click: exactly two items (no Exit; turning the watcher off is done in the Family Fix-It window). Double-click opens Family Fix-It.
+$script:GuardianStopEventName = 'Local\FamilyFixItGuardianStop'
+$script:GuardianTrayTip = 'Family Fix-It is watching for scary pop-ups'
+$script:GuardianTrayWindowSeconds = 120   # a window seen this recently counts as "the page in front" when the menu itself has taken over the front
+$script:GuardianShellNames = @('explorer', 'shellexperiencehost', 'searchhost', 'searchapp', 'startmenuexperiencehost', 'textinputhost')
+$script:GTray = $null
+$script:GStop = $null
+$script:GLastFg = $null
+$script:GLastFgAt = [datetime]::MinValue
+
+# Pure: what the icon says and offers (tested).
+function Get-FixItTrayPlan {
+    return [pscustomobject]@{
+        ToolTip = $script:GuardianTrayTip
+        Items = @(
+            [pscustomobject]@{ Id = 'GetOut'; Text = 'Get me out of a scary page' },
+            [pscustomobject]@{ Id = 'Open'; Text = 'Open Family Fix-It' })
+        DoubleClick = 'Open'
+        Balloons = $false
+    }
+}
+# Pure: can this front window be the "scary page"? Not our own menu, not the taskbar or Start menu.
+function Test-FixItTrayUsableWindow {
+    param($Fg, [int]$OwnPid = $PID)
+    if ($null -eq $Fg) { return $false }
+    if ([int]$Fg.ProcessId -eq $OwnPid) { return $false }
+    $n = ([string]$Fg.ProcessName).ToLowerInvariant() -replace '\.exe$', ''
+    if ($script:GuardianShellNames -contains $n) { return $false }
+    return $true
+}
+# Pure: right-clicking the icon puts the menu in front, so use the front window if it is a real one, else the last real one seen a moment ago.
+function Select-FixItTrayWindow {
+    param($Current, $Last, [datetime]$LastAt = [datetime]::MinValue, [datetime]$Now = (Get-Date), [int]$OwnPid = $PID)
+    if (Test-FixItTrayUsableWindow -Fg $Current -OwnPid $OwnPid) { return $Current }
+    if ($null -ne $Last -and ($Now - $LastAt).TotalSeconds -le $script:GuardianTrayWindowSeconds -and (Test-FixItTrayUsableWindow -Fg $Last -OwnPid $OwnPid)) { return $Last }
+    return $null
+}
+# Called by the watcher's look every 1.5 seconds.
+function Update-FixItGuardianLastWindow {
+    param($Fg, [datetime]$Now = (Get-Date))
+    if (Test-FixItTrayUsableWindow -Fg $Fg) { $script:GLastFg = $Fg; $script:GLastFgAt = $Now }
+}
+
+function Open-FixItMainWindow {
+    if ($script:TestMode -or $script:DryRun) { return }
+    Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-STA', '-WindowStyle', 'Hidden', '-File', ('"{0}"' -f $script:SelfPath)) -WindowStyle Hidden | Out-Null
+}
+# What a click does. Every click is logged.
+function Invoke-GuardianTrayAction {
+    param([ValidateSet('GetOut', 'Open', 'DoubleClick')][string]$Id)
+    $plan = Get-FixItTrayPlan
+    $want = $Id; if ($want -eq 'DoubleClick') { $want = $plan.DoubleClick }
+    $text = [string](@($plan.Items | Where-Object { $_.Id -eq $want })[0]).Text
+    Write-FixItLog ('Guardian tray: {0} "{1}"' -f $(if ($Id -eq 'DoubleClick') { 'double-click ->' } else { 'menu click' }), $text)
+    if ($want -eq 'GetOut') {
+        if ($script:GBusy) { return }
+        $now = Get-FixItForeground
+        $fg = Select-FixItTrayWindow -Current $now -Last $script:GLastFg -LastAt $script:GLastFgAt
+        Start-GuardianGetOutUi -Fg $fg -Reason 'tray'
+        return
+    }
+    Open-FixItMainWindow
+}
+
+function Get-FixItTrayIcon {
+    $ic = $null
+    try { $ic = Get-FixItAppIcon } catch { }
+    if ($null -eq $ic) { $ic = [System.Drawing.SystemIcons]::Information }
+    return $ic
+}
+# Idempotent: a second call replaces the first, so there is never a second icon.
+function New-FixItGuardianTray {
+    Remove-FixItGuardianTray
+    $plan = Get-FixItTrayPlan
+    $ni = New-Object System.Windows.Forms.NotifyIcon
+    $menu = New-Object System.Windows.Forms.ContextMenuStrip
+    foreach ($it in $plan.Items) {
+        $mi = $menu.Items.Add([string]$it.Text)
+        $mi.Tag = [string]$it.Id
+        $mi.add_Click({ param($s, $e) try { Invoke-GuardianTrayAction -Id ([string]$s.Tag) } catch { Write-FixItLog ('Guardian tray click failed: {0}' -f $_.Exception.Message) 'ERROR' } })
+    }
+    $ni.ContextMenuStrip = $menu
+    $ni.Text = [string]$plan.ToolTip
+    $ni.Icon = (Get-FixItTrayIcon)
+    $ni.add_DoubleClick({ try { Invoke-GuardianTrayAction -Id 'DoubleClick' } catch { Write-FixItLog ('Guardian tray click failed: {0}' -f $_.Exception.Message) 'ERROR' } })
+    $ni.Visible = $true
+    $script:GTray = [pscustomobject]@{ Icon = $ni; Menu = $menu }
+    return $script:GTray
+}
+# Idempotent: hides the icon first (so no ghost is left in the notification area), then frees it.
+function Remove-FixItGuardianTray {
+    $t = $script:GTray
+    if ($null -eq $t) { return }
+    $script:GTray = $null
+    try { $t.Icon.Visible = $false } catch { }
+    try { $t.Icon.Dispose() } catch { }
+    try { $t.Menu.Dispose() } catch { }
+}
+
+# ----- a polite "please stop" (so the icon is removed properly instead of being left behind by a forced stop) -----
+function New-FixItGuardianStopEvent {
+    try {
+        $created = $false
+        $ev = New-Object System.Threading.EventWaitHandle($false, [System.Threading.EventResetMode]::ManualReset, $script:GuardianStopEventName, [ref]$created)
+        if (-not $created) { [void]$ev.Reset() }
+        return $ev
+    } catch { Write-FixItLog ('The watcher stop signal is not available: {0}' -f $_.Exception.Message); return $null }
+}
+function Test-FixItGuardianStopRequested {
+    $ev = $script:GStop
+    if ($null -eq $ev) { return $false }
+    try { return [bool]$ev.WaitOne(0) } catch { return $false }
+}
+function Send-FixItGuardianStopSignal {
+    $ev = $null
+    try {
+        if ([System.Threading.EventWaitHandle]::TryOpenExisting($script:GuardianStopEventName, [ref]$ev)) {
+            try { [void]$ev.Set() } finally { $ev.Dispose() }
+            return $true
+        }
+    } catch { }
+    return $false
+}
+function Wait-FixItGuardianGone {
+    param([int]$Seconds = 6)
+    $end = (Get-Date).AddSeconds($Seconds)
+    while ((Get-Date) -lt $end) {
+        if (-not (Test-FixItGuardianRunning)) { return $true }
+        Wait-FixIt -Milliseconds 200
+    }
+    return (-not (Test-FixItGuardianRunning))
+}
+# Test mode and practice runs: what would be shown (nothing is created).
+function Get-FixItTrayPreviewText {
+    $plan = Get-FixItTrayPlan
+    $ico = 'the Family Fix-It icon'
+    try { if (-not (Test-FixItIconFile -Path (Get-FixItIconPath))) { $ico = 'a standard Windows icon (the Family Fix-It icon file is missing)' } } catch { $ico = 'a standard Windows icon' }
+    return ('a small icon would be shown in the notification area, using {0}. Hover text: "{1}". Right-click menu: {2}. Double-click: {3}. No pop-up bubbles.' -f $ico, $plan.ToolTip, ((@($plan.Items | ForEach-Object { '"' + $_.Text + '"' })) -join ' and '), (@($plan.Items | Where-Object { $_.Id -eq $plan.DoubleClick })[0].Text))
 }
 
 function Wait-FixItGuardianToastClosed {
@@ -5896,12 +6619,28 @@ function Invoke-PcInfo {
     Write-FixItLog 'Started: my PC info'
     $i = Get-FixItPcInfo
     $lines = @(('PC name: ' + $i.PcName), ('Windows: ' + $i.Windows), ('Family Fix-It version: ' + $i.Tool))
-    return New-FixItResult $true 'My PC info' ('PC code: ' + $i.Code + '   (tell Trey this code if he asks)') $lines @{ PcInfo = $true; PcCode = $i.Code; CopyText = (Get-FixItPcInfoText $i); Info = $i }
+    # the hardware facts (read-only, every piece on its own; a piece that cannot be read says "not available")
+    $hw = $null; $sections = @(); $hwText = ''
+    try {
+        $hw = Get-FixItHardwareInfo
+        $sections = @(Get-FixItHardwareSections -Hw $hw)
+        $hwText = (@(Format-FixItHardwareText -Sections $sections)) -join "`r`n"
+    } catch { Write-FixItLog ('PC hardware details are not available: {0}' -f $_.Exception.Message) }
+    if ($script:TestMode -and $null -ne $hw) {
+        foreach ($pc in @(@('the computer details', 'Computer'), @('the processor', 'Cpu'), @('the memory', 'Memory'), @('the disks', 'Disks'), @('the drive letters', 'Volumes'), @('the graphics card', 'Graphics'), @('the battery', 'Battery'), @('Windows details', 'Windows'), @('the network adapter', 'Network'))) {
+            $piece = $hw.($pc[1])
+            if ($piece.Ok) { Add-FixItTestNote -Step ('My PC info: ' + $pc[0]) -Status 'PASS' -Text 'could be read (nothing is changed)' }
+            else { Add-FixItTestNote -Step ('My PC info: ' + $pc[0]) -Status 'WARN' -Text ('is not available on this PC, so the window would say "not available" and carry on (' + [string]$piece.Error + ')') }
+        }
+    }
+    $copy = (Get-FixItPcInfoText $i)
+    if ($hwText) { $copy = $copy + "`r`n`r`n" + $hwText }
+    return New-FixItResult $true 'My PC info' ('PC code: ' + $i.Code + '   (tell Trey this code if he asks)') $lines @{ PcInfo = $true; PcCode = $i.Code; CopyText = $copy; Info = $i; Sections = $sections; HardwareText = $hwText }
 }
 function Copy-FixItPcInfo {
-    $i = Get-FixItPcInfo
     if ($script:DryRun) { Write-FixItLog 'Would do: copy the PC info to the clipboard' 'DRYRUN'; return $true }
-    return (Set-FixItClipboard -Text (Get-FixItPcInfoText $i))
+    $r = Invoke-PcInfo
+    return (Set-FixItClipboard -Text ([string]$r.CopyText))
 }
 
 # ----- guides ("Help me with...") ------------------------------------------
@@ -6166,10 +6905,187 @@ function Invoke-SimpleToggle {
     return New-FixItResult $true 'Simple mode is off' 'The window shows everything again.'
 }
 
+# ----- "Thank Trey" -----------------------------------------------------------------------------
+# One item at the bottom of the left list, shown to everyone. It opens Trey's PayPal.me page in the web browser and does nothing
+# else: no pop-up, no reminder, nothing is stored or sent, and no payment details pass through this program.
+$script:DonateUrl = 'https://paypal.me/TreyBarton'
+function Invoke-FixItDonate {
+    Write-FixItLog ('Thank Trey clicked (opens {0})' -f $script:DonateUrl)
+    if ($script:TestMode) { Add-FixItTestNote -Step 'Thank Trey' -Status 'PASS' -Text ('a real click would only open {0} in the default web browser (no pop-up, nothing sent or saved)' -f $script:DonateUrl) }
+    $url = $script:DonateUrl
+    $ok = Invoke-FixItStep ('Open {0} in your web browser' -f $url) { Open-FixItUrl -Url $url }
+    if (-not $ok) { Write-FixItLog 'The thank-you page could not be opened' 'WARN' }
+    return New-FixItResult $ok 'Thank Trey' 'Opened in your web browser.' @() @{ Silent = $true }
+}
+# ----- First run: "What's shared" window and "Your name" ------------------------------------------
+# Shown once after a FRESH install (the installer only leaves a note, PrivacyPending, in the settings; it never opens a window and
+# never waits for one). An update, a silent start (-Yes) or a practice run never shows it: the window waits for the first normal
+# start. The "What's shared" link at the bottom of the window opens the same text at any time. Everything it says is checked by
+# the tests against the real report builders (each item has the words that must appear in that report).
+$script:OwnerNameMax = 60
+$script:NameQuestion = "What's your name? This helps Trey know who's asking for help."
+$script:PrivacyTitle = "What Family Fix-It shares with Trey"
+$script:PrivacyIntro = "Family Fix-It only sends information to Trey in three cases: when you press 'Send Trey a report', when the scary pop-up help runs, and every week if the weekly check-in is turned on."
+$script:PrivacyPromise = "Trey has no access to your computer. He can only see your screen if you start a screen-share with the Let Trey see my screen button. The information is used only to keep an eye on your PC's health."
+$script:PrivacyWeeklyOff = "You can turn the weekly check-in off at any time: use the Weekly check-in switch on the left (switch Simple mode off first if you do not see it)."
+# Group: 'help' = a help report ("Send Trey a report"); 'scam' = the scary pop-up alert; 'weekly' = the weekly check-in; 'alert' = the hardware alert.
+# Builder is the report that must contain every Marker (a regular expression), checked by the tests.
+$script:PrivacySent = @(
+    [pscustomobject]@{ Group = 'help'; Builder = 'report'; Text = 'Your name, if you gave it'; Markers = @('(?m)^Name: ') },
+    [pscustomobject]@{ Group = 'help'; Builder = 'report'; Text = "Your computer's name and your Windows user name"; Markers = @('Computer name: ', 'Windows user: ') },
+    [pscustomobject]@{ Group = 'help'; Builder = 'report'; Text = 'Your Windows version and when the computer last restarted'; Markers = @('Windows: .*version', 'Last restarted: ') },
+    [pscustomobject]@{ Group = 'help'; Builder = 'report'; Text = 'How much free space your drive has'; Markers = @('Free space on C: ') },
+    [pscustomobject]@{ Group = 'help'; Builder = 'report'; Text = 'Whether Windows is waiting to restart, and when it last updated'; Markers = @('Windows waiting for a restart: ', 'Last Windows update installed: ') },
+    [pscustomobject]@{ Group = 'help'; Builder = 'report'; Text = 'Whether your OneDrive backup is on'; Markers = @('OneDrive backup of Desktop/Documents/Pictures: ') },
+    [pscustomobject]@{ Group = 'help'; Builder = 'report'; Text = "Your printers' names and whether they are working"; Markers = @('Printers found: ') },
+    [pscustomobject]@{ Group = 'help'; Builder = 'report'; Text = 'Which Outlook and Acrobat versions you have'; Markers = @('Outlook installed: ', 'Acrobat') },
+    [pscustomobject]@{ Group = 'help'; Builder = 'report'; Text = "Your internet test results, including your router's address"; Markers = @('Connection test:', 'Your router: ') },
+    [pscustomobject]@{ Group = 'help'; Builder = 'report'; Text = 'Recent error messages from Windows'; Markers = @('Recent errors - System log', 'Recent errors - Application log') },
+    [pscustomobject]@{ Group = 'help'; Builder = 'report'; Text = "Your computer's make, model and serial number, its memory, its drives (and how healthy they are) and its battery"; Markers = @('--- Computer ---', 'Serial number: ', '--- Memory', '--- Drives', '--- Battery') },
+    [pscustomobject]@{ Group = 'help'; Builder = 'report'; Text = "The last few lines of Family Fix-It's own activity list"; Markers = @('What this tool did recently') },
+    [pscustomobject]@{ Group = 'scam'; Builder = 'scam'; Text = 'The scary pop-up help also sends: any remote-control programs running, the names of programs installed in the last 2 weeks and the names (never the contents) of files downloaded in the last week'; Markers = @('Remote-control programs running right now', 'Programs installed in the last 14 days', 'Files downloaded in the last 7 days') },
+    [pscustomobject]@{ Group = 'weekly'; Builder = 'weekly'; Text = 'Your name, your computer name and your Windows user name'; Markers = @('(?m)^Name: ', 'Computer: .*Windows user: ') },
+    [pscustomobject]@{ Group = 'weekly'; Builder = 'weekly'; Text = 'Your Windows version, free drive space, days since the last restart, and whether a restart or updates are waiting'; Markers = @('Windows: .*build', 'Free disk space on C: ', 'Days since last restart: ', 'Windows waiting for a restart: ', 'Windows updates waiting to install: ') },
+    [pscustomobject]@{ Group = 'weekly'; Builder = 'weekly'; Text = 'Whether Windows Defender (your antivirus) is on and up to date'; Markers = @('Windows Defender: ') },
+    [pscustomobject]@{ Group = 'weekly'; Builder = 'weekly'; Text = 'Whether OneDrive backup is running, and which folders it covers'; Markers = @('OneDrive: ') },
+    [pscustomobject]@{ Group = 'weekly'; Builder = 'weekly'; Text = "How healthy your computer's drives, memory and battery are"; Markers = @('HARDWARE SUMMARY:') },
+    [pscustomobject]@{ Group = 'alert'; Builder = 'alert'; Text = 'If the weekly check-in finds a serious problem (a failing drive, repeated crashes, memory errors or a nearly full drive), you see one message and Trey gets a report right away'; Markers = @('HARDWARE ALERT', '(?m)^Name: ') }
+)
+# What is never sent. Forbidden = words that must never appear in any report the program builds.
+$script:PrivacyNever = @(
+    [pscustomobject]@{ Text = 'Your files, documents, photos or emails (what is inside them)'; Forbidden = @('(?i)\bdocument contents?\b', '(?i)\bemail (subject|body|text)\b', '(?i)\bphoto contents?\b') },
+    [pscustomobject]@{ Text = 'Your passwords'; Forbidden = @('(?i)\bpasswords?\s*[:=]', '(?i)\bLogin Data\b') },
+    [pscustomobject]@{ Text = 'Your browsing history'; Forbidden = @('(?i)\bbrowsing history\b', '(?i)\bwebsites? (you|visited)\b', '(?i)\bcookies?\s*[:=]') }
+)
+
+# Pure: keeps a typed name safe. Control and hidden characters go, extra spaces go, at most 60 characters.
+function ConvertTo-FixItOwnerName {
+    param([string]$Text)
+    if ($null -eq $Text) { return '' }
+    $t = [string]$Text
+    $t = $t -replace '[\r\n\t]+', ' '
+    $t = $t -replace '[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Cn}]', ''
+    $t = ($t -replace '\s+', ' ').Trim()
+    if ($t.Length -gt $script:OwnerNameMax) { $t = $t.Substring(0, $script:OwnerNameMax).Trim() }
+    return $t
+}
+function Get-FixItOwnerName {
+    try { return (ConvertTo-FixItOwnerName -Text ([string](Get-FixItSetting -Name 'OwnerName' -Default ''))) } catch { return '' }
+}
+# The line near the top of every report, scam alert, weekly check-in and hardware alert.  Format:  Name: <name>   or   Name: not given
+function Get-FixItNameLine {
+    $n = Get-FixItOwnerName
+    if (-not $n) { $n = 'not given' }
+    return ('Name: ' + $n)
+}
+function Save-FixItOwnerName {
+    param([string]$Text)
+    $n = ConvertTo-FixItOwnerName -Text $Text
+    Set-FixItSetting -Name 'OwnerName' -Value $n
+    Set-FixItSetting -Name 'OwnerNameAsked' -Value (Get-Date -Format 'yyyy-MM-dd')
+    Write-FixItLog $(if ($n) { 'Name saved ({0} characters)' -f $n.Length } else { 'Name cleared' })
+    return $n
+}
+
+# Pure: what the "What's shared" window says (a title, an intro, groups of plain lines, the promise).
+function Get-FixItPrivacyContent {
+    $help = @($script:PrivacySent | Where-Object { $_.Group -eq 'help' -or $_.Group -eq 'scam' } | ForEach-Object { $_.Text })
+    $weekly = @($script:PrivacySent | Where-Object { $_.Group -eq 'weekly' -or $_.Group -eq 'alert' } | ForEach-Object { $_.Text })
+    $never = @($script:PrivacyNever | ForEach-Object { $_.Text })
+    $groups = @(
+        [pscustomobject]@{ Heading = "When you press 'Send Trey a report' or the scary pop-up help runs, Trey gets:"; Lines = $help; Kind = 'sent' },
+        [pscustomobject]@{ Heading = 'Every week, only if the weekly check-in is on, Trey also gets:'; Lines = $weekly; Kind = 'sent' },
+        [pscustomobject]@{ Heading = 'Never sent:'; Lines = $never; Kind = 'never' }
+    )
+    return [pscustomobject]@{ Title = $script:PrivacyTitle; Intro = $script:PrivacyIntro; Groups = $groups; Promise = $script:PrivacyPromise; WeeklyOff = $script:PrivacyWeeklyOff; NameQuestion = $script:NameQuestion }
+}
+function Get-FixItPrivacyPlainText {
+    $c = Get-FixItPrivacyContent
+    $o = @($c.Title, '', $c.Intro, '')
+    foreach ($g in $c.Groups) { $o += $g.Heading; foreach ($l in $g.Lines) { $o += ('  - ' + $l) }; $o += '' }
+    $o += $c.Promise; $o += ''; $o += $c.WeeklyOff
+    return ($o -join "`r`n")
+}
+
+# Pure: what to show now. Pending is set by the installer on a fresh install only.
+function Get-FixItFirstRunPlan {
+    param([string]$Pending = '', [string]$PrivacyShown = '', [string]$NameAsked = '', [bool]$Interactive = $true)
+    $isPending = ($Pending -eq '1')
+    $why = 'nothing is waiting'
+    $showPrivacy = $false; $askName = $false
+    if ($isPending -and -not $Interactive) { $why = 'this start is silent or a practice run, so it waits for the first normal window' }
+    elseif ($isPending) {
+        $showPrivacy = (-not $PrivacyShown)
+        $askName = (-not $NameAsked)
+        $why = 'fresh install'
+    }
+    return [pscustomobject]@{ Pending = $isPending; ShowPrivacy = $showPrivacy; AskName = $askName; Reason = $why }
+}
+
+# The one adapter that draws the two first-run windows (replaced by the tests).
+function Show-FixItFirstRunWindows {
+    param([bool]$ShowPrivacy, [bool]$AskName)
+    if ($ShowPrivacy) { Show-FixItPrivacyForm -FirstRun $true }
+    if ($AskName) { [void](Show-FixItNameForm) }
+}
+function Invoke-FixItFirstRun {
+    $pending = Get-FixItSetting -Name 'PrivacyPending' -Default ''
+    if ($script:TestMode) {
+        Write-FixItLog 'TEST MODE: after a fresh install the "What''s shared" window and the "What''s your name?" question would show once (nothing is shown or saved now).' 'TEST'
+        return $false
+    }
+    $interactive = ([bool]$script:GuiActive -and -not [bool]$script:AssumeYes -and -not [bool]$script:DryRun)
+    $plan = Get-FixItFirstRunPlan -Pending $pending -PrivacyShown (Get-FixItSetting -Name 'PrivacyShown' -Default '') -NameAsked (Get-FixItSetting -Name 'OwnerNameAsked' -Default '') -Interactive $interactive
+    if ($plan.Pending -and -not $interactive) { Write-FixItLog ('First-run window skipped: {0}.' -f $plan.Reason); return $false }
+    if (-not $plan.ShowPrivacy -and -not $plan.AskName) {
+        if ($plan.Pending) { Set-FixItSetting -Name 'PrivacyPending' -Value '0' }
+        return $false
+    }
+    Write-FixItLog ('First run: showing {0}{1}' -f $(if ($plan.ShowPrivacy) { 'the "What''s shared" window' } else { '' }), $(if ($plan.AskName) { $(if ($plan.ShowPrivacy) { ' and the name question' } else { 'the name question' }) } else { '' }))
+    try { Show-FixItFirstRunWindows -ShowPrivacy $plan.ShowPrivacy -AskName $plan.AskName } catch { Write-FixItLog ('The first-run window had a problem: {0}' -f $_.Exception.Message) 'WARN' }
+    Set-FixItSetting -Name 'PrivacyPending' -Value '0'
+    return $true
+}
+# Hidden action FirstRunPending (the installer runs it after a FRESH install only): leaves the note, shows nothing.
+function Invoke-FixItFirstRunPending {
+    Write-FixItLog 'Started: first-run note'
+    if (Get-FixItSetting -Name 'PrivacyShown' -Default '') { return (New-FixItResult $true 'Already shown' 'The "What''s shared" window was already shown on this PC.') }
+    Set-FixItSetting -Name 'PrivacyPending' -Value '1'
+    if ($script:DryRun) { return (New-FixItResult $true 'Practice run' 'Practice run only - the "What''s shared" window would be shown the first time the window opens.') }
+    return (New-FixItResult $true 'First run noted' 'The "What''s shared" window will show the first time Family Fix-It opens.')
+}
+# The "What's shared" link / button and the hidden -Action Privacy.
+function Invoke-FixItPrivacy {
+    Write-FixItLog 'What''s shared opened'
+    $c = Get-FixItPrivacyContent
+    $sent = @($script:PrivacySent).Count; $never = @($script:PrivacyNever).Count
+    if ($script:TestMode) {
+        Add-FixItTestNote -Step 'What''s shared window' -Status 'PASS' -Text ('a click would show the window: {0} things that are sent, {1} that are never sent, and the promise that Trey has no access to the computer' -f $sent, $never)
+        Add-FixItTestNote -Step 'What''s shared window (first install)' -Status 'PASS' -Text 'after a fresh install it shows once on its own, then asks "What''s your name?" (Save or Skip); an update or a silent start never shows it'
+        return (New-FixItResult $true 'What''s shared' 'Test mode only checked it.' @() @{ Silent = $true })
+    }
+    if ($script:GuiActive) {
+        Show-FixItPrivacyForm -FirstRun $false
+        return (New-FixItResult $true 'What''s shared' 'Shown.' @() @{ Silent = $true })
+    }
+    return (New-FixItResult $true 'What''s shared' (Get-FixItPrivacyPlainText))
+}
+function Invoke-FixItYourName {
+    Write-FixItLog 'Your name opened'
+    if ($script:TestMode) {
+        Add-FixItTestNote -Step 'Your name' -Status 'PASS' -Text ('a click would ask: "{0}" with a box, Save and Skip; optional, kept as OwnerName (at most {1} characters), and shown as "Name: ..." in every report' -f $script:NameQuestion, $script:OwnerNameMax)
+        return (New-FixItResult $true 'Your name' 'Test mode only checked it.' @() @{ Silent = $true })
+    }
+    if ($script:GuiActive) { [void](Show-FixItNameForm); return (New-FixItResult $true 'Your name' 'Done.' @() @{ Silent = $true }) }
+    return (New-FixItResult $true 'Your name' ('Your name: ' + $(if (Get-FixItOwnerName) { Get-FixItOwnerName } else { 'not given' })))
+}
+
 # What the window shows. Pure data (no drawing), so it can be tested. Positions are in 96-dpi pixels.
 $script:SimpleTileIds = @('Printer', 'Network', 'Slow', 'Scam', 'Screen', 'Report')
 function Get-FixItLayout {
     param([bool]$Simple = $false, [bool]$GuardianOn = $false, [bool]$BigText = $false, [bool]$HighContrast = $false, [bool]$CheckInOn = $false)
+    # small links on the bottom row, next to "Check for a newer version" (always shown, in both layouts): Run, text, x
+    $footer = @(@('Privacy', "What's shared", 262), @('YourName', 'Your name', 384))
     $tiles1 = @(@('Printer', 'Fix my printer', "Won't print or is stuck", 'printer'), @('Acrobat', 'Fix Acrobat in Outlook', 'Acrobat buttons are missing', 'pdf'), @('Outlook', 'Fix Outlook', "Freezes or won't open", 'mail'))
     $tiles2 = @(@('Network', 'Fix my internet', "Wi-Fi or websites won't work", 'wifi'), @('Slow', 'My computer is slow', 'Clean up and speed up', 'slow'), @('Sound', 'Fix sound/mic/camera', "Video calls aren't working", 'cam'))
     $tiles3 = @(@('Browser', 'Clean up my browser', 'Pop-ups or a new homepage', 'globe'), @('WinUpdate', 'Fix Windows Update', 'Updates are stuck', 'upd'), @('OneDrive', 'Fix OneDrive', 'Files have disappeared', 'cloud'))
@@ -6180,7 +7096,8 @@ function Get-FixItLayout {
             @('BigText', 'Big text', 'text', $BigText, 88, 40),
             @('Contrast', 'High contrast', 'contrast', $HighContrast, 132, 40))
         $pin = @('Pin', 'Pin me to the taskbar', '', 'pin', 428, 40)
-        $lay = @{ Simple = $true; SideTitle = 'SETTINGS'; Nav = @(); SepY = 0; Pin = $pin; Toggles = $toggles; Groups = $groups; ScamY = 236; PrimaryY = 324; StatusY = 412; LinksY = 446; FullH = 480 }
+        $donate = @('Donate', 'Thank Trey', 'Kids are expensive!', 'heart', 472, 52)   # last item on the left list, under Pin to taskbar
+        $lay = @{ Simple = $true; SideTitle = 'SETTINGS'; Nav = @(); SepY = 0; Pin = $pin; Donate = $donate; Footer = $footer; Toggles = $toggles; Groups = $groups; ScamY = 236; PrimaryY = 324; StatusY = 412; LinksY = 446; FullH = 530 }
     } else {
         $groups = @(
             @{ Name = 'PRINTING AND EMAIL'; Y = 84; Bg = '#E6F0FA'; Tiles = $tiles1 },
@@ -6202,7 +7119,8 @@ function Get-FixItLayout {
             @('Contrast', 'High contrast', 'contrast', $HighContrast, 628, 40),
             @('CheckIn', 'Weekly check-in', 'check', $CheckInOn, 672, 40))
         $pin = @('Pin', 'Pin me to the taskbar', '', 'pin', 728, 40)
-        $lay = @{ Simple = $false; SideTitle = 'TOOLS'; Nav = $nav; SepY = 470; Pin = $pin; Toggles = $toggles; Groups = $groups; ScamY = 538; PrimaryY = 626; StatusY = 712; LinksY = 746; FullH = 780 }
+        $donate = @('Donate', 'Thank Trey', 'Kids are expensive!', 'heart', 772, 52)   # last item on the left list, under Pin to taskbar
+        $lay = @{ Simple = $false; SideTitle = 'TOOLS'; Nav = $nav; SepY = 470; Pin = $pin; Donate = $donate; Footer = $footer; Toggles = $toggles; Groups = $groups; ScamY = 538; PrimaryY = 626; StatusY = 712; LinksY = 746; FullH = 830 }
     }
     $ids = @()
     foreach ($g in $lay.Groups) { foreach ($t in $g.Tiles) { $ids += [string]$t[0] } }
@@ -6216,6 +7134,7 @@ function Get-FixItLayout {
 function Show-FixItResult {
     param($Result)
     if ($null -eq $Result) { return }
+    if (Get-FixItProp $Result 'Silent' $false) { return }
     $text = $Result.Message
     if (@($Result.Details).Count -gt 0) { $text += "`r`n`r`n" + ((@($Result.Details) | Where-Object { $_ }) -join "`r`n") }
     if ($script:GuiActive -and (Get-FixItProp $Result 'PcInfo' $false)) { Show-FixItPcInfoForm -Result $Result; return }
@@ -6273,6 +7192,8 @@ function Show-FixItScamForm {
 
 function Get-FixItIconMap {
     $b64 = @{
+        'heart' = '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'
+        'heartW' = 'iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAElklEQVR4nO2aTWsdVRjH/89N3HSjTcFFdaOQjUZBqaKbglLMxmV3btyUbv0CAb+By4YK0g+QL1AEFReKjStBEQqBghRaTUoWFtrk3p+L8zydk3vnTu7LTGZuvT8YJjM59zn/55zznNeRlixZsuR/jM1rADBJvRJ7+H1gZmgGmrQ9N0APWJkw7QrQOz1l87aHmboFRK2YWd+fz0l6U9Krkt5Wqh2T9JukvyT9bmaPQ6wqaq1J27WQ1wqwAXwN3KOae55uo8zOWdiu1XngIvAN8CQTMgCOgaPsOvb3wRP/3cUShxuzXbfzm8D9LOOjISFlDDxdcB/YDLtN2q7L+VW/X5tS3Glir2V5NGIb1z6P81E7V93wMdCfUtwwfbcD8IlfTdi+mvswjrGjAGloQdLrknYlvej/mnnIyRh43o/8+bznVZdtSTqU9J6kPUlmZoOyxJUZ+pByo2aBka9JWvMrn/DUYRslzTdOGxZLWwCwYmZ94CNJ30nqS2pieAlxc89ISwjNH5vZ9+HTcKJxpY6HwFYDwnJMzTifs5WFc6mAEwA9MxsA65L+UCrFpkU2BUot4Q0zuxu+5QnKWkC8uyxpVUWnsogMlHy47M8j/lZ1POt+b2e1VQ+hfX1cgrICiBp/x++L2vylQnv4MtKaq1rAC7XLaY+xvlQVwHzTyG4x1peyAohms+f356EPCF9GwrmqAP5sQlFLhC8TFUCU2q8VaRaF0B6+jLTmqlFgV9IDpVJbxDCI7bMHSr5Ik4wCZobPmw8lbbuRkTn0AtBX0r5tZofu00hFjlsMxfs1SXeVlsJnMW+vC/w6VJoEHUjPVrcnKI1vT9gzs32lBVFP0nFTahvgWEnzlvvQm2m3mGJHaMd3WfLNyq4SGndyH8ZR2aRJoWBKIXBbaYflWN2dJIW2XUmbSiFAVe1PsiMkM3vkBm97Bl0Mh76SttuSNl1zadxPDdnRE3DTm9hRWftridBys0xzLZCd15FOY/KM2yQ0PIt5pnB+qmGNok9A0k+SPlBz+4WTEHnnMa9xO8BlzHI4GqX7kqQfJL2ldgphoNSH/S1pw8weUrLldRpTx4lnYGZ2IOkzSftKBXmWW2cxzX0s6VN3fmVa5+dTUByZXfEY7DP9kdYsDICn/vfnuZYzh9Fzw7PoFMP5Lz3vdneuskL4akhgE5wY7mir5nMAi1oAbg0JrZM49PzZ8zSKRVu7uJgecA64MyS4DuLUeA9Y87y6tVETgoDzLjQXPq/zfeAf4JLn0da8oxqKmeIlFxziZyX/8OGK224/7qtgdHic5YuPIMLoem6782SFcD0rhGmJ32y7rW42+3FQhMP2DIUQab91G6t0pcefFNLIEC1hZ8ixKqLZ7wIX6GKPPykhnjQyTDI8Rqe5D7wWNtr2Yy4ohseXgYeZo8MMsutD/81ixf04KPqD94EDyhdOER71fOPXNSj6g/jm8GlWCN1a4DQFxZrhi6zWo+ZvRRoWrcefhqwlxOYqwC+kdUR3FjhN4U5Gx/gj8C9wwZ8Xu8efFNLQaMArwLvxrm1drfHcN/tx5OGwZMmSJUta4D+VsGRVytVA2gAAAABJRU5ErkJggg=='
         'pcinfo' = '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'
         'pcinfoW' = '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'
         'guides' = 'iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAC4ElEQVR4nOybTWgTQRTH/29309Ji/Sh+HqxeevAD1IMXP2pRpLQHwWoKnhVaFFG8elBvBjx6UEGPIkTwZEO1eqgXkYog2kMpIj1oUVuIHqxuss8nWkiyNTONSmcz84NsyNs3k53/zktml/96sBwPlmO9AAFq4MCxE2saisEhMHYQYa+EtsIgGPhMzMOhH55+eOfWu2q5CxKgs/Ni0LRy6gwV+AIILfIyEjmspSDqDaLUM/mYqZarXQI9vac2NK+eekkerkjnLUgCTPtUKfozwC/elu0mJAgpz5QqR0uAnnT/OZlXu+bdyTwp+94yE2MxIQQy9XeXhpg5UjXTEkBGdr6y3KXz1/LWl8teH4MBdKWPt/qUmi6NEZGyxJUCHDzS3y4dtZbGmDEdodAxlL05g4SjFCBF2BMLMl8aupuAwcs0VaWoS4CoIx7DIyQBmbqqFGWNMHh9rFHKe486wV0LwHKcALAcJwAsxwkAy3ECwHKcALAcJwAsxwkAy3ECwHKcALAcJwAsxwkAy3ECwHKcALAcJwAspyaf4GyxsKq7b+CoST7B+bwQEXOjql1NAjRG3qjJPsE5CLxOlVOTAInxCZLXrEqpTYCkwPxBlfL3ApjiE/w1ljKfIBF90mlUE0b6BFHuE9RBKQCDm6ji104GP2ONT1AGv7wyFjFlEuET1ECnBFZUBjy/MII6QcMniHxlTGZFXZz9n+gshQdjEfa3wzCCVEPsX0jHLa4UQM72/VjHQKYzfXIJDKIQfo+tS3Xc4sqErx/Xjsgye6KsY2BjE4pPu9P9m5FwtFbz3emB/fQng7TZD0w8kHVKV7VmWguhXPbaYxHhnohwOP7F1CbbNjLwwuiflMAcIaKzlaVgOnK8oSpHW4Dh7I3JYDbaJp1eZY0HEUxADlK5XvGxAMbHn4cTY6O59i07n0j332SS5X/X3jIYhJyfvBzTYMEPL7959eJLtVzDb2n8f9xNUVjODwAAAP//jITlpwAAAAZJREFUAwC0o9edv4vtuwAAAABJRU5ErkJggg=='
@@ -6597,6 +7518,12 @@ function Show-FixItWindowOnce {
     $pd = $lay.Pin
     $pt = New-FixItTile -Run $pd[0] -Title $pd[1] -Sub $pd[2] -IconKey $pd[3] -Style 'nav' -IconBg '' -X 12 -Y $pd[4] -W 176 -H $pd[5]
     $side.Controls.Add($pt); [void]$script:FixButtons.Add($pt)
+    if ($null -ne $lay.Donate) {   # always shown, for everyone
+        $dd = $lay.Donate
+        $dt = New-FixItTile -Run $dd[0] -Title $dd[1] -Sub $dd[2] -IconKey $dd[3] -Style 'nav' -IconBg '' -X 12 -Y $dd[4] -W 176 -H $dd[5]
+        $dt.AccessibleName = 'Thank Trey. Kids are expensive! Opens a web page where you can say thank you.'
+        $side.Controls.Add($dt); [void]$script:FixButtons.Add($dt)
+    }
     $script:CheckInLinkText = $checkIn
 
     # ---- main area
@@ -6671,6 +7598,10 @@ function Show-FixItWindowOnce {
 
     $lf = New-Object System.Drawing.Font('Segoe UI', [single](12 * $S), [System.Drawing.FontStyle]::Regular, $px)
     $upd = Add-FixItLink -Form $form -Text 'Check for a newer version of this tool' -Run 'Update' -X $MX -Y $lay.LinksY -Color $cLink -Font $lf
+    foreach ($fl in @($lay.Footer)) {
+        $fk = Add-FixItLink -Form $form -Text $fl[1] -Run $fl[0] -X ($MX + $fl[2]) -Y $lay.LinksY -Color $cLink -Font $lf
+        $fk.AccessibleName = $fl[1]
+    }
     $ver = New-Object System.Windows.Forms.Label
     $ver.Text = 'Version ' + $script:FixItVersion
     $ver.Font = $lf
@@ -7171,11 +8102,129 @@ function Show-FixItWindowMain {
         if ($script:UiBigText) { $script:UiScale = $dpi * 1.25 }
         $script:UiBack = '#FAFAFA'; if ($script:UiHighContrast) { $script:UiBack = '#000000' }
         $script:UiSide = '#F0F3F8'; if ($script:UiHighContrast) { $script:UiSide = '#000000' }
+        if ($first) { try { [void](Invoke-FixItFirstRun) } catch { Write-FixItLog ('First-run check failed: {0}' -f $_.Exception.Message) 'WARN' } }
         Show-FixItWindowOnce -FirstTime $first
         $first = $false
     } while ($script:RebuildUi)
     $script:GuiActive = $false
     Stop-FixItOffUiWorkers
+}
+
+# ---- The "What's shared" window (plain words, scrolls if the text is large; one "OK, got it" button)
+function Show-FixItPrivacyForm {
+    param([bool]$FirstRun = $false)
+    $S = $script:UiScale; if (-not $S) { $S = 1.0 }
+    $hc = [bool]$script:UiHighContrast
+    $px = [System.Drawing.GraphicsUnit]::Pixel
+    $c = Get-FixItPrivacyContent
+    $cText = '#1A1A1A'; $cMuted = '#444444'; $cHead = '#0F6CBD'; $cNever = '#0B5A2E'
+    if ($hc) { $cText = '#FFFFFF'; $cMuted = '#FFFFFF'; $cHead = '#FFFF00'; $cNever = '#FFFF00' }
+    $f = New-Object System.Windows.Forms.Form
+    Set-FixItFormIcon $f
+    $f.Text = "Family Fix-It - What's shared"
+    $f.StartPosition = 'CenterScreen'
+    $f.FormBorderStyle = 'FixedDialog'
+    $f.MaximizeBox = $false; $f.MinimizeBox = $false; $f.ShowInTaskbar = $true
+    $f.BackColor = (Get-FixItColor $script:UiBack)
+    $wa = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+    $w = [int](660 * $S); $h = [int](680 * $S)
+    if ($w -gt ($wa.Width - 40)) { $w = [int]($wa.Width - 40) }
+    if ($h -gt ($wa.Height - 80)) { $h = [int]($wa.Height - 80) }
+    $f.ClientSize = New-Object System.Drawing.Size($w, $h)
+    $btnH = [int](56 * $S); $pad = [int](22 * $S)
+    $panel = New-Object System.Windows.Forms.Panel
+    $panel.Location = New-Object System.Drawing.Point(0, 0)
+    $panel.Size = New-Object System.Drawing.Size($w, ($h - $btnH - [int](28 * $S)))
+    $panel.AutoScroll = $true
+    $panel.BackColor = (Get-FixItColor $script:UiBack)
+    $f.Controls.Add($panel)
+    $labelW = $w - (2 * $pad) - [System.Windows.Forms.SystemInformation]::VerticalScrollBarWidth
+    $state = @{ Y = [int](16 * $S) }
+    $add = {
+        param([string]$Text, [double]$Size, [bool]$Bold, [string]$Color, [int]$Indent, [double]$GapAfter)
+        $st = [System.Drawing.FontStyle]::Regular; if ($Bold) { $st = [System.Drawing.FontStyle]::Bold }
+        $font = New-Object System.Drawing.Font('Segoe UI', [single]($Size * $S), $st, $px)
+        $ww = $labelW - [int]($Indent * $S)
+        $flags = [System.Windows.Forms.TextFormatFlags]::WordBreak -bor [System.Windows.Forms.TextFormatFlags]::NoPadding
+        $m = [System.Windows.Forms.TextRenderer]::MeasureText($Text, $font, (New-Object System.Drawing.Size($ww, 0)), $flags)
+        $l = New-Object System.Windows.Forms.Label
+        $l.AutoSize = $false; $l.Text = $Text; $l.Font = $font
+        $l.ForeColor = (Get-FixItColor $Color); $l.BackColor = (Get-FixItColor $script:UiBack)
+        $l.Location = New-Object System.Drawing.Point(($pad + [int]($Indent * $S)), $state.Y)
+        $l.Size = New-Object System.Drawing.Size($ww, ($m.Height + [int](6 * $S)))
+        $panel.Controls.Add($l)
+        $state.Y = $state.Y + $l.Height + [int]($GapAfter * $S)
+    }
+    & $add $c.Title 22 $true $cText 0 10
+    & $add $c.Intro 14 $false $cText 0 14
+    foreach ($g in $c.Groups) {
+        $hc2 = $cHead; if ($g.Kind -eq 'never') { $hc2 = $cNever }
+        & $add $g.Heading 15 $true $hc2 0 6
+        foreach ($line in $g.Lines) { & $add ([string][char]0x2022 + '  ' + $line) 14 $false $cText 12 4 }
+        $state.Y = $state.Y + [int](10 * $S)
+    }
+    & $add $c.Promise 15 $true $cText 0 10
+    & $add $c.WeeklyOff 14 $false $cMuted 0 10
+    $panel.AutoScrollMinSize = New-Object System.Drawing.Size(0, ($state.Y + [int](10 * $S)))
+    $ok = New-FixItTile -Run '' -Title 'OK, got it' -Sub '' -IconKey '' -Style 'yes' -IconBg '' -X ([int](($w / $S - 240) / 2)) -Y ([int](($h - $btnH - [int](14 * $S)) / $S)) -W 240 -H 56
+    $ok.DialogResult = 'OK'
+    $ok.AccessibleName = "OK, got it. Close the What's shared window."
+    $f.Controls.Add($ok)
+    $f.AcceptButton = $ok; $f.CancelButton = $ok
+    try { [void]$f.ShowDialog() } finally { $f.Dispose() }
+    Set-FixItSetting -Name 'PrivacyShown' -Value (Get-Date -Format 'yyyy-MM-dd')
+    Write-FixItLog $(if ($FirstRun) { 'First-run "What''s shared" window: OK, got it' } else { '"What''s shared" window closed' })
+}
+
+# ---- "What's your name?" (optional; Save or Skip). Returns @{ Saved; Name }.
+function Show-FixItNameForm {
+    $S = $script:UiScale; if (-not $S) { $S = 1.0 }
+    $hc = [bool]$script:UiHighContrast
+    $px = [System.Drawing.GraphicsUnit]::Pixel
+    $cText = '#1A1A1A'; $cMuted = '#555555'; if ($hc) { $cText = '#FFFFFF'; $cMuted = '#FFFFFF' }
+    $f = New-Object System.Windows.Forms.Form
+    Set-FixItFormIcon $f
+    $f.Text = 'Family Fix-It - Your name'
+    $f.StartPosition = 'CenterScreen'
+    $f.FormBorderStyle = 'FixedDialog'
+    $f.MaximizeBox = $false; $f.MinimizeBox = $false; $f.ShowInTaskbar = $true
+    $f.BackColor = (Get-FixItColor $script:UiBack)
+    $f.ClientSize = New-Object System.Drawing.Size([int](560 * $S), [int](330 * $S))
+    $q = New-Object System.Windows.Forms.Label
+    $q.AutoSize = $false; $q.Text = $script:NameQuestion
+    $q.Font = New-Object System.Drawing.Font('Segoe UI', [single](18 * $S), [System.Drawing.FontStyle]::Bold, $px)
+    $q.ForeColor = (Get-FixItColor $cText)
+    $q.Location = New-Object System.Drawing.Point([int](24 * $S), [int](20 * $S)); $q.Size = New-Object System.Drawing.Size([int](512 * $S), [int](96 * $S))
+    $f.Controls.Add($q)
+    $tb = New-Object System.Windows.Forms.TextBox
+    $tb.Font = New-Object System.Drawing.Font('Segoe UI', [single](18 * $S), [System.Drawing.FontStyle]::Regular, $px)
+    $tb.MaxLength = $script:OwnerNameMax
+    $tb.Text = (Get-FixItOwnerName)
+    $tb.Location = New-Object System.Drawing.Point([int](24 * $S), [int](124 * $S)); $tb.Size = New-Object System.Drawing.Size([int](512 * $S), [int](40 * $S))
+    $tb.AccessibleName = 'Your name'
+    if ($hc) { $tb.BackColor = [System.Drawing.Color]::Black; $tb.ForeColor = [System.Drawing.Color]::White }
+    $f.Controls.Add($tb)
+    $note = New-Object System.Windows.Forms.Label
+    $note.AutoSize = $false; $note.Text = "This is optional. You can change it later with 'Your name' at the bottom of the window."
+    $note.Font = New-Object System.Drawing.Font('Segoe UI', [single](13 * $S), [System.Drawing.FontStyle]::Regular, $px)
+    $note.ForeColor = (Get-FixItColor $cMuted)
+    $note.Location = New-Object System.Drawing.Point([int](24 * $S), [int](174 * $S)); $note.Size = New-Object System.Drawing.Size([int](512 * $S), [int](56 * $S))
+    $f.Controls.Add($note)
+    $save = New-FixItTile -Run '' -Title 'Save' -Sub '' -IconKey '' -Style 'yes' -IconBg '' -X 24 -Y 248 -W 240 -H 56
+    $skip = New-FixItTile -Run '' -Title 'Skip' -Sub '' -IconKey '' -Style 'outline' -IconBg '' -X 296 -Y 248 -W 240 -H 56
+    $save.DialogResult = 'Yes'; $skip.DialogResult = 'No'
+    $save.AccessibleName = 'Save my name.'; $skip.AccessibleName = 'Skip. I do not want to give my name.'
+    $f.Controls.Add($save); $f.Controls.Add($skip)
+    $f.AcceptButton = $save; $f.CancelButton = $skip
+    $typed = ''
+    try { $r = $f.ShowDialog(); $typed = [string]$tb.Text } finally { $f.Dispose() }
+    if ($r -eq 'Yes') {
+        $n = Save-FixItOwnerName -Text $typed
+        return [pscustomobject]@{ Saved = $true; Name = $n }
+    }
+    Set-FixItSetting -Name 'OwnerNameAsked' -Value (Get-Date -Format 'yyyy-MM-dd')
+    Write-FixItLog 'Name question skipped'
+    return [pscustomobject]@{ Saved = $false; Name = (Get-FixItOwnerName) }
 }
 
 # "Did that fix it?" - a friendly two-button question.
@@ -7642,43 +8691,93 @@ function Show-FixItAppsDialog {
     $f.Dispose()
 }
 
-# ---- My PC info: big PC code, the facts, and a Copy button
+# ---- My PC info: big PC code, the facts about this computer (with bars for memory and drives), and a Copy button
+# Bar colour: blue normally, amber when a drive or the memory is over 90% full (yellow in high contrast).
+function Get-FixItBarColor {
+    param($Percent, [bool]$HighContrast = $false)
+    $over = ($null -ne $Percent -and [int]$Percent -gt $script:HwFullPercent)
+    if ($HighContrast) { return $(if ($over) { '#FF8000' } else { '#FFFF00' }) }
+    return $(if ($over) { '#C75B00' } else { '#0F6CBD' })
+}
 function Show-FixItPcInfoForm {
     param($Result)
     $S = $script:UiScale; $hc = [bool]$script:UiHighContrast
     $px = [System.Drawing.GraphicsUnit]::Pixel
-    $cText = '#1A1A1A'; $cMuted = '#555555'; $cCode = '#0F6CBD'
-    if ($hc) { $cText = '#FFFFFF'; $cMuted = '#FFFFFF'; $cCode = '#FFFF00' }
+    $cText = '#1A1A1A'; $cMuted = '#555555'; $cCode = '#0F6CBD'; $cTrack = '#D9D9D9'; $cHead = '#0F6CBD'
+    if ($hc) { $cText = '#FFFFFF'; $cMuted = '#FFFFFF'; $cCode = '#FFFF00'; $cTrack = '#666666'; $cHead = '#FFFF00' }
     $f = New-Object System.Windows.Forms.Form
     Set-FixItFormIcon $f
     $f.Text = 'Family Fix-It - My PC info'
     $f.StartPosition = 'CenterParent'; $f.FormBorderStyle = 'FixedDialog'; $f.MaximizeBox = $false; $f.MinimizeBox = $false; $f.ShowInTaskbar = $false
     $f.BackColor = (Get-FixItColor $script:UiBack)
-    $f.ClientSize = New-Object System.Drawing.Size([int](560 * $S), [int](440 * $S))
+    $f.ClientSize = New-Object System.Drawing.Size([int](700 * $S), [int](690 * $S))
     $cap = New-Object System.Windows.Forms.Label
     $cap.Text = 'Your PC code. Read it out if Trey asks.'
     $cap.AutoSize = $false; $cap.Font = New-Object System.Drawing.Font('Segoe UI', [single](15 * $S), [System.Drawing.FontStyle]::Regular, $px)
     $cap.ForeColor = (Get-FixItColor $cMuted); $cap.TextAlign = 'MiddleCenter'
-    $cap.Location = New-Object System.Drawing.Point([int](24 * $S), [int](20 * $S)); $cap.Size = New-Object System.Drawing.Size([int](512 * $S), [int](30 * $S))
+    $cap.Location = New-Object System.Drawing.Point([int](24 * $S), [int](12 * $S)); $cap.Size = New-Object System.Drawing.Size([int](652 * $S), [int](28 * $S))
     $f.Controls.Add($cap)
     $code = New-Object System.Windows.Forms.Label
     $code.Text = [string]$Result.PcCode
-    $code.AutoSize = $false; $code.Font = New-Object System.Drawing.Font('Segoe UI', [single](60 * $S), [System.Drawing.FontStyle]::Bold, $px)
+    $code.AutoSize = $false; $code.Font = New-Object System.Drawing.Font('Segoe UI', [single](48 * $S), [System.Drawing.FontStyle]::Bold, $px)
     $code.ForeColor = (Get-FixItColor $cCode); $code.TextAlign = 'MiddleCenter'
-    $code.Location = New-Object System.Drawing.Point([int](24 * $S), [int](56 * $S)); $code.Size = New-Object System.Drawing.Size([int](512 * $S), [int](90 * $S))
+    $code.Location = New-Object System.Drawing.Point([int](24 * $S), [int](42 * $S)); $code.Size = New-Object System.Drawing.Size([int](652 * $S), [int](70 * $S))
     $code.AccessibleName = ('PC code: ' + (([string]$Result.PcCode).ToCharArray() -join ' '))
     $f.Controls.Add($code)
-    $y = 168
-    foreach ($ln in @($Result.Details)) {
+
+    # the facts: one scrolling panel; each fact is a label and a value, with a bar under memory and drive figures
+    $pn = New-Object System.Windows.Forms.Panel
+    $pn.AutoScroll = $true; $pn.BorderStyle = 'None'; $pn.BackColor = (Get-FixItColor $script:UiBack)
+    $pn.Location = New-Object System.Drawing.Point([int](24 * $S), [int](122 * $S)); $pn.Size = New-Object System.Drawing.Size([int](652 * $S), [int](486 * $S))
+    $f.Controls.Add($pn)
+    $fontLabel = New-Object System.Drawing.Font('Segoe UI', [single](15 * $S), [System.Drawing.FontStyle]::Bold, $px)
+    $fontValue = New-Object System.Drawing.Font('Segoe UI', [single](15 * $S), [System.Drawing.FontStyle]::Regular, $px)
+    $fontHead = New-Object System.Drawing.Font('Segoe UI', [single](18 * $S), [System.Drawing.FontStyle]::Bold, $px)
+    $fontNote = New-Object System.Drawing.Font('Segoe UI', [single](15 * $S), [System.Drawing.FontStyle]::Italic, $px)
+    $secs = @(Get-FixItProp $Result 'Sections' @())
+    $y = 4
+    $mk = {
+        param([string]$Text, $Font, [string]$Color, [int]$X, [int]$Top, [int]$W, [int]$H)
         $l = New-Object System.Windows.Forms.Label
-        $l.Text = [string]$ln; $l.AutoSize = $false
-        $l.Font = New-Object System.Drawing.Font('Segoe UI', [single](16 * $S), [System.Drawing.FontStyle]::Regular, $px)
-        $l.ForeColor = (Get-FixItColor $cText)
-        $l.Location = New-Object System.Drawing.Point([int](40 * $S), [int]($y * $S)); $l.Size = New-Object System.Drawing.Size([int](490 * $S), [int](52 * $S))
-        $f.Controls.Add($l); $y += 56
+        $l.Text = $Text; $l.AutoSize = $false; $l.Font = $Font; $l.ForeColor = (Get-FixItColor $Color)
+        $l.Location = New-Object System.Drawing.Point([int]($X * $S), [int]($Top * $S)); $l.Size = New-Object System.Drawing.Size([int]($W * $S), [int]($H * $S))
+        $pn.Controls.Add($l)
+        return $l
+    }
+    $lines0 = @($Result.Details)
+    foreach ($ln in $lines0) { $t = [string]$ln; [void](& $mk $t $fontValue $cText 4 $y 610 26); $y += 28 }
+    foreach ($sec in $secs) {
+        $y += 10
+        [void](& $mk ([string]$sec.Title) $fontHead $cHead 4 $y 610 30); $y += 34
+        foreach ($r in @($sec.Rows)) {
+            $val = [string]$r.Value
+            $lineCount = [int][math]::Max(1, [math]::Ceiling($val.Length / 38.0))
+            $h = 24 * $lineCount
+            [void](& $mk ([string]$r.Label) $fontLabel $cMuted 4 $y 190 $h)
+            [void](& $mk $val $fontValue $cText 196 $y 414 $h)
+            $y += $h + 2
+            if ($null -ne $r.Percent) {
+                $track = New-Object System.Windows.Forms.Panel
+                $track.BackColor = (Get-FixItColor $cTrack)
+                $track.Location = New-Object System.Drawing.Point([int](196 * $S), [int]($y * $S)); $track.Size = New-Object System.Drawing.Size([int](300 * $S), [int](10 * $S))
+                $fill = New-Object System.Windows.Forms.Panel
+                $fill.BackColor = (Get-FixItColor (Get-FixItBarColor -Percent $r.Percent -HighContrast $hc))
+                $pct = [int][math]::Max(0, [math]::Min(100, [int]$r.Percent))
+                $fill.Location = New-Object System.Drawing.Point(0, 0); $fill.Size = New-Object System.Drawing.Size([int](3 * $pct * $S), [int](10 * $S))
+                $track.Controls.Add($fill)
+                $track.AccessibleName = ('{0} percent' -f $pct)
+                $pn.Controls.Add($track)
+                $y += 16
+            }
+            $y += 4
+        }
+        foreach ($n in @($sec.Notes)) {
+            $lc = [int][math]::Max(1, [math]::Ceiling(([string]$n).Length / 62.0))
+            [void](& $mk ([string]$n) $fontNote $cText 4 $y 610 (24 * $lc)); $y += 24 * $lc + 4
+        }
     }
     $script:PcInfoCopyText = [string]$Result.CopyText
-    $cp = New-FixItTile -Run '' -Title 'Copy' -Sub '' -IconKey '' -Style 'yes' -IconBg '' -X 90 -Y 372 -W 170 -H 50
+    $cp = New-FixItTile -Run '' -Title 'Copy' -Sub '' -IconKey '' -Style 'yes' -IconBg '' -X 130 -Y 620 -W 200 -H 52
     $cp.Add_Click({ param($s, $e)
         $ok = $false
         try { $ok = [bool](Set-FixItClipboard -Text $script:PcInfoCopyText) } catch { }
@@ -7686,7 +8785,7 @@ function Show-FixItPcInfoForm {
         $s.Invalidate()
     })
     $f.Controls.Add($cp)
-    $cl = New-FixItTile -Run '' -Title 'Close' -Sub '' -IconKey '' -Style 'no' -IconBg '' -X 300 -Y 372 -W 170 -H 50
+    $cl = New-FixItTile -Run '' -Title 'Close' -Sub '' -IconKey '' -Style 'no' -IconBg '' -X 370 -Y 620 -W 200 -H 52
     $cl.Add_Click({ param($s, $e) $s.FindForm().Close() })
     $f.Controls.Add($cl)
     $f.CancelButton = $null
@@ -7947,13 +9046,33 @@ function Invoke-GuiButton {
         return
     }
     if ($Which -eq 'Pin') { Show-FixItGuideSteps -Guide (Get-FixItPinGuide); return }
+    if ($Which -eq 'Privacy' -or $Which -eq 'YourName') {
+        # the "What's shared" window and the name question: no question first (Test mode shows its checklist instead)
+        $pr = $null
+        if ($Which -eq 'Privacy') { $pr = Invoke-FixItPrivacy } else { $pr = Invoke-FixItYourName }
+        if ($script:TestMode) { Show-FixItTestOutcome -Title (Get-FixItActionTable)[$Which].Title -Result $pr }
+        return
+    }
+    if ($Which -eq 'Donate') {
+        # only opens the web page: no question, no pop-up (Test mode shows its checklist instead)
+        $dr = Invoke-FixItDonate
+        if ($script:TestMode) { Show-FixItTestOutcome -Title 'Thank Trey' -Result $dr }
+        return
+    }
     if ($Which -like 'PrinterPick:*') {
         $script:PickedPrinter = $Which.Substring(12)
         if ($script:PickDialog) { $script:PickDialog.Close() }
         return
     }
     if ($Which -eq 'Files') { Show-FixItFilesDialog; return }
-    if ($Which -eq 'PCInfo') { Show-FixItResult (Invoke-PcInfo); return }
+    if ($Which -eq 'PCInfo') {
+        $prevCur = $null
+        try { $prevCur = $script:Form.Cursor; $script:Form.Cursor = [System.Windows.Forms.Cursors]::WaitCursor } catch { }
+        $pcr = $null
+        try { $pcr = Invoke-PcInfo } finally { try { $script:Form.Cursor = $prevCur } catch { } }
+        Show-FixItResult $pcr
+        return
+    }
     if ($Which -eq 'Guides') { Show-FixItGuidesDialog; return }
     if ($Which -like 'Guide:*') {
         $gid = $Which.Substring(6)
@@ -8077,6 +9196,10 @@ function Start-FamilyFixIt {
             'GuardianOff'        { $r = (Invoke-GuardianToggle -Mode 'Off'); Show-FixItResult $r; if ($null -ne $r -and -not $r.Ok) { $exit = 1 } }
             'GuardianDemo'       { Show-FixItResult (Invoke-GuardianDemo) }
             'PCInfo'             { Show-FixItResult (Invoke-PcInfo) }
+            'Donate'             { Show-FixItResult (Invoke-FixItDonate) }
+            'Privacy'            { Show-FixItResult (Invoke-FixItPrivacy) }
+            'YourName'           { Show-FixItResult (Invoke-FixItYourName) }
+            'FirstRunPending'    { Show-FixItResult (Invoke-FixItFirstRunPending) }
             'Guides'             { Show-FixItResult (Invoke-GuidesHelper) }
             'Simple'             { Show-FixItResult (Invoke-SimpleToggle -Mode 'Toggle') }
             'UndoAdmin'          { $r = Invoke-UndoAdmin; Write-AdminResult $r; if (-not $r.Ok) { $exit = 1 } }

@@ -416,6 +416,13 @@ function Install-FamilyFixIt {
         if ($code -ne 0) { $warn += $a[1] }
     }
     foreach ($w in $warn) { Say ('   I could not turn on {0}. You can switch it on inside Family Fix-It.' -f $w) 'Yellow' }
+    if (-not $old) {
+        # a FRESH install only (never an update): leave a note so the first normal window shows the "What's shared" window once.
+        # The installer shows nothing itself and never waits for it, so a silent install (-Yes) cannot hang.
+        $fr = 1
+        try { $fr = Invoke-InstalledAction -Dir $Dir -Action 'FirstRunPending' } catch { Write-InstallLog ('FirstRunPending: ' + $_.Exception.Message) 'WARN' }
+        Write-InstallLog ('Action FirstRunPending exit code {0}' -f $fr)
+    }
 
     Say '5 of 5: Opening Family Fix-It ...'
     if ($Launch) { try { Start-InstalledTool -Dir $Dir } catch { Write-InstallLog ('Launch: ' + $_.Exception.Message) 'WARN'; Say ('   I could not open it automatically. Double-click "{0}" on your Desktop.' -f $script:ShortcutName) 'Yellow' } }
