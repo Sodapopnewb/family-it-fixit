@@ -5,7 +5,7 @@ What it does, in plain words:
   1. Downloads the list of files (manifest.json) and the files from Trey's GitHub page.
   2. Checks every file against its SHA-256 fingerprint. If anything does not match, nothing is installed.
   3. Closes any Family Fix-It window that is still open on the old version, then puts the files in  %LOCALAPPDATA%\FamilyFixIt  (your own user folder).
-  4. Makes a "Family Fix-It" shortcut (with its own icon) on the Desktop and in the Start menu.
+  4. Makes a "Family Fix-It" shortcut (with its own icon) on the Desktop and in the Start menu. Opening that shortcut asks Windows for permission once.
   5. Turns on the scary-pop-up watcher (Guardian) and the weekly check-in.
   6. Opens Family Fix-It.
 Running it again is safe: it repairs missing or changed files, or updates to the newest version.
@@ -89,7 +89,7 @@ function Get-InstallShortcut {
     try {
         $sh = New-Object -ComObject WScript.Shell
         $l = $sh.CreateShortcut($Path)
-        return [pscustomobject]@{ Target = [string]$l.TargetPath; Arguments = [string]$l.Arguments; Icon = [string]$l.IconLocation }
+        return [pscustomobject]@{ Target = [string]$l.TargetPath; Arguments = [string]$l.Arguments; Icon = [string]$l.IconLocation; Ask = (Get-InstallShortcutAsk -Path $Path) }
     } catch { return $null }
 }
 function New-InstallShortcut {
@@ -103,6 +103,46 @@ function New-InstallShortcut {
     $l.WindowStyle = 7
     if ($Icon) { $l.IconLocation = $Icon }
     $l.Save()
+}
+# 0x2000 is the mark inside a .lnk that makes Windows ask for permission when the shortcut is opened.
+# The shortcut object drops that mark when it saves, so it is written on the file afterwards. The installer itself is not an administrator.
+$script:ShortcutAskFlag = 0x2000
+function Get-InstallShortcutAsk {
+    param([string]$Path)
+    try {
+        if (-not (Test-Path -LiteralPath $Path)) { return $false }
+        $b = [IO.File]::ReadAllBytes($Path)
+        if ($b.Length -lt 24) { return $false }
+        if ([BitConverter]::ToUInt32($b, 0) -lt 76) { return $false }
+        return (([BitConverter]::ToUInt32($b, 20) -band [uint32]$script:ShortcutAskFlag) -ne 0)
+    } catch { return $false }
+}
+function Set-InstallShortcutAsk {
+    param([string]$Path)
+    if ($script:InstallDry) { return }
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+    $b = [IO.File]::ReadAllBytes($Path)
+    if ($b.Length -lt 24) { return }
+    if ([BitConverter]::ToUInt32($b, 0) -lt 76) { return }
+    $flags = [BitConverter]::ToUInt32($b, 20)
+    $bit = [uint32]$script:ShortcutAskFlag
+    if (($flags -band $bit) -ne 0) { return }
+    $flags = [uint32]($flags -bor $bit)
+    $fb = [BitConverter]::GetBytes($flags)
+    $b[20] = $fb[0]; $b[21] = $fb[1]; $b[22] = $fb[2]; $b[23] = $fb[3]
+    [IO.File]::WriteAllBytes($Path, $b)
+}
+# True when an existing shortcut already opens the right program with the right icon.
+# Ask is checked only when the reader reported it (the real reader always does). A missing mark means the shortcut is updated.
+function Test-InstallShortcutCurrent {
+    param($Cur, [string]$Target, [string]$Arguments, [string]$Icon, [bool]$Ask)
+    if ($null -eq $Cur) { return $false }
+    if ([string]$Cur.Target -ne $Target -or [string]$Cur.Arguments -ne $Arguments) { return $false }
+    if (-not (Test-InstallSameIcon ([string]$Cur.Icon) $Icon)) { return $false }
+    $named = $false
+    foreach ($p in $Cur.PSObject.Properties) { if ($p.Name -eq 'Ask') { $named = $true; break } }
+    if ($named -and ([bool]$Cur.Ask -ne $Ask)) { return $false }
+    return $true
 }
 function Get-InstallPowerShell {
     if ($env:SystemRoot) { $p = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'; if (Test-Path -LiteralPath $p) { return $p } }
@@ -127,6 +167,13 @@ function Invoke-InstalledAction {
 }
 function Start-InstalledTool {
     param([string]$Dir)
+    # Open the Desktop shortcut when it is there, so the first window asks for permission the same way a later double-click does.
+    $desk = ''
+    try { $desk = Get-InstallFolderPath 'Desktop' } catch { $desk = '' }
+    if ($desk) {
+        $lnk = Join-Path $desk ($script:ShortcutName + '.lnk')
+        if (Test-Path -LiteralPath $lnk) { Start-Process -FilePath $lnk | Out-Null; return }
+    }
     $exe = Get-InstallPowerShell
     Start-Process -FilePath $exe -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-STA', '-WindowStyle', 'Hidden', '-File', (Join-Path $Dir 'FamilyFixIt.ps1')) -WindowStyle Hidden | Out-Null
 }
@@ -321,10 +368,11 @@ function Set-InstallShortcuts {
         if (-not $folder) { Write-InstallLog ('No ' + $w + ' folder found') 'WARN'; continue }
         $lnk = Join-Path $folder ($script:ShortcutName + '.lnk')
         $cur = Get-InstallShortcut $lnk
-        if ($null -ne $cur -and $cur.Target -eq $ps -and $cur.Arguments -eq $args2 -and (Test-InstallSameIcon $cur.Icon $icon)) { Write-InstallLog ('Shortcut already correct: ' + $lnk); $made++; continue }
+        if (Test-InstallShortcutCurrent -Cur $cur -Target $ps -Arguments $args2 -Icon $icon -Ask $true) { Write-InstallLog ('Shortcut already correct: ' + $lnk); $made++; continue }
         try {
             if (-not (Test-Path -LiteralPath $folder)) { New-Item -ItemType Directory -Path $folder -Force | Out-Null }
-            New-InstallShortcut -Path $lnk -Target $ps -Arguments $args2 -WorkDir $Dir -Icon $icon -Description 'Family Fix-It: fixes common computer problems'
+            New-InstallShortcut -Path $lnk -Target $ps -Arguments $args2 -WorkDir $Dir -Icon $icon -Description 'Family Fix-It: fixes common computer problems. Windows asks for permission when this opens.'
+            Set-InstallShortcutAsk -Path $lnk
             Write-InstallLog ('Shortcut written: ' + $lnk)
             $made++
         } catch { Write-InstallLog ('Could not make shortcut {0}: {1}' -f $lnk, $_.Exception.Message) 'WARN' }
@@ -336,7 +384,7 @@ function Set-InstallShortcuts {
             $tl = Join-Path $tf ($script:TestShortcutName + '.lnk')
             $targs = $args2 + ' -Test'
             $tc = Get-InstallShortcut $tl
-            if ($null -ne $tc -and $tc.Target -eq $ps -and $tc.Arguments -eq $targs -and (Test-InstallSameIcon $tc.Icon $icon)) { Write-InstallLog ('Shortcut already correct: ' + $tl) }
+            if (Test-InstallShortcutCurrent -Cur $tc -Target $ps -Arguments $targs -Icon $icon -Ask $false) { Write-InstallLog ('Shortcut already correct: ' + $tl) }
             else {
                 if (-not (Test-Path -LiteralPath $tf)) { New-Item -ItemType Directory -Path $tf -Force | Out-Null }
                 New-InstallShortcut -Path $tl -Target $ps -Arguments $targs -WorkDir $Dir -Icon $icon -Description 'Family Fix-It in Test mode: checks that each fix could work, and changes nothing'
@@ -380,7 +428,7 @@ function Install-FamilyFixIt {
         Say 'Practice run only - nothing was changed. This is what would happen:' 'Yellow'
         Say ('   - download and check {0} files into {1}' -f @($manifest.Files).Count, $Dir)
         Say '   - close a Family Fix-It window that is still open on the old version'
-        Say ('   - make a "{0}" shortcut on the Desktop and in the Start menu' -f $script:ShortcutName)
+        Say ('   - make a "{0}" shortcut on the Desktop and in the Start menu (opening it asks Windows for permission once)' -f $script:ShortcutName)
         Say ('   - make a "{0}" shortcut in the Start menu (it only checks the fixes and changes nothing)' -f $script:TestShortcutName)
         Say '   - turn on the pop-up watcher (Guardian) and the weekly check-in'
         if ($Launch) { Say '   - open Family Fix-It' }

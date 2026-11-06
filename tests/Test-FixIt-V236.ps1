@@ -283,13 +283,14 @@ Show-FixItWindow
 Assert ($script:Forced.Count -eq 0 -and (Calls) -eq 'enter=False > enter=True > MAIN WINDOW > exit') 'an older window that closes on request is not forced'
 Clear-OpenWindow
 
-# (h) elevated and background runs still never touch any of this
+# (h) the main window takes the one-window lock even when it is already an administrator (the shortcut opens it that way).
+# It does not close some other window merely because this one is an administrator. Background actions are covered above: they are not Gui.
 $script:Admin = $true
 function Test-FixItAdmin { return $true }
 Reset-Close; $script:Calls.Clear(); $script:Table = @((Row 307 $base)); $script:Alive = @{ 307 = $true }
 Show-FixItWindow
-Assert ((Calls) -eq 'MAIN WINDOW > exit' -or (Calls) -eq 'MAIN WINDOW') ('an administrator run does not look at other windows (' + (Calls) + ')')
-Assert ($script:Asked.Count -eq 0) '... and closes none'
+Assert ((Calls) -eq 'enter=True > MAIN WINDOW > exit') ('an administrator window takes the one-window lock (' + (Calls) + ')')
+Assert ($script:Asked.Count -eq 0) 'it does not close another window merely because this one is an administrator'
 function Test-FixItAdmin { return $false }; $script:Admin = $false
 
 # ================================================================ 5. normal <-> Test mode

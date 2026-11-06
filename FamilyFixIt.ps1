@@ -37,7 +37,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 # Settings
 # ---------------------------------------------------------------------------
-$script:FixItVersion = '2.3.17'
+$script:FixItVersion = '2.3.18'
 $script:GuideFont = $null; $script:FilesMsg = $null; $script:FilesPanel = $null; $script:FilesTip = $null; $script:FilesNameFont = $null   # My files window pieces (set when the window opens)
 $script:DefaultManifestUrl = 'https://raw.githubusercontent.com/Sodapopnewb/family-it-fixit/main/manifest.json'
 $script:OwnerPlaceholder = ('<' + 'OWNER>')   # the guards compare with this; Publish never rewrites it
@@ -54,6 +54,7 @@ $script:AllowedAssetFiles = @('FamilyFixIt.ico')
 $script:IconFileName = 'FamilyFixIt.ico'
 $script:ShortcutFileName = 'Family Fix-It.lnk'
 $script:TestShortcutFileName = 'Family Fix-It (Test mode).lnk'   # Start menu only; opens the window in Test mode (-Test)
+$script:ShortcutAskFlag = 0x2000   # the mark inside a .lnk that makes Windows ask for permission when that shortcut is opened
 $script:SelfPath = $PSCommandPath
 $script:InstallDir = $PSScriptRoot
 $script:DryRun = [bool]$WhatIf
@@ -1359,11 +1360,73 @@ function Read-FixItShortcut {
         return [pscustomobject]@{ Arguments = [string]$l.Arguments; Icon = [string]$l.IconLocation }
     } catch { return $null }
 }
+# True for the normal Desktop and Start menu shortcut. The Test mode shortcut, and any shortcut that does not start this program, stay as they are.
+function Test-FixItShortcutWantsAsk {
+    param([string]$Path, [string]$Arguments)
+    if (([IO.Path]::GetFileName($Path)) -ne $script:ShortcutFileName) { return $false }
+    if ($Arguments -notmatch 'FamilyFixIt\.ps1') { return $false }
+    if ($Arguments -match '(?i)(?:^|\s)-Test(?:\s|$)') { return $false }
+    return $true
+}
+# Reads the .lnk mark. The shortcut object cannot see it, so this reads the file itself.
+function Test-FixItShortcutAsks {
+    param([string]$Path)
+    try {
+        if (-not (Test-Path -LiteralPath $Path)) { return $false }
+        $b = [IO.File]::ReadAllBytes($Path)
+        if ($b.Length -lt 24) { return $false }
+        if ([BitConverter]::ToUInt32($b, 0) -lt 76) { return $false }
+        return (([BitConverter]::ToUInt32($b, 20) -band [uint32]$script:ShortcutAskFlag) -ne 0)
+    } catch { return $false }
+}
+# Writes that mark onto one shortcut file. Returns $true only when the file changed. Test mode and practice mode change nothing.
+# Saving a shortcut the ordinary way drops the mark, so callers do this after a save.
+function Set-FixItShortcutRunFlag {
+    param([string]$Path)
+    if ($script:TestMode -or $script:DryRun) { return $false }
+    try {
+        if (-not (Test-Path -LiteralPath $Path)) { return $false }
+        $b = [IO.File]::ReadAllBytes($Path)
+        if ($b.Length -lt 24) { return $false }
+        if ([BitConverter]::ToUInt32($b, 0) -lt 76) { return $false }
+        $flags = [BitConverter]::ToUInt32($b, 20)
+        $bit = [uint32]$script:ShortcutAskFlag
+        if (($flags -band $bit) -ne 0) { return $false }
+        $flags = [uint32]($flags -bor $bit)
+        $fb = [BitConverter]::GetBytes($flags)
+        $b[20] = $fb[0]; $b[21] = $fb[1]; $b[22] = $fb[2]; $b[23] = $fb[3]
+        [IO.File]::WriteAllBytes($Path, $b)
+        return $true
+    } catch {
+        Write-FixItLog ('Could not mark the shortcut so Windows asks for permission ({0}): {1}' -f $Path, $_.Exception.Message) 'WARN'
+        return $false
+    }
+}
 function Write-FixItShortcutIcon {
     param([string]$Path, [string]$Icon)
     $l = (New-Object -ComObject WScript.Shell).CreateShortcut($Path)
     $l.IconLocation = $Icon
     $l.Save()
+    # A save forgets the permission mark. Put it back on the normal shortcut (never the Test mode one).
+    if (([IO.Path]::GetFileName($Path)) -eq $script:ShortcutFileName) { [void](Set-FixItShortcutRunFlag -Path $Path) }
+}
+# Puts the permission mark on the normal Family Fix-It shortcuts that are already there. Does not create one, and never touches Test mode.
+# Safe to repeat. An update calls this so a newer version cannot leave the shortcut as an ordinary one.
+function Update-FixItOfficialShortcuts {
+    if ($script:TestMode -or $script:DryRun) { return 0 }
+    $n = 0
+    foreach ($lnk in @(Get-FixItShortcutPaths)) {
+        try {
+            $cur = Read-FixItShortcut -Path $lnk
+            if ($null -eq $cur) { continue }
+            if (-not (Test-FixItShortcutWantsAsk -Path $lnk -Arguments ([string]$cur.Arguments))) { continue }
+            if (Set-FixItShortcutRunFlag -Path $lnk) {
+                Write-FixItLog ('Shortcut will ask for permission when it is opened: {0}' -f $lnk)
+                $n++
+            }
+        } catch { Write-FixItLog ('Could not mark shortcut {0}: {1}' -f $lnk, $_.Exception.Message) 'WARN' }
+    }
+    return $n
 }
 function Test-FixItSameIcon {
     param([string]$A, [string]$B)
@@ -3285,6 +3348,7 @@ function Install-FixItUpdate {
         }
         # the shortcuts follow the icon (never a reason to fail the update)
         try { [void](Update-FixItShortcutIcons) } catch { Write-FixItLog ('Shortcut icon refresh: {0}' -f $_.Exception.Message) 'WARN' }
+        try { [void](Update-FixItOfficialShortcuts) } catch { Write-FixItLog ('Shortcut permission mark: {0}' -f $_.Exception.Message) 'WARN' }
         # a watcher that is running keeps the OLD program in memory: stop it and start a fresh one from the new file (never a reason to fail the update)
         if ($done -contains 'FamilyFixIt.ps1') {
             try {
@@ -6402,7 +6466,7 @@ function Invoke-InstallApp {
         $elev = $false; try { $elev = [bool](Test-FixItAdmin) } catch { }
         if ($elev) {
             Write-FixItLog ('{0} was not installed: its installer will not run with administrator rights, and this window has them' -f $app.Name) 'WARN'
-            return New-FixItResult $false 'Open me the usual way' ('{0} can only be installed from a normal window, and this one was opened with administrator rights. Close Family Fix-It, open it again by double-clicking its icon (not "Run as administrator"), and try again.' -f $app.Name)
+            return New-FixItResult $false 'Open me the usual way' ('{0} can only be installed from a normal window, and this one was opened with administrator rights. Family Fix-It opens that way so the other fixes do not ask again. Close this window and install {0} from its own download, or ask your helper to install it. Nothing was installed.' -f $app.Name)
         }
     }
     $askText = 'Install {0}? It comes from Microsoft''s official app list (winget). Windows may ask for permission.'
@@ -7258,6 +7322,23 @@ function Update-FixItGuardianLastWindow {
 
 function Open-FixItMainWindow {
     if ($script:TestMode -or $script:DryRun) { return }
+    # The watcher itself stays as the signed-in person. Opening uses the same shortcut as the Desktop, so Windows asks once for that window.
+    $lnk = ''
+    foreach ($p in @(Get-FixItShortcutPaths)) {
+        try {
+            if (([IO.Path]::GetFileName($p)) -ne $script:ShortcutFileName) { continue }
+            if (-not (Test-Path -LiteralPath $p)) { continue }
+            $cur = Read-FixItShortcut -Path $p
+            if ($null -eq $cur) { continue }
+            if (-not (Test-FixItShortcutWantsAsk -Path $p -Arguments ([string]$cur.Arguments))) { continue }
+            $lnk = $p
+            break
+        } catch { }
+    }
+    if ($lnk) {
+        try { Start-Process -FilePath $lnk | Out-Null } catch { Write-FixItLog ('Could not open Family Fix-It from its shortcut: {0}' -f $_.Exception.Message) 'WARN' }
+        return
+    }
     Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-STA', '-WindowStyle', 'Hidden', '-File', ('"{0}"' -f $script:SelfPath)) -WindowStyle Hidden | Out-Null
 }
 # What a click does. Every click is logged.
@@ -9143,6 +9224,9 @@ function Show-FixItWindowOnce {
             } catch { Write-FixItLog ('Health pill failed: {0}' -f $_.Exception.Message) 'WARN' }
         })
         if (-not $script:TestMode) { $tm.Start() }
+        if (-not $script:TestMode -and -not $script:DryRun) {
+            try { [void](Update-FixItOfficialShortcuts) } catch { Write-FixItLog ('Shortcut permission mark: {0}' -f $_.Exception.Message) 'WARN' }
+        }
         if (-not $NoUpdateCheck -and -not $script:DryRun) {
             try { if (Repair-FixItIcon) { Set-FixItFormIcon $s } } catch { Write-FixItLog ('Icon check failed: {0}' -f $_.Exception.Message) 'WARN' }
         }
@@ -9159,8 +9243,8 @@ function Show-FixItWindowOnce {
 
 # ---------------------------------------------------------------------------
 # One window only (v2.3.3): double-clicking the shortcut again must bring the open window forward, not open a second one.
-# Only the main window (-Action Gui, not elevated) takes part. The sign-in watcher, the weekly check-in, the health check
-# and the administrator parts never touch this mutex, so they can always run.
+# Only the main window (-Action Gui) takes part, including when that window is already an administrator (the shortcut opens it that way).
+# The sign-in watcher, the weekly check-in, the health check and the administrator parts never touch this mutex, so they can always run.
 #   - a named per-user mutex (Local\FamilyFixIt-GUI-<user SID>) says "a window is open"
 #   - a named per-user event (Local\FamilyFixIt-GUI-Show-<user SID>) is how the second start asks the open window to come forward
 #   - gui-instance.json (process id + window handle) lets the second start also bring the window forward itself
@@ -9238,13 +9322,12 @@ function Get-FixItGuiInstanceFile {
     return (Join-Path (Split-Path -Parent (Get-FixItStateFile)) ('gui-instance-' + $Key + '.json'))
 }
 
-# Does the one-window rule apply to this start? Only the plain, visible, not-elevated window.
+# Does the one-window rule apply to this start? Only the plain visible main window.
+# That window may already be an administrator: the Desktop and Start menu shortcuts ask once when they open.
+# Other actions (the pop-up watcher, the weekly check-in, every administrator helper) never take the lock.
 function Test-FixItGuiSingleInstanceApplies {
     if ($Action -ne 'Gui') { return $false }
     if ($script:Background) { return $false }
-    $elevated = $false
-    try { $elevated = [bool](Test-FixItAdmin) } catch { $elevated = $false }
-    if ($elevated) { return $false }
     return $true
 }
 
