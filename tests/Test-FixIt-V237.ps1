@@ -780,7 +780,7 @@ Assert (@([regex]::Matches($bt, 'Get-Content')).Count -eq @([regex]::Matches($bt
 # --- when it shows: pure plan
 $p = Get-FixItFirstRunPlan -Pending '1' -PrivacyShown '' -NameAsked '' -Interactive $true
 Assert ($p.ShowPrivacy -and $p.AskName -and $p.Pending) 'fresh install, normal start: show the window, then ask the name'
-$p = Get-FixItFirstRunPlan -Pending '' -PrivacyShown '' -NameAsked '' -Interactive $true
+$p = Get-FixItFirstRunPlan -Pending '' -PrivacyShown '' -NameAsked '' -Interactive $true -HelperAsked '2026-10-01'
 Assert (-not $p.ShowPrivacy -and -not $p.AskName) 'an update (no note left by the installer): nothing is shown'
 $p = Get-FixItFirstRunPlan -Pending '1' -PrivacyShown '' -NameAsked '' -Interactive $false
 Assert (-not $p.ShowPrivacy -and -not $p.AskName -and $p.Pending -and $p.Reason -match 'silent') 'silent or practice start: nothing is shown, it stays pending'
@@ -790,7 +790,7 @@ $p = Get-FixItFirstRunPlan -Pending '1' -PrivacyShown '2026-10-01' -NameAsked '2
 Assert (-not $p.ShowPrivacy -and -not $p.AskName) 'both done: nothing'
 # --- when it shows: the real first-run function with a pretend window
 $script:Drawn = New-Object System.Collections.ArrayList
-function Show-FixItFirstRunWindows { param([bool]$ShowPrivacy, [bool]$AskName) [void]$script:Drawn.Add(('privacy={0} name={1}' -f $ShowPrivacy, $AskName)) }
+function Show-FixItFirstRunWindows { param([bool]$ShowPrivacy, [bool]$AskName, [bool]$AskHelper = $false) [void]$script:Drawn.Add(('privacy={0} name={1}' -f $ShowPrivacy, $AskName)); if ($AskHelper) { Set-FixItSetting -Name 'HelperAsked' -Value '2026-10-01' } }
 # fresh install: the installer's action leaves the note and shows nothing
 Reset-State
 $r = Invoke-FixItFirstRunPending
@@ -818,9 +818,9 @@ Assert ((Get-FixItSetting -Name 'PrivacyPending' -Default '') -eq '0') 'and then
 $shown = Invoke-FixItFirstRun
 Assert (-not $shown -and $script:Drawn.Count -eq 1) 'the next start shows nothing (once only)'
 # an update never shows it, even if the settings never heard of it
-Reset-State; $script:Drawn.Clear()
+Reset-State; $script:Drawn.Clear(); Set-FixItSetting -Name 'HelperAsked' -Value '2026-10-01'
 $shown = Invoke-FixItFirstRun
-Assert (-not $shown -and $script:Drawn.Count -eq 0) 'an updated install (no note) never shows it'
+Assert (-not $shown -and $script:Drawn.Count -eq 0) 'an updated install (no note, helper already answered) never shows it'
 # a re-install after the window was seen: no new note
 Set-FixItSetting -Name 'PrivacyShown' -Value '2026-10-01'
 $r = Invoke-FixItFirstRunPending

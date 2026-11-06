@@ -37,7 +37,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 # Settings
 # ---------------------------------------------------------------------------
-$script:FixItVersion = '2.3.15'
+$script:FixItVersion = '2.3.16'
 $script:GuideFont = $null; $script:FilesMsg = $null; $script:FilesPanel = $null; $script:FilesTip = $null; $script:FilesNameFont = $null   # My files window pieces (set when the window opens)
 $script:DefaultManifestUrl = 'https://raw.githubusercontent.com/Sodapopnewb/family-it-fixit/main/manifest.json'
 $script:OwnerPlaceholder = ('<' + 'OWNER>')   # the guards compare with this; Publish never rewrites it
@@ -1903,10 +1903,34 @@ function Get-FixItStateFile {
     if (-not $b) { $b = [IO.Path]::GetTempPath() }
     return (Join-Path $b 'FamilyFixIt\state.json')
 }
-function Get-FixItState {
+# The settings file is shared by the window, the pop-up watcher and the installer steps, which can run at the same moment.
+# So: one writer at a time (a named lock for this Windows user), the new file is written whole and then swapped in,
+# and a file that is there but cannot be read is never written over (that used to wipe every setting).
+function Read-FixItStateFile {
+    # Returns @{ Ok; State }. Ok is false only when the file is there but could not be read (it is retried briefly first).
     $f = Get-FixItStateFile
-    if (Test-Path -LiteralPath $f) { try { return (Get-Content -LiteralPath $f -Raw | ConvertFrom-Json) } catch { } }
-    return [pscustomobject]@{}
+    for ($i = 0; $i -lt 5; $i++) {
+        if (-not (Test-Path -LiteralPath $f)) { return @{ Ok = $true; State = [pscustomobject]@{} } }
+        try {
+            $t = [IO.File]::ReadAllText($f)
+            if ($t.Trim()) { $o = $t | ConvertFrom-Json; if ($null -ne $o) { return @{ Ok = $true; State = $o } } }
+        } catch { }
+        Wait-FixIt -Milliseconds 60
+    }
+    return @{ Ok = $false; State = [pscustomobject]@{} }
+}
+function Get-FixItState {
+    return (Read-FixItStateFile).State
+}
+function Use-FixItStateLock {
+    param([scriptblock]$Body)
+    $m = $null; $have = $false
+    try {
+        $m = New-Object Threading.Mutex($false, 'Local\FamilyFixIt-State')
+        try { $have = $m.WaitOne(5000) } catch [Threading.AbandonedMutexException] { $have = $true }
+        if (-not $have) { Write-FixItLog 'Settings were busy for 5 seconds; saving anyway.' 'WARN' }
+    } catch { $m = $null }
+    try { & $Body } finally { if ($have) { try { $m.ReleaseMutex() } catch { } }; if ($m) { $m.Dispose() } }
 }
 function Set-FixItStateValue {
     param([string]$Name, [string]$Value)
@@ -1914,11 +1938,21 @@ function Set-FixItStateValue {
     $f = Get-FixItStateFile
     $d = Split-Path -Parent $f
     if (-not (Test-Path -LiteralPath $d)) { New-Item -ItemType Directory -Path $d -Force | Out-Null }
-    $h = [ordered]@{}
-    $cur = Get-FixItState
-    foreach ($p in $cur.PSObject.Properties) { $h[$p.Name] = $p.Value }
-    $h[$Name] = $Value
-    [IO.File]::WriteAllText($f, ($h | ConvertTo-Json), (New-Object Text.UTF8Encoding($false)))
+    Use-FixItStateLock {
+        $r = Read-FixItStateFile
+        if (-not $r.Ok) {
+            $bak = $f + '.unreadable'
+            try { Copy-Item -LiteralPath $f -Destination $bak -Force } catch { }
+            Write-FixItLog ('The settings file could not be read, so it was not changed (setting {0} not saved). A copy is at {1}.' -f $Name, $bak) 'WARN'
+            return
+        }
+        $h = [ordered]@{}
+        foreach ($p in $r.State.PSObject.Properties) { $h[$p.Name] = $p.Value }
+        $h[$Name] = $Value
+        $tmp = $f + '.new'
+        [IO.File]::WriteAllText($tmp, ($h | ConvertTo-Json), (New-Object Text.UTF8Encoding($false)))
+        if (Test-Path -LiteralPath $f) { [IO.File]::Replace($tmp, $f, [NullString]::Value) } else { [IO.File]::Move($tmp, $f) }
+    }
 }
 
 # ----- OneDrive
@@ -7816,6 +7850,11 @@ function Get-FixItFirstRunPlan {
         $askHelper = (-not $HelperAsked)
         $why = 'fresh install'
     }
+    elseif ($Interactive -and -not $HelperAsked) {
+        # The helper question was never answered (for example the installer's note was lost): ask it, and only it.
+        $askHelper = $true
+        $why = 'the helper question was never answered'
+    }
     return [pscustomobject]@{ Pending = $isPending; ShowPrivacy = $showPrivacy; AskName = $askName; AskHelper = $askHelper; Reason = $why }
 }
 
@@ -7839,7 +7878,8 @@ function Invoke-FixItFirstRun {
         if ($plan.Pending) { Set-FixItSetting -Name 'PrivacyPending' -Value '0' }
         return $false
     }
-    Write-FixItLog ('First run: showing {0}{1}{2}' -f $(if ($plan.ShowPrivacy) { 'the "What''s shared" window' } else { '' }), $(if ($plan.AskName) { $(if ($plan.ShowPrivacy) { ' and the name question' } else { 'the name question' }) } else { '' }), $(if ($plan.AskHelper) { ' and the helper question' } else { '' }))
+    $what = @(); if ($plan.ShowPrivacy) { $what += 'the "What''s shared" window' }; if ($plan.AskName) { $what += 'the name question' }; if ($plan.AskHelper) { $what += 'the helper question' }
+    Write-FixItLog ('First run: showing {0} ({1})' -f ($what -join ' and '), $plan.Reason)
     try { Show-FixItFirstRunWindows -ShowPrivacy $plan.ShowPrivacy -AskName $plan.AskName -AskHelper $plan.AskHelper } catch { Write-FixItLog ('The first-run window had a problem: {0}' -f $_.Exception.Message) 'WARN' }
     Set-FixItSetting -Name 'PrivacyPending' -Value '0'
     return $true

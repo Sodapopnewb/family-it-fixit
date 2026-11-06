@@ -277,8 +277,8 @@ $p = Get-FixItFirstRunPlan -Pending '1' -PrivacyShown '2026-01-01' -NameAsked '2
 Assert (-not $p.AskHelper -and -not $p.ShowPrivacy) 'once answered it is never asked again'
 $p = Get-FixItFirstRunPlan -Pending '1' -PrivacyShown '' -NameAsked '' -Interactive $false -HelperAsked ''
 Assert (-not $p.AskHelper) 'a silent start or practice run asks nothing'
-$p = Get-FixItFirstRunPlan -Pending '' -PrivacyShown '' -NameAsked '' -Interactive $true -HelperAsked ''
-Assert (-not $p.AskHelper) 'an existing install (nothing pending) is not asked: it keeps Trey and can use "Your helper"'
+$p = Get-FixItFirstRunPlan -Pending '' -PrivacyShown '' -NameAsked '' -Interactive $true -HelperAsked '2026-01-01'
+Assert (-not $p.AskHelper) 'an existing install that already answered (nothing pending) is not asked again'
 $script:CalledFR = New-Object System.Collections.ArrayList
 function Show-FixItPrivacyForm { param([bool]$FirstRun) [void]$script:CalledFR.Add('privacy') }
 function Show-FixItNameForm { [void]$script:CalledFR.Add('name'); return $true }
