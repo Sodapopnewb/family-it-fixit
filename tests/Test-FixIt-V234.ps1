@@ -172,6 +172,7 @@ $reviewedRaw = @{
     'Add-FixItHelpDot' = 'screen only: .SetValue turns on double buffering of the little ? button'
     'Show-FixItShareForm' = 'screen only: .Start starts the timer that changes Copied! back to Copy message'
     'Get-FixItCbsLogLines' = 'opens the Windows repair log for reading only (shared); returns first in Test mode'
+    'Set-FixItShortcutRunFlag' = 'marks only an existing Family Fix-It shortcut file so Windows asks for permission when it is opened; returns first in Test mode and practice mode and never touches the pop-up watcher'
 }
 foreach ($b in @('Set-FixItStateValue', 'Write-FixItUndoJournal', 'Write-AdminResult')) {
     $first = @((Get-Fn $b).Body.EndBlock.Statements)[0].Extent.Text
