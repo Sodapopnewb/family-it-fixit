@@ -6,15 +6,15 @@ browser clean-up, Windows Update, OneDrive; a red "scary pop-up" button; screen 
 
 Run with no options to open the friendly window.
 Command-line use (for Trey):
-  FamilyFixIt.ps1 -Action Printer|Acrobat|AcrobatRepair|Outlook|Network|Slow|Sound|Display|Browser|WinUpdate|OneDrive|Scam|Screen|Report|Pin|Update [-WhatIf]
+  FamilyFixIt.ps1 -Action Printer|Acrobat|AcrobatRepair|Outlook|Network|Slow|Sound|Display|Browser|WinUpdate|RepairWindows|OneDrive|Scam|Screen|Report|Pin|Update [-WhatIf]
   -WhatIf (alias -DryRun) shows what would happen and changes nothing (nothing is sent either).
   -Test (Test mode) runs the normal window and questions but only CHECKS each change step (PASS/WARN/FAIL); -Action TestAll checks every button.
   -ReportUrl overrides the address that reports are sent to.
   Guardian (runs at sign-in, hidden) watches for a full-screen browser page and offers a way out; GuardianOn/GuardianOff/GuardianDemo.
 #>
 param(
-    [ValidateSet('Gui', 'TestAll', 'Printer', 'Acrobat', 'AcrobatRepair', 'Outlook', 'Network', 'Slow', 'Sound', 'Display', 'Browser', 'WinUpdate', 'OneDrive', 'Scam', 'Screen', 'Report', 'Pin', 'Update', 'Restart', 'Status', 'Undo', 'CheckIn', 'CheckInOn', 'CheckInOff', 'HealthCheck', 'History', 'Files', 'Install', 'Guardian', 'GuardianOn', 'GuardianOff', 'GuardianDemo', 'PCInfo', 'Guides', 'Simple', 'Donate', 'Privacy', 'YourName', 'YourHelper', 'Share', 'FirstRunPending',
-        'PrinterAdmin', 'AcrobatAdmin', 'AcrobatRepairAdmin', 'NetworkAdmin', 'SlowAdmin', 'SoundAdmin', 'OutlookAdmin', 'DefenderScanAdmin', 'WinUpdateAdmin', 'WinUpdateDeepAdmin', 'UndoAdmin')]
+    [ValidateSet('Gui', 'TestAll', 'Printer', 'Acrobat', 'AcrobatRepair', 'Outlook', 'Network', 'Slow', 'Sound', 'Display', 'Browser', 'WinUpdate', 'RepairWindows', 'OneDrive', 'Scam', 'Screen', 'Report', 'Pin', 'Update', 'Restart', 'Status', 'Undo', 'CheckIn', 'CheckInOn', 'CheckInOff', 'HealthCheck', 'History', 'Files', 'Install', 'Guardian', 'GuardianOn', 'GuardianOff', 'GuardianDemo', 'PCInfo', 'Guides', 'Simple', 'Donate', 'Privacy', 'YourName', 'YourHelper', 'Share', 'FirstRunPending',
+        'PrinterAdmin', 'AcrobatAdmin', 'AcrobatRepairAdmin', 'NetworkAdmin', 'SlowAdmin', 'SoundAdmin', 'OutlookAdmin', 'DefenderScanAdmin', 'WinUpdateAdmin', 'WinUpdateDeepAdmin', 'RepairWindowsAdmin', 'UndoAdmin')]
     [string]$Action = 'Gui',
     [Alias('DryRun')][switch]$WhatIf,
     [string]$LogPath,
@@ -37,7 +37,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 # Settings
 # ---------------------------------------------------------------------------
-$script:FixItVersion = '2.3.16'
+$script:FixItVersion = '2.3.17'
 $script:GuideFont = $null; $script:FilesMsg = $null; $script:FilesPanel = $null; $script:FilesTip = $null; $script:FilesNameFont = $null   # My files window pieces (set when the window opens)
 $script:DefaultManifestUrl = 'https://raw.githubusercontent.com/Sodapopnewb/family-it-fixit/main/manifest.json'
 $script:OwnerPlaceholder = ('<' + 'OWNER>')   # the guards compare with this; Publish never rewrites it
@@ -67,7 +67,7 @@ $script:EchoLog = $false
 $script:GuiActive = $false
 # Background work (the installer, the sign-in watcher, the weekly check-in, the administrator parts) has nobody at the keyboard.
 # It must never ask a question: a hidden window that waits for typing waits forever.
-$script:BackgroundActions = @('FirstRunPending', 'Guardian', 'GuardianOn', 'GuardianOff', 'CheckInOn', 'CheckInOff', 'HealthCheck', 'PrinterAdmin', 'AcrobatAdmin', 'AcrobatRepairAdmin', 'NetworkAdmin', 'SlowAdmin', 'SoundAdmin', 'OutlookAdmin', 'DefenderScanAdmin', 'WinUpdateAdmin', 'WinUpdateDeepAdmin', 'UndoAdmin')
+$script:BackgroundActions = @('FirstRunPending', 'Guardian', 'GuardianOn', 'GuardianOff', 'CheckInOn', 'CheckInOff', 'HealthCheck', 'PrinterAdmin', 'AcrobatAdmin', 'AcrobatRepairAdmin', 'NetworkAdmin', 'SlowAdmin', 'SoundAdmin', 'OutlookAdmin', 'DefenderScanAdmin', 'WinUpdateAdmin', 'WinUpdateDeepAdmin', 'RepairWindowsAdmin', 'UndoAdmin')
 $script:Background = $false
 $script:AssumeYes = [bool]$Yes
 $script:AddinName = 'PDFMaker.OfficeAddin'
@@ -704,7 +704,7 @@ function Complete-FixItTestRecords {
 }
 
 # The buttons that "Test all buttons" runs (every fix, the report, the restart, the undo, the toggles and the update check).
-$script:TestAllKeys = @('Printer', 'Acrobat', 'AcrobatRepair', 'Outlook', 'Network', 'Slow', 'Sound', 'Display', 'Browser', 'WinUpdate', 'OneDrive', 'Scam', 'Screen', 'Report', 'Update', 'Restart', 'Undo', 'CheckIn', 'Guardian', 'HealthCheck', 'PCInfo', 'Donate', 'Privacy', 'YourName', 'YourHelper', 'Share')
+$script:TestAllKeys = @('Printer', 'Acrobat', 'AcrobatRepair', 'Outlook', 'Network', 'Slow', 'Sound', 'Display', 'Browser', 'WinUpdate', 'RepairWindows', 'OneDrive', 'Scam', 'Screen', 'Report', 'Update', 'Restart', 'Undo', 'CheckIn', 'Guardian', 'HealthCheck', 'PCInfo', 'Donate', 'Privacy', 'YourName', 'YourHelper', 'Share')
 
 function Get-FixItTestResultsPath {
     param([switch]$Create)
@@ -4488,6 +4488,83 @@ function Invoke-WinUpdateFix {
 }
 
 # ---------------------------------------------------------------------------
+# Repair Windows: the two standard Windows file repairs, one after the other (DISM RestoreHealth, then sfc /scannow).
+# The names DISM and sfc are only in the log, never in what the person reads. Running it again is fine.
+# ---------------------------------------------------------------------------
+# Pure: what the second step found, from the lines of the Windows repair log (CBS.log) written since it started.
+function Get-FixItSfcOutcome {
+    param([string[]]$Lines = @(), [datetime]$Since = [datetime]::MinValue)
+    $sr = @()
+    foreach ($l in @($Lines)) {
+        if ($l -notmatch '\[SR\]') { continue }
+        $d = [datetime]::MinValue
+        if ($l -match '^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})' -and [datetime]::TryParse($Matches[1], [ref]$d) -and $d -lt $Since) { continue }
+        $sr += $l
+    }
+    if (@($sr | Where-Object { $_ -match '(?i)Cannot repair' }).Count -gt 0) { return 'NotAll' }
+    if (@($sr | Where-Object { $_ -match '(?i)Repairing corrupted file|Repaired file|Repairing [1-9]\d* components' }).Count -gt 0) { return 'Repaired' }
+    if (@($sr | Where-Object { $_ -match '(?i)Verify complete|Beginning Verify and Repair' }).Count -gt 0) { return 'Clean' }
+    return 'Unknown'
+}
+# Reads the end of the Windows repair log (it may be in use, so it is opened for reading only, shared).
+function Get-FixItCbsLogLines {
+    if ($script:TestMode) { return @() }
+    $win = $env:SystemRoot; if (-not $win) { $win = 'C:\Windows' }
+    $p = Join-Path $win 'Logs\CBS\CBS.log'
+    if (-not (Test-Path -LiteralPath $p)) { return @() }
+    $fs = [IO.File]::Open($p, 'Open', 'Read', 'ReadWrite')
+    try {
+        $keep = [int64]4MB
+        if ($fs.Length -gt $keep) { [void]$fs.Seek(-$keep, 'End') }
+        $sr = New-Object IO.StreamReader($fs)
+        return @($sr.ReadToEnd() -split "`r?`n")
+    } finally { $fs.Dispose() }
+}
+function Invoke-RepairWindowsAdmin {
+    Add-FixItCannotUndo 'Repairing Windows files cannot be undone (nothing of yours is changed).'
+    Write-Host 'Repairing Windows. This can take 30 to 60 minutes.'
+    Write-Host 'Please leave this window open and do not turn off the computer.'
+    Write-Host ''
+    Write-Host 'Step 1 of 2: checking Windows and fixing damaged parts (the percent below goes up slowly, sometimes it waits a long time at one number)...'
+    $since = Get-Date
+    $first = Invoke-FixItStep 'Repair Windows step 1 of 2 (DISM /Online /Cleanup-Image /RestoreHealth)' { Invoke-FixItTool -File 'dism.exe' -Arguments @('/Online', '/Cleanup-Image', '/RestoreHealth') -OkCodes @(0, 3010) -Live }
+    if (-not $first) {
+        Write-FixItLog 'Repair Windows stopped after step 1 failed; step 2 was not started' 'WARN'
+        return New-FixItResult $false 'Repair stopped' 'The first part of the repair could not finish, so I stopped before the second part. This often means the computer could not reach Microsoft to download good copies of the damaged parts. Check that the internet works and try again. If it still stops, please send Trey a report.' @() @{ Stage = 'First'; NeedsRestart = $false }
+    }
+    Write-Host ''
+    Write-Host 'Step 2 of 2: checking every Windows file and repairing damaged ones (the percent below goes up to 100)...'
+    $since = Get-Date
+    $second = Invoke-FixItStep 'Repair Windows step 2 of 2 (sfc /scannow)' { Invoke-FixItTool -File 'sfc.exe' -Arguments @('/scannow') -OkCodes @(0, 1) -Live }
+    if (-not $second) {
+        return New-FixItResult $false 'Repair did not finish' 'The second part of the repair could not finish. Please restart your computer and try again. If it still does not finish, please send Trey a report.' @() @{ Stage = 'Second'; NeedsRestart = $false }
+    }
+    if ($script:DryRun) { return New-FixItResult $true 'Practice run' 'Practice run only - nothing was changed.' @() @{ Stage = 'Done'; Outcome = 'DryRun'; NeedsRestart = $false } }
+    $outcome = 'Unknown'
+    if (-not $script:TestMode) { try { $outcome = Get-FixItSfcOutcome -Lines (Get-FixItCbsLogLines) -Since $since } catch { Write-FixItLog ('Could not read what the repair found: {0}' -f $_.Exception.Message) 'WARN' } }
+    Write-FixItLog ('Repair Windows step 2 result: {0}' -f $outcome)
+    switch ($outcome) {
+        'NotAll'   { return New-FixItResult $false 'Some files not repaired' 'The repair finished, but some Windows files could not be repaired. Please send Trey a report so he can look at it.' @() @{ Stage = 'Done'; Outcome = $outcome; NeedsRestart = $true } }
+        'Repaired' { return New-FixItResult $true 'Windows repaired' 'Damaged Windows files were found and repaired. Please restart your computer, then check for Windows updates.' @() @{ Stage = 'Done'; Outcome = $outcome; NeedsRestart = $true } }
+        'Clean'    { return New-FixItResult $true 'Windows is OK' 'The repair finished and no damaged Windows files were found.' @() @{ Stage = 'Done'; Outcome = $outcome; NeedsRestart = $false } }
+        default    { return New-FixItResult $true 'Repair finished' 'The repair finished. Please restart your computer, then check for Windows updates.' @() @{ Stage = 'Done'; Outcome = $outcome; NeedsRestart = $true } }
+    }
+}
+function Invoke-RepairWindowsFix {
+    Write-FixItLog 'Started: Repair Windows'
+    if ($script:TestMode) { Write-FixItLog 'TEST MODE: Repair Windows would ask for permission, then run the two Windows file repairs (DISM RestoreHealth, then sfc /scannow) in a window that shows progress. Nothing is run now.' 'TEST' }
+    Set-FixItNote 'Repairing Windows... this can take 30 to 60 minutes. Please leave it open and do not turn off the computer.'
+    $r = Invoke-AdminPart -Part 'RepairWindowsAdmin' -InProcess { Invoke-RepairWindowsAdmin } -Visible
+    if (Test-FixItDeclined $r) { return New-FixItResult $false 'Permission needed' 'Windows needs your permission to repair itself, and it was not given. Click the button again and choose Yes when you have time.' @() @{ Declined = $true } }
+    if ($script:DryRun -and -not $script:TestMode) { return New-FixItResult $true 'Practice run' 'Practice run only - nothing was changed. Details are in the log file.' }
+    Write-FixItLog ('Finished: Repair Windows - {0}' -f [string]$r.Title)
+    if ($r.Ok -and (Get-FixItProp $r 'NeedsRestart' $false) -and -not $script:TestMode) {
+        if (Confirm-FixItStep ([string]$r.Message + "`r`n`r`nRestart now? Please save your work first.")) { if (Invoke-FixItStep 'Restart the computer after Repair Windows (in 30 seconds)' { Restart-FixItComputer }) { return New-FixItResult $true 'Restarting' 'Your computer will restart in 30 seconds. After it starts again, open Windows Update and click Check for updates.' } }
+    }
+    return $r
+}
+
+# ---------------------------------------------------------------------------
 # OneDrive
 # ---------------------------------------------------------------------------
 function Invoke-OneDriveFix {
@@ -4904,6 +4981,19 @@ function Get-FixItActionTable {
                 'For the deeper repair, a black window shows the progress. Please leave it open.',
                 'Updates cannot be installed for a minute or so while this runs.')
             Restart = 'After the deeper repair, your computer should be restarted. I ask you before I do it. Please save your work first.'; SignIn = '' } }
+        RepairWindows = @{ Fn = 'Invoke-RepairWindowsFix'; Title = 'Repair Windows'; Fix = $true; Plan = @{
+            Time = '30 to 60 minutes'
+            Does = @(
+                'I check Windows for damaged files and repair them, in two parts, one after the other.',
+                'First I fix damaged parts of Windows, using good copies from Microsoft over the internet.',
+                'Then I check every Windows file and repair the damaged ones.',
+                'If the first part cannot finish, I stop and tell you why. Running it again later is fine.')
+            Heads = @(
+                'It can take 30 to 60 minutes. Please do not turn off the computer while it runs.',
+                'Windows will ask for permission (a box with a shield). Please click Yes.',
+                'A black window shows the progress. Please leave it open, even if the numbers stop moving for a while.',
+                'Your files, programs and settings are not changed.')
+            Restart = 'If files were repaired, your computer should be restarted. I ask you before I do it. Please save your work first.'; SignIn = '' } }
         OneDrive = @{ Fn = 'Invoke-OneDriveFix'; Title = 'Fix OneDrive'; Fix = $true; Plan = @{
             Time = 'A few minutes'
             Does = @(
@@ -8270,7 +8360,7 @@ function Get-FixItLayout {
     $tiles1 = @(@('Printer', 'Fix my printer', "Won't print or is stuck", 'printer'), @('Acrobat', 'Fix Acrobat in Outlook', 'Acrobat buttons are missing', 'pdf'), @('Outlook', 'Fix Outlook', "Freezes or won't open", 'mail'))
     $tiles2 = @(@('Network', 'Fix my internet', "Wi-Fi or websites won't work", 'wifi'), @('Slow', 'My computer is slow', 'Clean up and speed up', 'slow'), @('Sound', 'Fix sound/mic/camera', "Video calls aren't working", 'cam'))
     $tiles3 = @(@('Browser', 'Clean up my browser', 'Pop-ups or a new homepage', 'globe'), @('WinUpdate', 'Fix Windows Update', 'Updates are stuck', 'upd'), @('OneDrive', 'Fix OneDrive', 'Files have disappeared', 'cloud'))
-    $tiles4 = @(,@('Display', 'Fix my display', 'Flickers or goes black', 'display'))
+    $tiles4 = @(@('Display', 'Fix my display', 'Flickers or goes black', 'display'), @('RepairWindows', 'Repair Windows', 'Find and fix damaged files', 'shield'))
     if ($Simple) {
         $groups = @(@{ Name = 'THE BASICS'; Y = 84; Bg = '#E6F0FA'; Tiles = @($tiles1[0], $tiles2[0], $tiles2[1]) })
         $toggles = @(
@@ -8288,7 +8378,7 @@ function Get-FixItLayout {
             @{ Name = 'PRINTING AND EMAIL'; Y = 84; Bg = '#E6F0FA'; Tiles = $tiles1 },
             @{ Name = 'INTERNET AND MY COMPUTER'; Y = 234; Bg = '#E3F4EA'; Tiles = $tiles2 },
             @{ Name = 'BROWSER, UPDATES AND FILES'; Y = 384; Bg = '#EEE9F9'; Tiles = $tiles3 },
-            @{ Name = 'MY SCREEN'; Y = 534; Bg = '#FBEFD9'; Tiles = $tiles4 })
+            @{ Name = 'MY SCREEN AND WINDOWS'; Y = 534; Bg = '#FBEFD9'; Tiles = $tiles4 })
         $nav = @(
             @('Restart', 'Restart the right way', '', 'restart', 44, 40),
             @('Status', 'Is it just me?', 'Check for outages', 'out', 88, 52),
@@ -8616,6 +8706,7 @@ function Get-FixItHelpTable {
         Sound = @{ Title = 'Fix sound, mic and camera'; Text = ("I check your speakers, microphone and camera. I turn on a muted speaker or microphone, and I ask before letting apps use a blocked microphone or camera. Then I open the page where you pick your devices, and I change nothing else.") }
         Browser = @{ Title = 'Clean up my browser'; Text = ("I first save a copy of your browser settings and bookmarks. I look for odd settings and extensions, and I ask before opening any page where you can fix them. I never change your browser myself, and your passwords and bookmarks are not touched.") }
         WinUpdate = @{ Title = 'Fix Windows Update'; Text = ("I pause Windows Update, set old files aside (nothing is deleted) and start it again. If it is still stuck, I offer a longer repair (20 to 40 minutes) after asking you. I restart only if you say yes, and your files are not touched.") }
+        RepairWindows = @{ Title = 'Repair Windows'; Text = ("I check Windows for damaged files and repair them. It takes 30 to 60 minutes, and Windows asks for your permission first. Please leave the window open and do not turn off the computer.") }
         OneDrive = @{ Title = 'Fix OneDrive'; Text = ("I check that OneDrive is signed in and running, and backing up your Desktop, Documents and Pictures. I tell you what I find and change nothing unless you say yes to a reset. A reset makes it check your files again; none are deleted.") }
         Scam = @{ Title = 'I see a scary pop-up'; Text = ("This fixes nothing and changes nothing on your computer. I send Trey a report and save a copy $rw. Then do not call the number on the screen: turn off your Wi-Fi and call Trey.") }
         Screen = @{ Title = 'Let Trey see my screen'; Text = ("I open the Zoho Assist page where you type a code from Trey. Only when you type it and click Join can Trey see your screen. Nothing is installed, so only do this if you called Trey.") }
@@ -11087,6 +11178,7 @@ function Start-FamilyFixIt {
             'Display'           { [void](Invoke-FixItAndShow -Which 'Display') }
             'Browser'           { [void](Invoke-FixItAndShow -Which 'Browser') }
             'WinUpdate'         { [void](Invoke-FixItAndShow -Which 'WinUpdate') }
+            'RepairWindows'     { [void](Invoke-FixItAndShow -Which 'RepairWindows') }
             'OneDrive'          { [void](Invoke-FixItAndShow -Which 'OneDrive') }
             'Scam'              { [void](Invoke-FixItAndShow -Which 'Scam') }
             'Screen'            { [void](Invoke-FixItAndShow -Which 'Screen') }
@@ -11127,6 +11219,7 @@ function Start-FamilyFixIt {
             'DefenderScanAdmin'  { $r = Invoke-DefenderScanAdmin; Write-AdminResult $r; if (-not $r.Ok) { $exit = 1 } }
             'WinUpdateAdmin'     { $r = Invoke-WinUpdateAdmin; Write-AdminResult $r; if (-not $r.Ok) { $exit = 1 } }
             'WinUpdateDeepAdmin' { $r = Invoke-WinUpdateDeepAdmin; Write-AdminResult $r; if (-not $r.Ok) { $exit = 1 } }
+            'RepairWindowsAdmin' { $r = Invoke-RepairWindowsAdmin; Write-AdminResult $r; if (-not $r.Ok) { $exit = 1 } }
         }
     } catch {
         Write-FixItLog ('Unexpected problem: {0}' -f $_.Exception.Message) 'ERROR'

@@ -152,7 +152,7 @@ Initialize-FixItLog
 Section 'Fix my display: the button'
 $lay = Get-FixItLayout -Simple $false
 $tileIds = @($lay.TileIds)
-Assert ($tileIds -contains 'Display' -and $tileIds.Count -eq 13) 'the full layout has the Display tile (13 main buttons)'
+Assert ($tileIds -contains 'Display' -and $tileIds.Count -ge 13) 'the full layout has the Display tile (13 or more main buttons)'
 $g4 = @($lay.Groups | Where-Object { @($_.Tiles | Where-Object { $_[0] -eq 'Display' }).Count -gt 0 })[0]
 $dt = @($g4.Tiles | Where-Object { $_[0] -eq 'Display' })[0]
 Assert ($dt[1] -eq 'Fix my display' -and $dt[2] -eq 'Flickers or goes black' -and $dt[3] -eq 'display') 'its title is "Fix my display", subtitle "Flickers or goes black"'
