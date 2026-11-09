@@ -198,18 +198,7 @@ $script:UiScale = $Scale; if ($script:UiBigText) { $script:UiScale = $Scale * 1.
 $script:UiBack = '#FAFAFA'; if ($script:UiHighContrast) { $script:UiBack = '#000000' }
 $script:UiSide = '#F0F3F8'; if ($script:UiHighContrast) { $script:UiSide = '#000000' }
 $script:UiIcons = Get-FixItIconMap
-function Initialize-HarnessFonts {
-    $S = $script:UiScale; $px = [System.Drawing.GraphicsUnit]::Pixel
-    # the same fonts Show-FixItWindowOnce makes (needed by tiles in windows other than the main one)
-    $script:UiFonts = @{
-        Title = New-Object System.Drawing.Font('Segoe UI', [single](14 * $S), [System.Drawing.FontStyle]::Bold, $px)
-        Small = New-Object System.Drawing.Font('Segoe UI', [single](11.5 * $S), [System.Drawing.FontStyle]::Regular, $px)
-        Big = New-Object System.Drawing.Font('Segoe UI', [single](16 * $S), [System.Drawing.FontStyle]::Bold, $px)
-        BigScam = New-Object System.Drawing.Font('Segoe UI', [single](17 * $S), [System.Drawing.FontStyle]::Bold, $px)
-        Side = New-Object System.Drawing.Font('Segoe UI', [single](13 * $S), [System.Drawing.FontStyle]::Regular, $px)
-        SideSmall = New-Object System.Drawing.Font('Segoe UI', [single](10.5 * $S), [System.Drawing.FontStyle]::Regular, $px)
-    }
-}
+function Initialize-HarnessFonts { Initialize-FixItUiFonts }
 Initialize-HarnessFonts
 
 # a hidden full-screen "owner" for the dialogs (the program opens its dialogs on top of the main window, $script:Form)
@@ -802,6 +791,8 @@ Add-Scenario 'main-window-attention' { $script:H_Simple = $false; $script:H_Guar
 # "Who helps you?" (2.3.14): the first-run question, the change window with Trey and with someone else, and the main window when the helper is not Trey
 # (no Thank Trey item, the helper's name and "(waiting)" under Your helper, Quick Assist wording on the screen-share button)
 function Set-HarnessHelper { param([string]$Name, [string]$Email, [string]$Status) Set-FixItSetting -Name 'HelperName' -Value $Name; Set-FixItSetting -Name 'HelperEmail' -Value $Email; Set-FixItSetting -Name 'HelperStatus' -Value $Status }
+# The real first open shows this dialog BEFORE the main window used to create the fonts. Clear them and use the same setup the window uses.
+Add-Scenario 'helper-question-clean-first-run' { if (Get-Variable -Name UiFonts -Scope Script -ErrorAction SilentlyContinue) { Remove-Variable -Name UiFonts -Scope Script }; Initialize-FixItUiFonts; [void](Show-FixItHelperForm -FirstRun $true) }
 Add-Scenario 'helper-question-first-run' { [void](Show-FixItHelperForm -FirstRun $true) }
 Add-Scenario 'helper-change-trey' { [void](Show-FixItHelperForm -FirstRun $false) }
 Add-Scenario 'helper-change-someone-else' { Set-HarnessHelper 'Maximilian-Joe' 'maximilian.joe@example.com' ''; try { [void](Show-FixItHelperForm -FirstRun $false) } finally { Set-HarnessHelper '' '' '' } }

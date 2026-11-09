@@ -68,7 +68,7 @@ Assert ((Get-FixItMainScaleCap -Scale 1.25 -WorkAreaWidth 800) -eq 1.0) 'a tiny 
 Assert ((Get-FixItMainScaleCap -Scale 2.0 -WorkAreaWidth 0) -eq 2.0) 'an unknown screen width changes nothing'
 $wo = Get-Fn 'Show-FixItWindowOnce'
 Assert ($wo -match 'Get-FixItMainScaleCap' -and $wo -match '\$script:UiScale = \$scaleBefore') 'the main window uses the cap and puts the old scale back when it closes'
-Assert ($wo -match "\`$scaleBefore = \`$script:UiScale" -and $wo.IndexOf('Get-FixItMainScaleCap') -lt $wo.IndexOf('$script:UiFonts')) 'the cap is applied before any font is made'
+Assert ($wo -match "\`$scaleBefore = \`$script:UiScale" -and $wo.IndexOf('Get-FixItMainScaleCap') -lt $wo.IndexOf('Initialize-FixItUiFonts')) 'the cap is applied before any font is made'
 
 Section 'Fitting a font'
 $meas = { param($sz) [int]($sz * 14) }
