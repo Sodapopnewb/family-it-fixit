@@ -1558,14 +1558,14 @@ $outPin = & (Get-Command pwsh).Source -NoProfile -File (Join-Path $root 'FamilyF
 Assert ($LASTEXITCODE -eq 0 -and $outPin -match 'Pin to taskbar') 'command line: -Action Pin prints the steps'
 
 Section 'Version'
-Assert ($script:FixItVersion -eq '2.3.17') 'the program is version 2.3.17'
+Assert ($script:FixItVersion -eq '2.3.19') 'the program is version 2.3.19'
 
 Section 'Publish + update'
 $pub = Join-Path $root 'tools/Publish-FixIt.ps1'
 $dist = Join-Path $tmp 'dist1'
 & $pub -Owner 'octo-test' -OutDir $dist -WarningAction SilentlyContinue | Out-Null
 $man = Get-Content (Join-Path $dist 'manifest.json') -Raw | ConvertFrom-Json
-Assert ($man.version -eq '2.3.17' -and @($man.files).Count -eq 4) 'manifest has version and 4 runtime files'
+Assert ($man.version -eq '2.3.19' -and @($man.files).Count -eq 4) 'manifest has version and 4 runtime files'
 Assert (@($man.apps).Count -eq 12 -and $man.apps[0].id -eq 'Google.Chrome' -and $man.apps[0].section -eq 'Browsers and chat' -and [string]$man.apps[0].description -and $man.apps[4].id -eq 'Spotify.Spotify' -and $man.apps[4].elevationProhibited -eq $true -and -not ($man.apps[0].PSObject.Properties['elevationProhibited'])) 'manifest carries the approved app list with sections, descriptions and the Spotify flag'
 Assert (@($man.assets).Count -eq 1 -and $man.assets[0].path -eq 'FamilyFixIt.ico' -and $man.assets[0].sha256 -match '^[0-9a-f]{64}$' -and [int]$man.assets[0].size -gt 1000) 'manifest lists the program icon under assets, with its SHA-256 and size'
 Assert (@($man.files | Where-Object { $_.path -like '*.ico' }).Count -eq 0) 'the icon is NOT in "files" (versions up to 2.3.1 refuse unknown names there, which would break their update)'
@@ -1594,7 +1594,7 @@ Assert (-not (Select-String -Path (Join-Path $dist '*') -Pattern '(?i)treyb|@gma
 # a newer version 1.0.1 to update to
 $newSrc = Join-Path $tmp 'newsrc'; Copy-Item -LiteralPath $root -Destination $newSrc -Recurse
 $ps = Join-Path $newSrc 'FamilyFixIt.ps1'
-[IO.File]::WriteAllText($ps, ([IO.File]::ReadAllText($ps).Replace("FixItVersion = '2.3.17'", "FixItVersion = '2.3.18'")))
+[IO.File]::WriteAllText($ps, ([IO.File]::ReadAllText($ps).Replace("FixItVersion = '2.3.19'", "FixItVersion = '2.3.20'")))
 $dist2 = Join-Path $tmp 'dist2'
 & (Join-Path $newSrc 'tools/Publish-FixIt.ps1') -SourceDir $newSrc -Owner 'octo-test' -OutDir $dist2 | Out-Null
 $base = 'https://raw.githubusercontent.com/octo-test/family-it-fixit/main/'
@@ -1605,7 +1605,7 @@ $script:ManifestUrl = $base + 'manifest.json'
 Reset-All; Set-Web $dist2; $script:InstallDir = New-Install
 $res = Invoke-FixItUpdate
 Assert ($res.Ok -and $res.Title -eq 'Updated') 'newer version installs after asking'
-Assert ([IO.File]::ReadAllText((Join-Path $script:InstallDir 'FamilyFixIt.ps1')) -match "FixItVersion = '2.3.18'") 'installed script is the new one'
+Assert ([IO.File]::ReadAllText((Join-Path $script:InstallDir 'FamilyFixIt.ps1')) -match "FixItVersion = '2.3.20'") 'installed script is the new one'
 Assert (Test-Path (Join-Path $script:InstallDir 'previous/FamilyFixIt.ps1')) 'old version kept in previous/'
 Assert (@($script:Asked).Count -eq 1) 'asked before updating'
 
@@ -2094,7 +2094,7 @@ $relDir = Join-Path $tmp 'release1'
 $distI = Join-Path $tmp 'dist-i1'
 $newSrcI = Join-Path $tmp 'newsrc-i'; Copy-Item -LiteralPath $root -Destination $newSrcI -Recurse
 $psI = Join-Path $newSrcI 'FamilyFixIt.ps1'
-[IO.File]::WriteAllText($psI, ([IO.File]::ReadAllText($psI).Replace("FixItVersion = '2.3.17'", "FixItVersion = '2.3.18'")))
+[IO.File]::WriteAllText($psI, ([IO.File]::ReadAllText($psI).Replace("FixItVersion = '2.3.19'", "FixItVersion = '2.3.20'")))
 $distI2 = Join-Path $tmp 'dist-i2'
 & (Join-Path $newSrcI 'tools/Publish-FixIt.ps1') -SourceDir $newSrcI -Owner 'octo-test' -OutDir $distI2 -ReleaseDir (Join-Path $tmp 'release2') -WarningAction SilentlyContinue | Out-Null
 
@@ -2123,7 +2123,7 @@ Assert ($rd -match 'releases/latest/download/Install-FamilyFixIt\.zip' -and $rd 
 # run the installer functions with pretend Windows and network
 & {
     . $instPs1 -LibraryOnly
-    $script:I = @{ Web = @{}; WebFail = $false; Saves = New-Object System.Collections.ArrayList; Lnk = @{}; LnkWrites = 0; Actions = New-Object System.Collections.ArrayList; Launched = 0; Code = @{}; Win = $true; Elev = $false; Tamper = @{}; Texts = 0 }
+    $script:I = @{ Web = @{}; WebFail = $false; Saves = New-Object System.Collections.ArrayList; Lnk = @{}; LnkWrites = 0; Actions = New-Object System.Collections.ArrayList; Launched = 0; Code = @{}; Win = $true; Elev = $false; Tamper = @{}; Texts = 0; Reg = $null; RegWrites = 0 }
     $script:InstallLog = Join-Path $tmp 'install-test.log'
     $iroot = Join-Path $tmp 'inst-root'
     $desk = Join-Path $tmp 'inst-desk'; $prog = Join-Path $tmp 'inst-start'
@@ -2139,17 +2139,25 @@ Assert ($rd -match 'releases/latest/download/Install-FamilyFixIt\.zip' -and $rd 
     function New-InstallShortcut { param([string]$Path, [string]$Target, [string]$Arguments, [string]$WorkDir, [string]$Icon, [string]$Description) $script:I.LnkWrites++; $script:I.Lnk[$Path] = [pscustomobject]@{ Target = $Target; Arguments = $Arguments; WorkDir = $WorkDir; Icon = $Icon } }
     function Invoke-InstalledAction { param([string]$Dir, [string]$Action) [void]$script:I.Actions.Add($Action); if ($script:I.Code.ContainsKey($Action)) { return [int]$script:I.Code[$Action] }; return 0 }
     function Start-InstalledTool { param([string]$Dir) $script:I.Launched++ }
+    function Test-InstallRegistryPresent { return $true }
+    function Get-InstallLaunchLinkSnapshot { return $script:I.Reg }
+    function Set-InstallLaunchLinkSnapshot {
+        param([string]$Description, [string]$Protocol, [string]$Icon, [string]$Command)
+        $script:I.RegWrites++
+        $script:I.Reg = [pscustomobject]@{ Description = $Description; ProtocolPresent = $true; Protocol = $Protocol; Icon = $Icon; Command = $Command; Extra = @() }
+    }
+    function Remove-InstallLaunchLinkKey { $script:I.RegWrites++; $script:I.Reg = $null }
     $base = 'https://raw.githubusercontent.com/octo-test/family-it-fixit/main'
     function Serve { param([string]$D) $script:I.Web = @{}; $script:I.Web[$base + '/manifest.json'] = (Join-Path $D 'manifest.json'); foreach ($f in @('FamilyFixIt.ps1', 'Start-FixIt.cmd', 'README.md', 'guides.json', 'FamilyFixIt.ico')) { $script:I.Web[$base + '/' + $f] = (Join-Path $D $f) } }
-    function Clear-I { $script:I.Saves.Clear(); $script:I.Actions.Clear(); $script:I.Launched = 0; $script:I.LnkWrites = 0; $script:I.Texts = 0; $script:I.Code = @{}; $script:I.Tamper = @{}; $script:I.WebFail = $false; $script:I.Win = $true; $script:I.Elev = $false; $script:InstallDry = $false }
-    function Reset-Inst { if (Test-Path $iroot) { Remove-Item $iroot -Recurse -Force }; Get-ChildItem $desk, $prog -File | Remove-Item -Force; $script:I.Lnk = @{}; Clear-I }
+    function Clear-I { $script:I.Saves.Clear(); $script:I.Actions.Clear(); $script:I.Launched = 0; $script:I.LnkWrites = 0; $script:I.RegWrites = 0; $script:I.Texts = 0; $script:I.Code = @{}; $script:I.Tamper = @{}; $script:I.WebFail = $false; $script:I.Win = $true; $script:I.Elev = $false; $script:InstallDry = $false }
+    function Reset-Inst { if (Test-Path $iroot) { Remove-Item $iroot -Recurse -Force }; Get-ChildItem $desk, $prog -File | Remove-Item -Force; $script:I.Lnk = @{}; $script:I.Reg = $null; Clear-I }
     $dir = Join-Path $iroot 'FamilyFixIt'
     function Say { param([string]$Text, [string]$Color = '') [void]$script:Said.Add($Text) }
     $script:Said = New-Object System.Collections.ArrayList
 
     Reset-Inst; Serve $distI
     $r = Install-FamilyFixIt -Base $base -Dir $dir
-    Assert ($r.Ok -and $r.Title -eq 'Installed' -and $r.Version -eq '2.3.17' -and $r.Changed) 'fresh install works'
+    Assert ($r.Ok -and $r.Title -eq 'Installed' -and $r.Version -eq '2.3.19' -and $r.Changed) 'fresh install works'
     $same = $true; foreach ($f in @('FamilyFixIt.ps1', 'Start-FixIt.cmd', 'README.md')) { if ((Get-FileSha256 (Join-Path $dir $f)) -ne (Get-FileSha256 (Join-Path $distI $f))) { $same = $false } }
     Assert $same 'the three files are installed and match the published fingerprints'
     Assert (-not (Test-Path (Join-Path $dir '.staging')) -and -not (Test-Path (Join-Path $dir 'previous'))) 'no leftover staging folder; nothing to keep from a previous version'
@@ -2170,11 +2178,13 @@ Assert ($rd -match 'releases/latest/download/Install-FamilyFixIt\.zip' -and $rd 
     Assert ($script:I.Lnk[$tl].Icon -eq ($icoPath + ',0')) 'the Test mode shortcut has the program icon'
     Assert (-not $script:I.Lnk.ContainsKey((Join-Path $desk 'Family Fix-It (Test mode).lnk'))) 'the Test mode shortcut is not put on the Desktop'
     Assert ($script:I.Lnk[$sm].Arguments -notmatch ' -Test$' -and $script:I.Lnk[$dl].Arguments -notmatch ' -Test$') 'the normal shortcuts do not start Test mode'
+    Assert ($script:I.RegWrites -eq 1 -and $null -ne $script:I.Reg -and $script:I.Reg.Description -eq 'URL:Family Fix-It' -and $script:I.Reg.Protocol -eq '' -and $script:I.Reg.Command -match 'Start-FixItLink\.ps1' -and $script:I.Reg.Command -notmatch '%1' -and $script:I.Reg.Command -notmatch ' -Test' -and $script:I.Reg.Command -notmatch ' -Action' -and $script:I.Reg.Command -notmatch ' -Command') 'familyfixit: link is registered for this user and does not pass the address or Test mode'
+    Assert ((Test-Path (Join-Path $dir 'Start-FixItLink.ps1')) -and ((Get-Content (Join-Path $dir 'Start-FixItLink.ps1') -Raw) -notmatch '\$args')) 'the opener is installed and does not read the address'
 
     Clear-I; $before = (Get-FileSha256 (Join-Path $dir 'FamilyFixIt.ps1'))
     $r = Install-FamilyFixIt -Base $base -Dir $dir
     Assert ($r.Ok -and -not $r.Changed -and $script:I.Saves.Count -eq 0) 're-run with nothing wrong: nothing downloaded, nothing changed'
-    Assert ($script:I.LnkWrites -eq 0 -and ($script:I.Actions -join ',') -eq 'GuardianOn,CheckInOn') 're-run: shortcuts left alone; the switches are checked / turned on again'
+    Assert ($script:I.LnkWrites -eq 0 -and $script:I.RegWrites -eq 0 -and ($script:I.Actions -join ',') -eq 'GuardianOn,CheckInOn') 're-run: shortcuts and the open link left alone; the switches are checked / turned on again'
 
     # "Thank Trey" is always shown: the installer has nothing to switch for it
     $instText = [IO.File]::ReadAllText($instPs1)
@@ -2207,10 +2217,10 @@ Assert ($rd -match 'releases/latest/download/Install-FamilyFixIt\.zip' -and $rd 
 
     Clear-I; Serve $distI2; $script:I.Lnk.Remove($dl)
     $r = Install-FamilyFixIt -Base $base -Dir $dir
-    Assert ($r.Ok -and $r.Version -eq '2.3.18' -and (Get-InstalledVersion $dir) -eq '2.3.18') 'a newer version in the list updates the install'
+    Assert ($r.Ok -and $r.Version -eq '2.3.20' -and (Get-InstalledVersion $dir) -eq '2.3.20') 'a newer version in the list updates the install'
     Assert (($script:I.Actions -join ',') -eq 'GuardianOff,GuardianOn,CheckInOn') 'update restarts the watcher so it runs the new program'
     Assert ($script:I.LnkWrites -eq 1 -and $script:I.Lnk.ContainsKey($dl)) 'a missing shortcut is put back'
-    Assert ((Get-InstalledVersion (Join-Path $dir 'previous')) -eq '2.3.17') 'the old program is kept in previous/'
+    Assert ((Get-InstalledVersion (Join-Path $dir 'previous')) -eq '2.3.19') 'the old program is kept in previous/'
 
     # a download that does not match the fingerprint
     Reset-Inst; Serve $distI; $script:I.Tamper['/FamilyFixIt.ps1'] = $true
@@ -2220,7 +2230,7 @@ Assert ($rd -match 'releases/latest/download/Install-FamilyFixIt\.zip' -and $rd 
     Assert ((Get-Content $script:InstallLog -Raw) -match 'CHECKSUM MISMATCH') 'tampered download: logged'
     Reset-Inst; Serve $distI; $null = Install-FamilyFixIt -Base $base -Dir $dir; Clear-I; Serve $distI2; $script:I.Tamper['/FamilyFixIt.ps1'] = $true
     $r = Install-FamilyFixIt -Base $base -Dir $dir
-    Assert (-not $r.Ok -and (Get-InstalledVersion $dir) -eq '2.3.17') 'tampered update: the working old copy is left exactly as it was'
+    Assert (-not $r.Ok -and (Get-InstalledVersion $dir) -eq '2.3.19') 'tampered update: the working old copy is left exactly as it was'
 
     # network problems
     Reset-Inst; Serve $distI; $script:I.WebFail = $true
@@ -2703,7 +2713,7 @@ Assert ($rm.State -eq 'Ok' -and @($rm.Assets).Count -eq 0) 'a list with no asset
 Reset-All; Set-Web $distI3; $script:ManifestUrl = $base + 'manifest.json'
 $script:InstallDir = New-Install; Reset-Lnks
 Copy-Item (Join-Path $distI3 'FamilyFixIt.ps1') $script:InstallDir -Force
-$script:FixItVersion = '2.3.18'   # pretend we are the newest program, so only the icon is missing
+$script:FixItVersion = '2.3.20'   # pretend we are the newest program, so only the icon is missing
 $fixed = Repair-FixItIcon
 $ico2 = Join-Path $script:InstallDir 'FamilyFixIt.ico'
 Assert ($fixed -and (Test-Path $ico2) -and (Get-FileSha256 $ico2) -eq (Get-FileSha256 $icoSrc) -and $script:Lnks[$lnkDesk].Icon -eq ($ico2 + ',0')) 'missing icon: fetched from the update list, verified, shortcuts pointed at it'
@@ -2719,7 +2729,7 @@ Assert ((Repair-FixItIcon) -eq $false -and -not (Test-Path $ico2)) 'practice run
 $script:DryRun = $false
 $script:ManifestUrl = 'https://raw.githubusercontent.com/<' + 'OWNER>/family-it-fixit/main/manifest.json'
 Assert ((Repair-FixItIcon) -eq $false) 'update address not set up: does nothing'
-$script:FixItVersion = '2.3.17'
+$script:FixItVersion = '2.3.19'
 
 # window / taskbar icon
 Assert (@([regex]::Matches($src, 'New-Object System\.Windows\.Forms\.Form')).Count -eq @([regex]::Matches($src, '(?m)^\s*(\$\w+) = New-Object System\.Windows\.Forms\.Form\r?\n\s*Set-FixItFormIcon \1')).Count) 'every window (main, confirm, pickers, guides ...) gets the program icon right after it is created'
@@ -3037,6 +3047,14 @@ foreach ($ln in $v2317) { if ($ln -match 'FAIL:|^==') { Write-Host $ln } }
 $sumLine = @($v2317 | Where-Object { $_ -match '^Passed: \d+\s+Failed: \d+' }) | Select-Object -Last 1
 if ($sumLine -match 'Passed: (\d+)\s+Failed: (\d+)') { $script:Pass += [int]$Matches[1]; $script:Fail += [int]$Matches[2] }
 else { $script:Fail++; Write-Host '  FAIL: the 2.3.17 test file did not finish'; $v2317 | Select-Object -Last 15 | ForEach-Object { Write-Host ('    ' + $_) } }
+
+# ---- version 2.3.19 tests (the familyfixit: open link)
+Section 'Version 2.3.19 tests (own process)'
+$v2319 = & $pwshExe -NoProfile -File (Join-Path $PSScriptRoot 'Test-FixIt-V2319.ps1') 2>&1 | ForEach-Object { [string]$_ }
+foreach ($ln in $v2319) { if ($ln -match 'FAIL:|^==') { Write-Host $ln } }
+$sumLine = @($v2319 | Where-Object { $_ -match '^Passed: \d+\s+Failed: \d+' }) | Select-Object -Last 1
+if ($sumLine -match 'Passed: (\d+)\s+Failed: (\d+)') { $script:Pass += [int]$Matches[1]; $script:Fail += [int]$Matches[2] }
+else { $script:Fail++; Write-Host '  FAIL: the 2.3.19 test file did not finish'; $v2319 | Select-Object -Last 15 | ForEach-Object { Write-Host ('    ' + $_) } }
 
 Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host ''

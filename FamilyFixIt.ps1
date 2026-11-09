@@ -37,7 +37,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 # Settings
 # ---------------------------------------------------------------------------
-$script:FixItVersion = '2.3.17'
+$script:FixItVersion = '2.3.19'
 $script:GuideFont = $null; $script:FilesMsg = $null; $script:FilesPanel = $null; $script:FilesTip = $null; $script:FilesNameFont = $null   # My files window pieces (set when the window opens)
 $script:DefaultManifestUrl = 'https://raw.githubusercontent.com/Sodapopnewb/family-it-fixit/main/manifest.json'
 $script:OwnerPlaceholder = ('<' + 'OWNER>')   # the guards compare with this; Publish never rewrites it
