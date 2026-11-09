@@ -5,7 +5,8 @@ What it does, in plain words:
   1. Downloads the list of files (manifest.json) and the files from Trey's GitHub page.
   2. Checks every file against its SHA-256 fingerprint. If anything does not match, nothing is installed.
   3. Closes any Family Fix-It window that is still open on the old version, then puts the files in  %LOCALAPPDATA%\FamilyFixIt  (your own user folder).
-  4. Makes a "Family Fix-It" shortcut (with its own icon) on the Desktop and in the Start menu.
+  4. Makes a "Family Fix-It" shortcut (with its own icon) on the Desktop and in the Start menu,
+     and registers the per-user link familyfixit://open (no administrator needed).
   5. Turns on the scary-pop-up watcher (Guardian) and the weekly check-in.
   6. Opens Family Fix-It.
 Running it again is safe: it repairs missing or changed files, or updates to the newest version.
@@ -41,6 +42,19 @@ function Write-InstallLog {
     param([string]$Text, [string]$Level = 'INFO')
     if (-not $script:InstallLog) { return }
     try { Add-Content -LiteralPath $script:InstallLog -Value ('{0} [{1}] {2}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Level, $Text) -Encoding UTF8 } catch { }
+}
+# The same daily log the program uses (fixit-YYYY-MM-DD.log). Install steps that change the open link are written here too.
+function Write-InstallFixItLog {
+    param([string]$Text)
+    try {
+        $base = $env:LOCALAPPDATA
+        if (-not $base) { $base = [IO.Path]::GetTempPath() }
+        $dir = Join-Path $base 'FamilyFixIt\logs'
+        if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+        $log = Join-Path $dir ('fixit-{0}.log' -f (Get-Date -Format 'yyyy-MM-dd'))
+        $line = '{0} [INFO] {1}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Text
+        [IO.File]::AppendAllText($log, ($line + [Environment]::NewLine), (New-Object Text.UTF8Encoding($false)))
+    } catch { }
 }
 function Say {
     param([string]$Text, [string]$Color = '')
@@ -310,11 +324,17 @@ function Get-InstallIconLocation {
     return $script:ShortcutIcon
 }
 
+# The exact arguments the Desktop shortcut uses. Test mode is the same line plus " -Test" (Start menu only).
+function Get-InstallGuiArguments {
+    param([string]$Dir)
+    return ('-NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hidden -File "' + (Join-Path $Dir 'FamilyFixIt.ps1') + '"')
+}
+
 function Set-InstallShortcuts {
     param([string]$Dir)
     $ps = Get-InstallPowerShell
     $icon = Get-InstallIconLocation -Dir $Dir
-    $args2 = '-NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hidden -File "' + (Join-Path $Dir 'FamilyFixIt.ps1') + '"'
+    $args2 = Get-InstallGuiArguments -Dir $Dir
     $made = 0
     foreach ($w in @('Desktop', 'Programs')) {
         $folder = Get-InstallFolderPath $w
@@ -345,6 +365,233 @@ function Set-InstallShortcuts {
         }
     } catch { Write-InstallLog ('Could not make the Test mode shortcut: ' + $_.Exception.Message) 'WARN' }
     return $made
+}
+
+# ----- the familyfixit: link -------------------------------------------------
+# A web page opens Family Fix-It with familyfixit://open. The link is registered for this
+# Windows user only (HKCU\Software\Classes\familyfixit). No administrator.
+# The registered command does not contain %1. It starts Start-FixItLink.ps1, which never
+# reads the address Windows may append, then starts the same command as the Desktop shortcut.
+# Every familyfixit: address is the same: open the normal window. Nothing is fixed from the link.
+$script:LaunchLinkKey = 'Software\Classes\familyfixit'
+
+function Get-InstallLaunchLinkScript {
+    $s = @'
+# Start-FixItLink.ps1 - opens the normal Family Fix-It window (the same start as the Desktop shortcut).
+# Windows may add the familyfixit: address after this file. Those arguments are never read.
+Set-StrictMode -Version 2.0
+$ErrorActionPreference = 'Stop'
+$root = $PSScriptRoot
+if (-not $root) { $root = Split-Path -Parent $MyInvocation.MyCommand.Path }
+$tool = Join-Path $root 'FamilyFixIt.ps1'
+$ps = 'powershell.exe'
+if ($env:SystemRoot) {
+    $candidate = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    if (Test-Path -LiteralPath $candidate) { $ps = $candidate }
+}
+$arg = '-NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hidden -File "' + $tool + '"'
+try {
+    $base = $env:LOCALAPPDATA
+    if (-not $base) { $base = [IO.Path]::GetTempPath() }
+    $logDir = Join-Path $base 'FamilyFixIt\logs'
+    if (-not (Test-Path -LiteralPath $logDir)) { New-Item -ItemType Directory -Path $logDir -Force | Out-Null }
+    $log = Join-Path $logDir ('fixit-{0}.log' -f (Get-Date -Format 'yyyy-MM-dd'))
+    $enc = New-Object Text.UTF8Encoding $false
+    $stamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    $line1 = '{0} [INFO] Opened from a familyfixit: link. The address was ignored. Opening the normal window.' -f $stamp
+    $line2 = '{0} [INFO] Normal window command: {1} {2}' -f $stamp, $ps, $arg
+    [IO.File]::AppendAllText($log, ($line1 + [Environment]::NewLine + $line2 + [Environment]::NewLine), $enc)
+} catch { }
+try {
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $ps
+    $psi.Arguments = $arg
+    $psi.WorkingDirectory = $root
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+    [void][System.Diagnostics.Process]::Start($psi)
+} catch {
+    try {
+        $why = '{0} [INFO] Could not open the window: {1}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $_.Exception.Message
+        [IO.File]::AppendAllText($log, ($why + [Environment]::NewLine), $enc)
+    } catch { }
+}
+'@
+    $s = $s -replace "(?<!\r)\n", "`r`n"
+    if (-not $s.EndsWith("`r`n")) { $s += "`r`n" }
+    return $s
+}
+
+# Quoted command line for the registry. No %1, so the address is not placed inside this command.
+# A path that contains a quote or a percent sign is refused (it could change the command).
+function Get-InstallLaunchCommand {
+    param([string]$Dir)
+    $ps = Get-InstallPowerShell
+    # Checked before Join-Path: a quote or a percent sign must never become part of the command.
+    if ($ps.Contains('"') -or $ps.Contains('%') -or $Dir.Contains('"') -or $Dir.Contains('%')) { return '' }
+    $link = Join-Path $Dir 'Start-FixItLink.ps1'
+    if ($link.Contains('"') -or $link.Contains('%')) { return '' }
+    return ('"{0}" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{1}"' -f $ps, $link)
+}
+
+function Test-InstallRegistryPresent {
+    try {
+        $cu = [Microsoft.Win32.Registry]::CurrentUser
+        if ($null -eq $cu) { return $false }
+        $k = $cu.OpenSubKey('Software')
+        if ($k) { $k.Close(); return $true }
+        return $false
+    } catch { return $false }
+}
+
+function Get-InstallRegLines {
+    param($Key, [string]$Prefix)
+    $o = @()
+    foreach ($n in @($Key.GetValueNames())) { $o += ($Prefix + '|' + $n + '|' + [string]$Key.GetValue($n)) }
+    foreach ($n in @($Key.GetSubKeyNames())) {
+        $sub = $Key.OpenSubKey($n)
+        if ($null -eq $sub) { continue }
+        try { $o += @(Get-InstallRegLines -Key $sub -Prefix ($Prefix + '\' + $n)) } finally { $sub.Close() }
+    }
+    return @($o)
+}
+
+function ConvertTo-InstallLaunchLinkSnapshot {
+    param([string[]]$Lines)
+    $desc = ''; $proto = ''; $protoPresent = $false; $icon = ''; $command = ''
+    $extra = New-Object System.Collections.ArrayList
+    foreach ($line in @($Lines)) {
+        if (-not $line) { continue }
+        $p = $line.Split([char[]]@([char]'|'), 3)
+        if ($p.Count -lt 3) { [void]$extra.Add($line); continue }
+        $path = $p[0]; $name = $p[1]; $value = $p[2]
+        if ($path -eq '' -and $name -eq '') { $desc = $value }
+        elseif ($path -eq '' -and $name -eq 'URL Protocol') { $protoPresent = $true; $proto = $value }
+        elseif ($path -eq '\DefaultIcon' -and $name -eq '') { $icon = $value }
+        elseif ($path -eq '\shell\open\command' -and $name -eq '') { $command = $value }
+        else { [void]$extra.Add($line) }
+    }
+    return [pscustomobject]@{ Description = $desc; ProtocolPresent = $protoPresent; Protocol = $proto; Icon = $icon; Command = $command; Extra = @($extra) }
+}
+
+function Get-InstallLaunchLinkSnapshot {
+    $cu = [Microsoft.Win32.Registry]::CurrentUser
+    $base = $cu.OpenSubKey($script:LaunchLinkKey)
+    if ($null -eq $base) { return $null }
+    try { return (ConvertTo-InstallLaunchLinkSnapshot -Lines @(Get-InstallRegLines -Key $base -Prefix '')) }
+    finally { $base.Close() }
+}
+
+function Set-InstallLaunchLinkSnapshot {
+    param([string]$Description, [string]$Protocol, [string]$Icon, [string]$Command)
+    $cu = [Microsoft.Win32.Registry]::CurrentUser
+    $have = $cu.OpenSubKey($script:LaunchLinkKey)
+    if ($have) { $have.Close(); $cu.DeleteSubKeyTree($script:LaunchLinkKey) }
+    $base = $cu.CreateSubKey($script:LaunchLinkKey)
+    try {
+        $base.SetValue('', $Description)
+        $base.SetValue('URL Protocol', $Protocol)
+        $iconKey = $base.CreateSubKey('DefaultIcon')
+        try { $iconKey.SetValue('', $Icon) } finally { $iconKey.Close() }
+        $open = $base.CreateSubKey('shell\open')
+        try {
+            $cmdKey = $open.CreateSubKey('command')
+            try { $cmdKey.SetValue('', $Command) } finally { $cmdKey.Close() }
+        } finally { $open.Close() }
+    } finally { $base.Close() }
+}
+
+function Remove-InstallLaunchLinkKey {
+    $cu = [Microsoft.Win32.Registry]::CurrentUser
+    $have = $cu.OpenSubKey($script:LaunchLinkKey)
+    if ($have) { $have.Close(); $cu.DeleteSubKeyTree($script:LaunchLinkKey) }
+}
+
+function Test-InstallLaunchLinkSame {
+    param($Have, [string]$Description, [string]$Icon, [string]$Command)
+    if ($null -eq $Have) { return $false }
+    if (-not $Have.ProtocolPresent -or [string]$Have.Protocol -ne '') { return $false }
+    if ([string]$Have.Description -ne $Description -or [string]$Have.Icon -ne $Icon -or [string]$Have.Command -ne $Command) { return $false }
+    return (@($Have.Extra).Count -eq 0)
+}
+
+# Writes the opener and the per-user registry key. Safe to run again: the same values are written, and any extra values are removed.
+function Register-InstallLaunchLink {
+    param([string]$Dir)
+    $cmd = Get-InstallLaunchCommand -Dir $Dir
+    if (-not $cmd) {
+        Write-InstallLog 'Launch link was not registered: the folder path cannot be used in the open command.' 'WARN'
+        Write-InstallFixItLog 'Launch link was not registered: the folder path cannot be used in the open command.'
+        return $false
+    }
+    $opener = Join-Path $Dir 'Start-FixItLink.ps1'
+    $text = Get-InstallLaunchLinkScript
+    try {
+        $curText = ''
+        if (Test-Path -LiteralPath $opener) { $curText = [IO.File]::ReadAllText($opener) }
+        if ($curText -ne $text) {
+            [IO.File]::WriteAllText($opener, $text, (New-Object Text.UTF8Encoding($false)))
+            Write-InstallLog ('Launch link opener written: ' + $opener)
+            Write-InstallFixItLog ('Launch link opener written: ' + $opener)
+        } else {
+            Write-InstallLog ('Launch link opener already correct: ' + $opener)
+        }
+    } catch {
+        Write-InstallLog ('Could not write the launch link opener: ' + $_.Exception.Message) 'WARN'
+        Write-InstallFixItLog ('Could not write the launch link opener: ' + $_.Exception.Message)
+        return $false
+    }
+    if (-not (Test-InstallRegistryPresent)) {
+        Write-InstallLog 'Launch link was not registered: the per-user registry is not available on this computer.' 'WARN'
+        Write-InstallFixItLog 'Launch link was not registered: the per-user registry is not available on this computer.'
+        return $false
+    }
+    $icon = Get-InstallIconLocation -Dir $Dir
+    $desc = 'URL:Family Fix-It'
+    try {
+        $have = Get-InstallLaunchLinkSnapshot
+        if (Test-InstallLaunchLinkSame -Have $have -Description $desc -Icon $icon -Command $cmd) {
+            Write-InstallLog 'Launch link already correct: HKCU\Software\Classes\familyfixit'
+            Write-InstallFixItLog 'Launch link already correct: HKCU\Software\Classes\familyfixit'
+            Write-InstallFixItLog ('Launch link command: ' + $cmd)
+            return $true
+        }
+        Set-InstallLaunchLinkSnapshot -Description $desc -Protocol '' -Icon $icon -Command $cmd
+        Write-InstallLog 'Launch link written: HKCU\Software\Classes\familyfixit'
+        Write-InstallLog ('Launch link command: ' + $cmd)
+        Write-InstallFixItLog 'Launch link written: HKCU\Software\Classes\familyfixit'
+        Write-InstallFixItLog ('Launch link command: ' + $cmd)
+        return $true
+    } catch {
+        Write-InstallLog ('Could not write the launch link: ' + $_.Exception.Message) 'WARN'
+        Write-InstallFixItLog ('Could not write the launch link: ' + $_.Exception.Message)
+        return $false
+    }
+}
+
+# Removes the per-user key and the opener. The repo has no uninstall program; this is what an uninstall would call.
+function Remove-InstallLaunchLink {
+    param([string]$Dir = '')
+    if (-not (Test-InstallRegistryPresent)) {
+        Write-InstallLog 'Launch link was not removed: the per-user registry is not available on this computer.' 'WARN'
+        Write-InstallFixItLog 'Launch link was not removed: the per-user registry is not available on this computer.'
+        return $false
+    }
+    try { Remove-InstallLaunchLinkKey } catch {
+        Write-InstallLog ('Could not remove the launch link: ' + $_.Exception.Message) 'WARN'
+        Write-InstallFixItLog ('Could not remove the launch link: ' + $_.Exception.Message)
+        return $false
+    }
+    if ($Dir) {
+        $opener = Join-Path $Dir 'Start-FixItLink.ps1'
+        try { if (Test-Path -LiteralPath $opener) { Remove-Item -LiteralPath $opener -Force } } catch {
+            Write-InstallLog ('Could not remove the launch link opener: ' + $_.Exception.Message) 'WARN'
+        }
+    }
+    Write-InstallLog 'Launch link removed: HKCU\Software\Classes\familyfixit'
+    Write-InstallFixItLog 'Launch link removed: HKCU\Software\Classes\familyfixit'
+    return $true
 }
 
 function Install-FamilyFixIt {
@@ -382,6 +629,7 @@ function Install-FamilyFixIt {
         Say '   - close a Family Fix-It window that is still open on the old version'
         Say ('   - make a "{0}" shortcut on the Desktop and in the Start menu' -f $script:ShortcutName)
         Say ('   - make a "{0}" shortcut in the Start menu (it only checks the fixes and changes nothing)' -f $script:TestShortcutName)
+        Say '   - register the familyfixit: link (familyfixit://open) for this Windows user'
         Say '   - turn on the pop-up watcher (Guardian) and the weekly check-in'
         if ($Launch) { Say '   - open Family Fix-It' }
         return (New-InstallResult $true 'Practice run' 'Practice run only - nothing was changed.' $manifest.Version $false)
@@ -402,6 +650,9 @@ function Install-FamilyFixIt {
     Say '3 of 5: Making the shortcuts ...'
     $n = Set-InstallShortcuts -Dir $Dir
     if ($n -eq 0) { Say '   I could not make the shortcut. You can still open Family Fix-It from the folder.' 'Yellow' }
+    $linked = $false
+    try { $linked = [bool](Register-InstallLaunchLink -Dir $Dir) } catch { Write-InstallLog ('Launch link: ' + $_.Exception.Message) 'WARN' }
+    if (-not $linked) { Say '   I could not add the open link. You can still open Family Fix-It from the Desktop shortcut.' 'Yellow' }
 
     Say '4 of 5: Turning on the pop-up watcher and the weekly check-in ...'
     $warn = @()
