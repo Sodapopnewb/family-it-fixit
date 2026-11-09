@@ -37,7 +37,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 # Settings
 # ---------------------------------------------------------------------------
-$script:FixItVersion = '2.3.19'
+$script:FixItVersion = '2.3.20'
 $script:GuideFont = $null; $script:FilesMsg = $null; $script:FilesPanel = $null; $script:FilesTip = $null; $script:FilesNameFont = $null   # My files window pieces (set when the window opens)
 $script:DefaultManifestUrl = 'https://raw.githubusercontent.com/Sodapopnewb/family-it-fixit/main/manifest.json'
 $script:OwnerPlaceholder = ('<' + 'OWNER>')   # the guards compare with this; Publish never rewrites it
@@ -8928,6 +8928,31 @@ function Add-FixItLink {
     return $l
 }
 
+# The shared fonts every tile paints with (the main window and every dialog button).
+# They follow the current $script:UiScale. The first-run dialogs open before the main window,
+# so this has to run before those dialogs, and again after the main window caps its scale.
+function Initialize-FixItUiFonts {
+    $S = 1.0
+    $scaleVar = Get-Variable -Name UiScale -Scope Script -ErrorAction SilentlyContinue
+    if ($null -ne $scaleVar -and $scaleVar.Value -and [double]$scaleVar.Value -gt 0) { $S = [double]$scaleVar.Value }
+    $px = [System.Drawing.GraphicsUnit]::Pixel
+    $made = @{
+        Title = New-Object System.Drawing.Font('Segoe UI', [single](14 * $S), [System.Drawing.FontStyle]::Bold, $px)
+        Small = New-Object System.Drawing.Font('Segoe UI', [single](11.5 * $S), [System.Drawing.FontStyle]::Regular, $px)
+        Big = New-Object System.Drawing.Font('Segoe UI', [single](16 * $S), [System.Drawing.FontStyle]::Bold, $px)
+        BigScam = New-Object System.Drawing.Font('Segoe UI', [single](17 * $S), [System.Drawing.FontStyle]::Bold, $px)
+        Side = New-Object System.Drawing.Font('Segoe UI', [single](13 * $S), [System.Drawing.FontStyle]::Regular, $px)
+        SideSmall = New-Object System.Drawing.Font('Segoe UI', [single](10.5 * $S), [System.Drawing.FontStyle]::Regular, $px)
+    }
+    $old = $null
+    $prev = Get-Variable -Name UiFonts -Scope Script -ErrorAction SilentlyContinue
+    if ($null -ne $prev) { $old = $prev.Value }
+    $script:UiFonts = $made
+    if ($null -ne $old -and -not [object]::ReferenceEquals($old, $made)) {
+        foreach ($k in @($old.Keys)) { try { if ($null -ne $old[$k]) { $old[$k].Dispose() } } catch { } }
+    }
+}
+
 function Show-FixItWindowOnce {
     param([bool]$FirstTime)
     $S = $script:UiScale
@@ -8943,14 +8968,7 @@ function Show-FixItWindowOnce {
     $hc = [bool]$script:UiHighContrast
     $cText = '#1A1A1A'; $cMuted = '#616161'; $cLink = '#0F6CBD'; $cFaint = '#6B6B6B'
     if ($hc) { $cText = '#FFFFFF'; $cMuted = '#FFFFFF'; $cLink = '#FFFF00'; $cFaint = '#FFFFFF' }
-    $script:UiFonts = @{
-        Title = New-Object System.Drawing.Font('Segoe UI', [single](14 * $S), [System.Drawing.FontStyle]::Bold, $px)
-        Small = New-Object System.Drawing.Font('Segoe UI', [single](11.5 * $S), [System.Drawing.FontStyle]::Regular, $px)
-        Big = New-Object System.Drawing.Font('Segoe UI', [single](16 * $S), [System.Drawing.FontStyle]::Bold, $px)
-        BigScam = New-Object System.Drawing.Font('Segoe UI', [single](17 * $S), [System.Drawing.FontStyle]::Bold, $px)
-        Side = New-Object System.Drawing.Font('Segoe UI', [single](13 * $S), [System.Drawing.FontStyle]::Regular, $px)
-        SideSmall = New-Object System.Drawing.Font('Segoe UI', [single](10.5 * $S), [System.Drawing.FontStyle]::Regular, $px)
-    }
+    Initialize-FixItUiFonts
     $form = New-Object System.Windows.Forms.Form
     Set-FixItFormIcon $form
     $script:Form = $form
@@ -9613,7 +9631,11 @@ function Show-FixItWindowMain {
         if ($script:UiBigText) { $script:UiScale = $dpi * 1.25 }
         $script:UiBack = '#FAFAFA'; if ($script:UiHighContrast) { $script:UiBack = '#000000' }
         $script:UiSide = '#F0F3F8'; if ($script:UiHighContrast) { $script:UiSide = '#000000' }
-        if ($first) { try { [void](Invoke-FixItFirstRun) } catch { Write-FixItLog ('First-run check failed: {0}' -f $_.Exception.Message) 'WARN' } }
+        if ($first) {
+            # The helper, name and "What's shared" buttons paint with these fonts. The main window used to create them only after these dialogs.
+            Initialize-FixItUiFonts
+            try { [void](Invoke-FixItFirstRun) } catch { Write-FixItLog ('First-run check failed: {0}' -f $_.Exception.Message) 'WARN' }
+        }
         Show-FixItWindowOnce -FirstTime $first
         $first = $false
     } while ($script:RebuildUi)
@@ -9738,6 +9760,14 @@ function Show-FixItNameForm {
     return [pscustomobject]@{ Saved = $false; Name = (Get-FixItOwnerName) }
 }
 
+# Skip (first run) records that the question was answered and leaves the helper as it is. Cancel (any later open) changes nothing.
+function Register-FixItHelperDismiss {
+    param([bool]$FirstRun = $false)
+    if (-not $FirstRun) { return }
+    Set-FixItSetting -Name 'HelperAsked' -Value (Get-Date -Format 'yyyy-MM-dd')
+    Write-FixItLog 'Helper question skipped (Trey)'
+}
+
 # ---- "Who helps you?": Trey (the usual choice) or someone else (a first name and an email address). Save, and Skip (first run) or Cancel.
 # Returns what Save-FixItHelper returns, or Saved = false. Nothing is sent from here: the caller sends the one hello email.
 function Show-FixItHelperForm {
@@ -9854,10 +9884,7 @@ function Show-FixItHelperForm {
     $r = $null; $other = $false; $nm = ''; $em = ''
     try { $r = $f.ShowDialog(); $other = [bool]$r2.Checked; $nm = [string]$tn.Text; $em = [string]$te.Text } finally { $f.Dispose() }
     if ($r -eq 'Yes') { return (Save-FixItHelper -Other $other -Name $nm -Email $em) }
-    if ($FirstRun) {
-        Set-FixItSetting -Name 'HelperAsked' -Value (Get-Date -Format 'yyyy-MM-dd')
-        Write-FixItLog 'Helper question skipped (Trey)'
-    }
+    Register-FixItHelperDismiss -FirstRun $FirstRun
     return [pscustomobject]@{ Saved = $false; Changed = $false; EmailChanged = $false; Message = ''; Helper = (Get-FixItHelper) }
 }
 

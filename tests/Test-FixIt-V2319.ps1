@@ -24,8 +24,9 @@ $bytes = [IO.File]::ReadAllBytes($inst)
 Assert (@($bytes | Where-Object { $_ -gt 127 }).Count -eq 0) 'the installer is plain ASCII'
 Assert (([regex]::Matches($instText, "`r`n")).Count -eq ([regex]::Matches($instText, "`n")).Count) 'the installer keeps Windows line endings'
 Assert ($instText -notmatch '(?i)RunAs|HKLM|Register-ScheduledTask|schtasks|Set-ExecutionPolicy|&&|\|\|') 'the installer still makes no machine-wide change'
-Assert ($srcText -match "FixItVersion = '2.3.19'") 'the program is version 2.3.19'
-Assert ((Get-Content (Join-Path $root 'manifest.json') -Raw) -match '"version": "2.3.19"') 'manifest.json says 2.3.19'
+$ver = [regex]::Match($srcText, "FixItVersion = '(\d+\.\d+\.\d+)'").Groups[1].Value
+Assert ([version]$ver -ge [version]'2.3.19') 'the program is version 2.3.19 or newer'
+Assert ((Get-Content (Join-Path $root 'manifest.json') -Raw) -match ('"version": "' + $ver + '"')) 'manifest.json matches the program version'
 Assert ($instText -match "InstallerFiles = @\('FamilyFixIt.ps1', 'Start-FixIt.cmd', 'README.md', 'guides.json', 'FamilyFixIt.ico'\)") 'the opener is not a downloaded file (older updates refuse unknown names)'
 $readme = [IO.File]::ReadAllText((Join-Path $root 'README.md'))
 Assert ($readme -match 'familyfixit://open' -and $readme -match 'HKCU\\Software\\Classes\\familyfixit' -and $readme -match 'https://github.com/Sodapopnewb/family-it-fixit/releases/latest/download/Install-FamilyFixIt.zip') 'README: the link, the per-user key, and the fallback install zip'
